@@ -1,0 +1,74 @@
+from langgraph.types import Command
+import streamlit as st
+
+def ui_final_review(app, config, payload, interrupt_id):
+    ui_type = "final_review"
+    st.subheader("✅ Final Review")
+
+    st.success("Execution succeeded")
+    if payload["generated_code"]:
+        st.markdown("Generated Code:")
+        st.code(payload["generated_code"], language="python")
+    if payload["output"]:
+        st.text("Output:")
+        st.code(payload["output"], language="text")
+    if payload['figure_png']:
+        st.text("Generated Figure:")
+        st.image(payload['figure_png'])
+
+    confirm_key = f"confirm_approve_{ui_type}"
+    suggestion_key = f"suggestion_{ui_type}_{interrupt_id}"
+
+    suggestion = st.text_area(
+        "Optional suggestion / edit instruction",
+        key=suggestion_key,
+        height=120,
+    ).strip()
+
+    if st.session_state.get(confirm_key, False):
+        st.warning("You typed a suggestion but clicked **Approve**. Proceed anyway?")
+        c1, c2 = st.columns(2)
+        proceed = c1.button("Finish anyway", key=f"{ui_type}_proceed_{interrupt_id}")
+        go_regen = c2.button("Regenerate instead", key=f"{ui_type}_regen_{interrupt_id}")
+
+        if proceed:
+            st.session_state[confirm_key] = False
+            app.invoke(Command(resume={interrupt_id: {"action": "approve"}}), config=config)
+            st.rerun()
+
+        if go_regen:
+            st.session_state[confirm_key] = False
+            app.invoke(Command(resume={interrupt_id: {"action": "regenerate", "suggestion": suggestion}}), config=config)
+            st.rerun()
+
+        st.stop()
+
+    col1, col2 = st.columns(2)
+    approve = col1.button("✅ Finish", key = f"{ui_type}_approve")
+    regenerate = col2.button("♻️ Regenerate Code", key = f"{ui_type}_regenerate")
+
+    if approve:
+        if suggestion:
+            st.session_state[confirm_key] = True
+            st.rerun()
+        else:
+            app.invoke(
+                Command(resume={interrupt_id: {"action": "approve"}}),
+                config=config,
+            )
+            st.rerun()
+    if regenerate:
+        if not suggestion:
+            st.error("Please enter an edit instruction before regenerating.")
+            st.stop()
+        app.invoke(
+            Command(resume={
+                interrupt_id: {
+                    "action": "regenerate",
+                    "suggestion": suggestion
+                }
+            }),
+            config=config
+        )
+        
+        st.rerun()
