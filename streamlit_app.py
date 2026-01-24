@@ -196,6 +196,7 @@ if user_text:
         "messages": st.session_state.chat_history,
         "next_action": None,
         "last_action": None,
+        "planner_mode": "hybrid",
         "observations": [],
         "orchestrator": {
             "tool_results": [],
