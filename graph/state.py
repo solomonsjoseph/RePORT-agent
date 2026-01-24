@@ -12,6 +12,7 @@ class AgentState(TypedDict):
     figure_png: bytes
     next_action: str | None
     last_action: str | None
+    planner_mode: Literal["rules", "llm", "hybrid"]
     observations: List[str]
     orchestrator: dict
     agents: dict

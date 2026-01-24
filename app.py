@@ -68,6 +68,7 @@ def main():
             "error": None,
             "next_action": None,
             "last_action": None,
+            "planner_mode": "hybrid",
             "observations": [],
             "orchestrator": {
                 "tool_results": [],
