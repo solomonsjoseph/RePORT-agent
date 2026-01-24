@@ -3,15 +3,14 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.sqlite import SqliteSaver
 from utils.context import build_context
 from .state import AgentState
-from .routing import (
-    route_after_generate, 
-    route_after_execute,
-    route_after_human_review_before_run,
-    route_after_human_review_final)
+from .routing import route_by_next_action
 
+from .nodes.orchestrator import orchestrator_node
 from .nodes.generate_code import generate_code_node
 from .nodes.execute_code import execute_code_node
-from .nodes.handle_error import handle_error_node
+from .nodes.error_handler import error_handler_node
+from .nodes.qa import qa_node
+from .nodes.tool_handler import tool_handler_node
 from .nodes.human_checkpoints import (
     human_review_before_run_node, 
     human_review_final_node)
@@ -20,6 +19,21 @@ def build_graph(llm, df, schema, db_path):
     workflow = StateGraph(AgentState)
     context = build_context(df, schema)
 
+    available_actions = [
+        "generate_code",
+        "execute_code",
+        "error_handler",
+        "human_review_before_run",
+        "human_review_final",
+        "tool_handler",
+        "qa",
+        "end",
+    ]
+
+    workflow.add_node(
+        "orchestrator",
+        lambda s: orchestrator_node(s, llm, available_actions)
+    )
     workflow.add_node(
         "generate_code",
         lambda s: generate_code_node(s, llm, context)
@@ -29,42 +43,46 @@ def build_graph(llm, df, schema, db_path):
         lambda s: execute_code_node(s, df)
     )
     workflow.add_node(
-        "handle_error",
-        lambda s: handle_error_node(s, llm, context)
+        "error_handler",
+        lambda s: error_handler_node(s, llm, context)
+    )
+    workflow.add_node("tool_handler", tool_handler_node)
+    workflow.add_node(
+        "qa",
+        lambda s: qa_node(s, llm)
     )
 
     # Interruptable review nodes
     workflow.add_node("human_review_before_run", human_review_before_run_node)
     workflow.add_node("human_review_final", human_review_final_node)
 
-    # Normal control flow
-    workflow.add_edge(START, "generate_code")
-    workflow.add_edge("generate_code", "human_review_before_run")
+    # Orchestrator-driven control flow
+    workflow.add_edge(START, "orchestrator")
     workflow.add_conditional_edges(
-        "human_review_before_run",
-        route_after_human_review_before_run,
-        {
-            "execute_code": "execute_code",
-            "generate_code": "generate_code"
-        }
-    )
-    workflow.add_conditional_edges(
-        "execute_code",
-        route_after_execute,
-        {
-            "handle_error": "handle_error",
-            "human_review_final": "human_review_final",
-        }
-    )
-    workflow.add_edge("handle_error", "execute_code")
-    workflow.add_conditional_edges(
-        "human_review_final",
-        route_after_human_review_final,
+        "orchestrator",
+        route_by_next_action,
         {
             "generate_code": "generate_code",
+            "execute_code": "execute_code",
+            "error_handler": "error_handler",
+            "human_review_before_run": "human_review_before_run",
+            "human_review_final": "human_review_final",
+            "tool_handler": "tool_handler",
+            "qa": "qa",
             END: END,
         }
     )
+
+    for node_name in [
+        "generate_code",
+        "execute_code",
+        "error_handler",
+        "human_review_before_run",
+        "human_review_final",
+        "tool_handler",
+        "qa",
+    ]:
+        workflow.add_edge(node_name, "orchestrator")
 
     conn = sqlite3.connect(db_path, check_same_thread=False)
     checkpointer = SqliteSaver(conn)
