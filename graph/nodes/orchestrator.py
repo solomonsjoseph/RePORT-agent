@@ -30,7 +30,7 @@ def build_default_policies() -> list[AgentPolicy]:
         ),
         AgentPolicy(
             name="generate_code",
-            is_ready=lambda s: s.get("generated_code") is None,
+            is_ready=lambda s: not (s.get("output") or {}).get("generated_code"),
         ),
         AgentPolicy(
             name="tool_handler",
@@ -38,13 +38,13 @@ def build_default_policies() -> list[AgentPolicy]:
         ),
         AgentPolicy(
             name="human_review_before_run",
-            is_ready=lambda s: s.get("generated_code") is not None
+            is_ready=lambda s: (s.get("output") or {}).get("generated_code")
             and get_agent_state(s, "executor").get("run_status") in ("idle", "pending")
             and get_agent_state(s, "human_review").get("before_run_decision") is None,
         ),
         AgentPolicy(
             name="execute_code",
-            is_ready=lambda s: s.get("generated_code") is not None
+            is_ready=lambda s: (s.get("output") or {}).get("generated_code")
             and get_agent_state(s, "executor").get("run_status") in ("idle", "pending")
             and get_agent_state(s, "human_review").get("before_run_decision") == "approve",
         ),
@@ -75,7 +75,7 @@ def _format_state_summary(state: AgentState) -> str:
     executor_state = get_agent_state(state, "executor")
     review_state = get_agent_state(state, "human_review")
     parts = [
-        f"generated_code_present={bool(state.get('generated_code'))}",
+        f"generated_code_present={bool((state.get('output') or {}).get('generated_code'))}",
         f"executor_run_status={executor_state.get('run_status')}",
         f"before_run_decision={review_state.get('before_run_decision')}",
         f"final_decision={review_state.get('final_decision')}",

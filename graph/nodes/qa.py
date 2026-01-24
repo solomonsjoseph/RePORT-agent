@@ -40,6 +40,9 @@ def qa_node(state: AgentState, llm) -> AgentState:
         "meta": meta,
         "observations": observations,
     }
+    output = dict(updated_state.get("output") or {})
+    output["qa_response"] = response.content
+    updated_state["output"] = output
     return update_agent_state(
         updated_state,
         "qa",

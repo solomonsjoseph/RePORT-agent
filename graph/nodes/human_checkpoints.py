@@ -4,9 +4,10 @@ from .state_helpers import update_agent_state
 
 def human_review_before_run_node(state):
     # pause here and send playload to UI
+    output = dict(state.get("output") or {})
     feedback = interrupt({
         "type": "before_run_review",
-        "generated_code": state.get("generated_code", "")
+        "generated_code": output.get("generated_code", ""),
     })
     decision = feedback.get("action")
     messages = list(state.get("messages", []))
@@ -32,27 +33,28 @@ def human_review_after_error_node(state):
 
 def human_review_final_node(state):
     # pause here and send playload to UI
+    output = dict(state.get("output") or {})
     feedback = interrupt({
         "type": "final_review",
-        "generated_code": state.get("generated_code", ""),
-        "output": state.get("output", ""),
-        "figure_png": state.get("figure_png", ""),
+        "generated_code": output.get("generated_code", ""),
+        "output": output.get("text", ""),
+        "figure_png": output.get("figure_png", ""),
     })
     decision = feedback.get("action")
-    output = state.get("output", None)
+    output_text = output.get("text", None)
     messages = list(state.get("messages", []))
     
     # if decision == "approve":
-    code = state.get("generated_code")
+    code = output.get("generated_code")
     extra = {}
-    figure_png = state.get("figure_png", None)   
+    figure_png = output.get("figure_png", None)
     if figure_png:
         extra["figure_png"] = figure_png  # store raw bytes
     ai_msg = AIMessage(content = 
                         f"Generated code:\n```python\n{code}\n```", 
                         additional_kwargs=extra)
-    if output:
-        ai_msg.content += f"\n\nOutput:\n```\n{output}\n```"
+    if output_text:
+        ai_msg.content += f"\n\nOutput:\n```\n{output_text}\n```"
     messages.append(ai_msg)
 
     suggestion = feedback.get("suggestion", None)

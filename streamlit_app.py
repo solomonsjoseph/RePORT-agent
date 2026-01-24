@@ -188,11 +188,7 @@ if user_text:
 
     # Reset execution artifacts for new question
     new_state = {
-        "generated_code": None,
-        "output": None,
-        "qa_response": None,
-        "error": None,
-        "figure_png": None, 
+        "output": {},
         "messages": st.session_state.chat_history,
         "next_action": None,
         "last_action": None,
@@ -275,21 +271,22 @@ if (
     # st.session_state.chat_history = state["messages"]
     st.success("Analysis completed")
 
-    if state.get("output"):
+    output = state.get("output", {})
+    if output.get("text"):
         st.write("Output")
-        st.code(state["output"], language = "python")
+        st.code(output["text"], language="python")
 
-    if state.get("generated_code"):
+    if output.get("generated_code"):
         st.write("Code")
-        st.code(state["generated_code"], language="python")
-    if state.get("figure_png"):
+        st.code(output["generated_code"], language="python")
+    if output.get("figure_png"):
         st.write("Image")
-        st.image(state["figure_png"])
+        st.image(output["figure_png"])
         st.download_button(
         label="⬇️ Download plot (PNG)",
-        data=state["figure_png"],
+        data=output["figure_png"],
         file_name="plot.png",
         mime="image/png",
-    )
+        )
 
 # st.write("DEBUG chat types:", [type(m) for m in st.session_state.chat_history])
