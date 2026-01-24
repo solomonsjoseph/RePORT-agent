@@ -16,7 +16,7 @@ USER_AGENT = "weather-app/1.0"
 async def fetch_weather(city: str) -> dict[str, Any] | None:
     """
     Fetch weather data from OpenWeather.
-    :param city: city name in English (e.g., "Beijing")
+    :param city: city name in English (e.g., "Boston")
     :return: weather data dict or an error payload
     """
     headers = {"User-Agent": USER_AGENT}
@@ -91,8 +91,8 @@ def format_weather(data: dict[str, Any] | str) -> str:
 @mcp.tool()
 async def query_weather(city: str) -> str:
     """
-    Return today's weather for the specified city (English name required).
-    :param city: city name (English)
+    Return today's weather for the specified city
+    :param city: city name 
     :return: formatted weather info
     """
     data = await fetch_weather(city)
