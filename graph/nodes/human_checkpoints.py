@@ -1,5 +1,6 @@
 from langgraph.types import interrupt
 from langchain_core.messages import HumanMessage, AIMessage
+from .state_helpers import update_agent_state
 
 def human_review_before_run_node(state):
     # pause here and send playload to UI
@@ -13,11 +14,18 @@ def human_review_before_run_node(state):
     if suggestion:
         messages.append(HumanMessage(content = suggestion))
     # On resume, 'decision' becomes the user input
-    return {
+    updated_state = {
         **state,
-        "human_decision": decision,
         "messages": messages
     }
+    return update_agent_state(
+        updated_state,
+        "human_review",
+        {
+            "status": "done",
+            "before_run_decision": decision,
+        },
+    )
 
 def human_review_after_error_node(state):
     return state
@@ -31,7 +39,6 @@ def human_review_final_node(state):
         "figure_png": state.get("figure_png", ""),
     })
     decision = feedback.get("action")
-    run_status = "done" if decision == "approve" else "pending"
     output = state.get("output", None)
     messages = list(state.get("messages", []))
     
@@ -52,10 +59,16 @@ def human_review_final_node(state):
     if suggestion:
         messages.append(HumanMessage(content = suggestion))
                            
-    return {
+    updated_state = {
         **state,
-        "human_decision": decision,
         "messages": messages,
-        "run_status": run_status,
         "output": output
     }
+    return update_agent_state(
+        updated_state,
+        "human_review",
+        {
+            "status": "done",
+            "final_decision": decision,
+        },
+    )
