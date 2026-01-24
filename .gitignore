@@ -1,0 +1,7 @@
+*.yml
+*.ipynb
+*.png
+*.pdf
+__pycache__/
+.env
+.streamlit/secrets.toml

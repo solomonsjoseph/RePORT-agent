@@ -1,12 +1,6 @@
 # RePORT-agent
 A multi-agent framework for RePORT India studies.
 
-## Requirements
-Install the Python dependencies listed in `requirements.txt`.
-
-```bash
-pip install -r requirements.txt
-```
 
 ## Orchestrator-driven workflow
 The LangGraph workflow is orchestrator-driven: a lightweight planning node chooses

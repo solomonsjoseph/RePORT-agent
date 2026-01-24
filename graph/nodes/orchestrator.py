@@ -1,3 +1,4 @@
+import json
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -71,6 +72,20 @@ def choose_next_action(state: AgentState, available_actions: Iterable[str]) -> s
     return "end"
 
 
+def _format_tool_results(state: AgentState) -> str:
+    agents = state.get("agents", {})
+    formatted: list[str] = []
+    for agent_name, agent_state in agents.items():
+        results = agent_state.get("tool_results", [])
+        if not results:
+            continue
+        for result in results[-3:]:
+            formatted.append(
+                f"{agent_name}: {json.dumps(result, default=str, ensure_ascii=False)}"
+            )
+    return "\n".join(formatted) if formatted else "none"
+
+
 def _format_state_summary(state: AgentState) -> str:
     executor_state = get_agent_state(state, "executor")
     review_state = get_agent_state(state, "human_review")
@@ -81,6 +96,7 @@ def _format_state_summary(state: AgentState) -> str:
         f"final_decision={review_state.get('final_decision')}",
         f"tool_requests_pending={_is_tool_requested(state)}",
         f"last_action={state.get('last_action')}",
+        "tool_results:\n" + _format_tool_results(state),
     ]
     return "\n".join(parts)
 
