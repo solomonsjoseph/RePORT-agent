@@ -1,6 +1,7 @@
 from langchain_core.messages import AIMessage, HumanMessage
 from utils.code_parser import extract_python_code
 from prompts.generate_prompt import make_generate_code_prompt
+from .state_helpers import update_agent_state
 
 def generate_code_node(state, llm, context):
     messages = state.get("messages", [])
@@ -15,9 +16,17 @@ def generate_code_node(state, llm, context):
     response = llm.invoke(prompt)
     code = extract_python_code(response.content)
 
-    return {
+    output = dict(state.get("output") or {})
+    output["generated_code"] = code
+    updated_state = {
         **state,
-        "generated_code": code,
-        "human_decision": None,
-        "run_status": "pending",
+        "output": output,
     }
+    return update_agent_state(
+        updated_state,
+        "generate_code",
+        {
+            "status": "done",
+            "generated_code": code,
+        },
+    )
