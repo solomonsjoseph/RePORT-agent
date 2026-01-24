@@ -14,10 +14,11 @@ the next specialized agent based on the current state, recent observations, and
 any human feedback. This makes the graph flexible and easy to extend with new
 agents without hard-coding a strict pipeline.
 
-### Planner mode
-The orchestrator runs in hybrid mode by default: it lets the LLM propose the
-next action and falls back to deterministic rules when the LLM response is not
-usable.
+### Planner modes
+The orchestrator supports three planner modes via `planner_mode` in state:
+- `rules`: deterministic policy routing only
+- `llm`: LLM-only routing
+- `hybrid`: LLM routing with rule-based fallback guardrails
 
 ### Available specialist nodes
 - **Code Generator**: produces Python analysis code.
