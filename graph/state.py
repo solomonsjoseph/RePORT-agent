@@ -7,21 +7,15 @@ class AgentState(TypedDict):
 
     generated_code: str | None
     output: str | None
+    qa_response: str | None
     error: str | None
     figure_png: bytes
-    # machine control
-    run_status: Literal[
-        "idle",
-        "pending",
-        "error",
-        "done",
-    ]
-
-    human_decision: Literal[
-        "approve",
-        "regenerate",
-    ]| None
+    next_action: str | None
+    last_action: str | None
+    planner_mode: Literal["rules", "llm", "hybrid"]
+    observations: List[str]
+    orchestrator: dict
+    agents: dict
 
     # extensibility
     meta: dict  # free-form (retry counts, tool info, etc.)
-
