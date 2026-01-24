@@ -62,10 +62,7 @@ def main():
             break
         state = {
             "messages": [HumanMessage(content=user_input)],
-            "generated_code": None,
-            "output": None,
-            "qa_response": None,
-            "error": None,
+            "output": {},
             "next_action": None,
             "last_action": None,
             "observations": [],
@@ -92,7 +89,7 @@ def main():
             final_state = node_state
             # Checkpoint nodes
             if node_name.startswith("human_review"):
-                code = node_state.get("generated_code")
+                code = (node_state.get("output") or {}).get("generated_code")
 
                 if code:
                     print(f"\n--- HUMAN CHECKPOINT {node_name} ---")
@@ -106,7 +103,9 @@ def main():
                         continue   # resume execution
                     elif action == "edit":
                         edited = input("Paste updated code:\n")
-                        node_state["generated_code"] = edited
+                        output = dict(node_state.get("output") or {})
+                        output["generated_code"] = edited
+                        node_state["output"] = output
                         # re-invoke starting from modified node state
                         final_state = app.invoke(node_state, config=config)
                         break
@@ -117,9 +116,11 @@ def main():
         # Print final answer
         if final_state:
             if final_state.get("agents", {}).get("executor", {}).get("run_status") == "ok":
-                print(final_state["output"])
+                output = final_state.get("output", {})
+                print(output.get("text", ""))
             else:
-                print("Error:", final_state.get("error"))
+                output = final_state.get("output", {})
+                print("Error:", output.get("error"))
 
 if __name__ == "__main__":
     main()

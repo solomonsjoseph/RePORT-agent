@@ -5,11 +5,7 @@ from langgraph.graph.message import add_messages
 class AgentState(TypedDict):
     messages: Annotated[List[BaseMessage], add_messages]
 
-    generated_code: str | None
-    output: str | None
-    qa_response: str | None
-    error: str | None
-    figure_png: bytes
+    output: dict
     next_action: str | None
     last_action: str | None
     observations: List[str]

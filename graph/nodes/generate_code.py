@@ -16,9 +16,11 @@ def generate_code_node(state, llm, context):
     response = llm.invoke(prompt)
     code = extract_python_code(response.content)
 
+    output = dict(state.get("output") or {})
+    output["generated_code"] = code
     updated_state = {
         **state,
-        "generated_code": code,
+        "output": output,
     }
     return update_agent_state(
         updated_state,
