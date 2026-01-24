@@ -60,6 +60,9 @@ def build_context(df, schema):
         ...
     }
     """
+    if df is None or schema is None:
+        return "No dataset or schema provided."
+
     cols = df.columns.tolist()
 
     # Column list
@@ -86,4 +89,3 @@ def build_context(df, schema):
         "Column metadata:\n"
         f"{schema_text}"
     )
-
