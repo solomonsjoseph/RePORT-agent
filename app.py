@@ -37,8 +37,8 @@ def main():
     try:
         df, schema = load_context(data_path, schema_path)
     except FileNotFoundError as e:
-        print(f"Error loading data: {e}")
-        sys.exit(1)
+        print(f"Warning: {e}. Proceeding without dataset/schema.")
+        df, schema = None, None
     # Preprocessing
     # for col in ["is_smoke", "ever_had_active_tb", "is_hiv_positive", "has_diabetes"]:
     #     if col in df.columns:
@@ -51,7 +51,7 @@ def main():
     temperature = args.temperature
     top_p = args.top_p
     llm = build_llm(model_name, temperature, top_p, base_url)
-    app = build_graph(llm, db_path=db_path)
+    app = build_graph(llm, df, schema, db_path=db_path)
     thread_id = "chat-session-1"
     print("Biostats Code Agent (Streaming Mode)")
     print("Type 'exit' to quit.")
@@ -64,8 +64,19 @@ def main():
             "messages": [HumanMessage(content=user_input)],
             "generated_code": None,
             "output": None,
+            "qa_response": None,
             "error": None,
-            "status": "idle",
+            "next_action": None,
+            "last_action": None,
+            "observations": [],
+            "orchestrator": {
+                "tool_results": [],
+            },
+            "agents": {
+                "executor": {"run_status": "idle"},
+                "human_review": {"before_run_decision": None, "final_decision": None},
+            },
+            "meta": {},
         }
         config = {"configurable": {"thread_id": thread_id}}
 
@@ -75,12 +86,12 @@ def main():
             node_name = list(event.keys())[0]
             print(f"\n--- NODE: {node_name} ---")
             # Some nodes emit None (e.g. checkpoint nodes)
+            node_state = event[node_name]
             if not isinstance(node_state, dict):
                 continue
             final_state = node_state
             # Checkpoint nodes
             if node_name.startswith("human_review"):
-                node_state = event[node_name]
                 code = node_state.get("generated_code")
 
                 if code:
@@ -105,7 +116,7 @@ def main():
 
         # Print final answer
         if final_state:
-            if final_state.get("status") == "ok":
+            if final_state.get("agents", {}).get("executor", {}).get("run_status") == "ok":
                 print(final_state["output"])
             else:
                 print("Error:", final_state.get("error"))
