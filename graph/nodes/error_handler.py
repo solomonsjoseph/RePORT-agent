@@ -1,8 +1,9 @@
 from langchain_core.messages import AIMessage
 from utils.code_parser import extract_python_code
 from prompts.fix_prompt import make_fix_code_prompt
+from .state_helpers import update_agent_state
 
-def handle_error_node(state, llm, context):
+def error_handler_node(state, llm, context):
     code = state.get("generated_code") or ""
     error = state.get("error") or "Unknown error"
 
@@ -18,8 +19,22 @@ def handle_error_node(state, llm, context):
     response = llm.invoke(prompt)
     new_code = extract_python_code(response.content)
 
-    return {
+    updated_state = {
         **state,
         "generated_code": new_code,
-        "run_status": "pending",
     }
+    updated_state = update_agent_state(
+        updated_state,
+        "error_handler",
+        {
+            "status": "done",
+            "generated_code": new_code,
+        },
+    )
+    return update_agent_state(
+        updated_state,
+        "executor",
+        {
+            "run_status": "pending",
+        },
+    )

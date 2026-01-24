@@ -1,16 +1,25 @@
 from tools.execution import run_python_user
+from .state_helpers import update_agent_state
 
 def execute_code_node(state, df):
     code = state.get("generated_code")
     if not code:
-        return {
+        updated_state = {
             **state,
             "error": {
                 "type": "NoCode",
                 "message": "No code available to execute."
             },
-            "run_status": "error",
         }
+        return update_agent_state(
+            updated_state,
+            "executor",
+            {
+                "status": "error",
+                "run_status": "error",
+                "error": "No code available to execute.",
+            },
+        )
 
     # --------------------------------------------------
     # Execute code
@@ -22,25 +31,40 @@ def execute_code_node(state, df):
     # --------------------------------------------------
     if error:
 
-        return {
+        updated_state = {
             **state,
             "error": error,
-            "run_status": "error",
         }
+        return update_agent_state(
+            updated_state,
+            "executor",
+            {
+                "status": "error",
+                "run_status": "error",
+                "error": error,
+            },
+        )
 
     # --------------------------------------------------
     # Execution succeeded
     # --------------------------------------------------
     output = stdout if stdout else (str(result) if result is not None else "")
 
-    return {
+    updated_state = {
         **state,
         "output": output,
         "error": None,
-        "run_status": "ok",
-        "human_decision": None,
         "figure_png": figure_png,
     }
+    return update_agent_state(
+        updated_state,
+        "executor",
+        {
+            "status": "done",
+            "run_status": "ok",
+            "output": output,
+        },
+    )
 
     
 
