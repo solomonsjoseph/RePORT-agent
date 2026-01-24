@@ -89,7 +89,7 @@ top_p = st.sidebar.number_input(
 # 1. File Upload UI
 # ============================================================
 
-uploaded_csv = st.file_uploader("Upload your dataset (.csv)", type=["csv", 'json'])
+uploaded_csv = st.file_uploader("Upload your dataset (.csv)", type=["csv", "json"])
 uploaded_schema = st.file_uploader("Upload your schema (.json)", type=["json"])
 
 # ============================================================
@@ -117,8 +117,9 @@ if uploaded_csv and uploaded_schema:
         st.stop()
 
 else:
-    st.info("👆 Upload both dataset.csv and schema.json to continue.")
-    st.stop()
+    st.warning("No dataset/schema provided. Running in metadata-only mode.")
+    df = pd.DataFrame()
+    schema = {}
 
 # ============================================================
 # Load LLM + Graph (cached)
@@ -187,13 +188,19 @@ if user_text:
 
     # Reset execution artifacts for new question
     new_state = {
-        "generated_code": None,
-        "output": None,
-        "error": None,
-        "human_decision": None,
-        "run_status": "idle",
-        "figure_png": None, 
+        "output": {},
         "messages": st.session_state.chat_history,
+        "next_action": None,
+        "last_action": None,
+        "observations": [],
+        "orchestrator": {
+            "tool_results": [],
+        },
+        "agents": {
+            "executor": {"run_status": "idle"},
+            "human_review": {"before_run_decision": None, "final_decision": None},
+        },
+        "meta": {},
     }
 
     app.invoke(new_state, config=config)
@@ -257,29 +264,29 @@ if snapshot and snapshot.next:
 # Final Output
 # ============================================================
 
-if state.get("run_status") == "done":
+if (
+    state.get("agents", {}).get("executor", {}).get("run_status") == "ok"
+    and state.get("agents", {}).get("human_review", {}).get("final_decision") == "approve"
+):
     # st.session_state.chat_history = state["messages"]
     st.success("Analysis completed")
 
-    if state.get("output"):
+    output = state.get("output", {})
+    if output.get("text"):
         st.write("Output")
-        st.code(state["output"], language = "python")
+        st.code(output["text"], language="python")
 
-    if state.get("generated_code"):
+    if output.get("generated_code"):
         st.write("Code")
-        st.code(state["generated_code"], language="python")
-    if state.get("figure_png"):
+        st.code(output["generated_code"], language="python")
+    if output.get("figure_png"):
         st.write("Image")
-        st.image(state["figure_png"])
+        st.image(output["figure_png"])
         st.download_button(
         label="⬇️ Download plot (PNG)",
-        data=state["figure_png"],
+        data=output["figure_png"],
         file_name="plot.png",
         mime="image/png",
-    )
+        )
 
 # st.write("DEBUG chat types:", [type(m) for m in st.session_state.chat_history])
-
-
-
-

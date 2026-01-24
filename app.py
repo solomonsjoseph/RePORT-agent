@@ -37,8 +37,8 @@ def main():
     try:
         df, schema = load_context(data_path, schema_path)
     except FileNotFoundError as e:
-        print(f"Error loading data: {e}")
-        sys.exit(1)
+        print(f"Warning: {e}. Proceeding without dataset/schema.")
+        df, schema = None, None
     # Preprocessing
     # for col in ["is_smoke", "ever_had_active_tb", "is_hiv_positive", "has_diabetes"]:
     #     if col in df.columns:
@@ -51,7 +51,7 @@ def main():
     temperature = args.temperature
     top_p = args.top_p
     llm = build_llm(model_name, temperature, top_p, base_url)
-    app = build_graph(llm, db_path=db_path)
+    app = build_graph(llm, df, schema, db_path=db_path)
     thread_id = "chat-session-1"
     print("Biostats Code Agent (Streaming Mode)")
     print("Type 'exit' to quit.")
@@ -62,10 +62,18 @@ def main():
             break
         state = {
             "messages": [HumanMessage(content=user_input)],
-            "generated_code": None,
-            "output": None,
-            "error": None,
-            "status": "idle",
+            "output": {},
+            "next_action": None,
+            "last_action": None,
+            "observations": [],
+            "orchestrator": {
+                "tool_results": [],
+            },
+            "agents": {
+                "executor": {"run_status": "idle"},
+                "human_review": {"before_run_decision": None, "final_decision": None},
+            },
+            "meta": {},
         }
         config = {"configurable": {"thread_id": thread_id}}
 
@@ -75,13 +83,13 @@ def main():
             node_name = list(event.keys())[0]
             print(f"\n--- NODE: {node_name} ---")
             # Some nodes emit None (e.g. checkpoint nodes)
+            node_state = event[node_name]
             if not isinstance(node_state, dict):
                 continue
             final_state = node_state
             # Checkpoint nodes
             if node_name.startswith("human_review"):
-                node_state = event[node_name]
-                code = node_state.get("generated_code")
+                code = (node_state.get("output") or {}).get("generated_code")
 
                 if code:
                     print(f"\n--- HUMAN CHECKPOINT {node_name} ---")
@@ -95,7 +103,9 @@ def main():
                         continue   # resume execution
                     elif action == "edit":
                         edited = input("Paste updated code:\n")
-                        node_state["generated_code"] = edited
+                        output = dict(node_state.get("output") or {})
+                        output["generated_code"] = edited
+                        node_state["output"] = output
                         # re-invoke starting from modified node state
                         final_state = app.invoke(node_state, config=config)
                         break
@@ -105,10 +115,12 @@ def main():
 
         # Print final answer
         if final_state:
-            if final_state.get("status") == "ok":
-                print(final_state["output"])
+            if final_state.get("agents", {}).get("executor", {}).get("run_status") == "ok":
+                output = final_state.get("output", {})
+                print(output.get("text", ""))
             else:
-                print("Error:", final_state.get("error"))
+                output = final_state.get("output", {})
+                print("Error:", output.get("error"))
 
 if __name__ == "__main__":
     main()
