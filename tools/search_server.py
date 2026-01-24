@@ -25,9 +25,9 @@ async def fetch_search(query: str, max_results: int = 5) -> dict[str, Any]:
     headers = {"User-Agent": USER_AGENT}
 
     async with httpx.AsyncClient() as client:
-        response = await client.get(
+        response = await client.post(
             TAVILY_API_BASE,
-            params=params,
+            json=params,
             headers=headers,
             timeout=30.0,
         )

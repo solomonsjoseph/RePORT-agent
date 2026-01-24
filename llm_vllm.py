@@ -30,6 +30,7 @@ def build_llm(model_name, temperature=0.0, top_p=1.0, base_url=None, api_key=Non
 
 
 # from langchain_core.prompts import ChatPromptTemplate
+# from langchain_openai import ChatOpenAI
 # prompt = ChatPromptTemplate.from_messages([
 #     ("system", "You are a helpful data science assistant."),
 #     ("user", "{question}")
@@ -38,7 +39,7 @@ def build_llm(model_name, temperature=0.0, top_p=1.0, base_url=None, api_key=Non
 # llm = ChatOpenAI(
 #         base_url="http://localhost:8000/v1",
 #         api_key="dummy",
-#         model="meta-llama/Llama-3.1-8B-Instruct"
+#         model=model_name
 #     )
 # chain = prompt | llm
 
