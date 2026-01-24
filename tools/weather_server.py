@@ -1,19 +1,15 @@
 from __future__ import annotations
 
 import json
-import os
 from typing import Any
 
 import httpx
-from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
-
-load_dotenv()
 
 mcp = FastMCP("WeatherServer")
 
-OPENWEATHER_API_BASE = "https://api.openweathermap.org/data/2.5/weather"
-API_KEY = os.getenv("OPENWEATHER_API_KEY", "")
+OPEN_METEO_GEOCODE = "https://geocoding-api.open-meteo.com/v1/search"
+OPEN_METEO_FORECAST = "https://api.open-meteo.com/v1/forecast"
 USER_AGENT = "weather-app/1.0"
 
 
@@ -23,24 +19,38 @@ async def fetch_weather(city: str) -> dict[str, Any] | None:
     :param city: city name in English (e.g., "Beijing")
     :return: weather data dict or an error payload
     """
-    params = {
-        "q": city,
-        "appid": API_KEY,
-        "units": "metric",
-        "lang": "en",
-    }
     headers = {"User-Agent": USER_AGENT}
 
     async with httpx.AsyncClient() as client:
         try:
-            response = await client.get(
-                OPENWEATHER_API_BASE,
-                params=params,
+            geo_response = await client.get(
+                OPEN_METEO_GEOCODE,
+                params={"name": city, "count": 1, "language": "en", "format": "json"},
                 headers=headers,
                 timeout=30.0,
             )
-            response.raise_for_status()
-            return response.json()
+            geo_response.raise_for_status()
+            geo_data = geo_response.json()
+            results = geo_data.get("results") or []
+            if not results:
+                return {"error": "No matching city found."}
+            location = results[0]
+            forecast_response = await client.get(
+                OPEN_METEO_FORECAST,
+                params={
+                    "latitude": location["latitude"],
+                    "longitude": location["longitude"],
+                    "current": "temperature_2m,relative_humidity_2m,wind_speed_10m",
+                },
+                headers=headers,
+                timeout=30.0,
+            )
+            forecast_response.raise_for_status()
+            forecast_data = forecast_response.json()
+            return {
+                "location": location,
+                "current": forecast_data.get("current", {}),
+            }
         except httpx.HTTPStatusError as exc:
             return {"error": f"HTTP error: {exc.response.status_code}"}
         except Exception as exc:
@@ -62,20 +72,19 @@ def format_weather(data: dict[str, Any] | str) -> str:
     if "error" in data:
         return f"Warning: {data['error']}"
 
-    city = data.get("name", "Unknown")
-    country = data.get("sys", {}).get("country", "Unknown")
-    temp = data.get("main", {}).get("temp", "N/A")
-    humidity = data.get("main", {}).get("humidity", "N/A")
-    wind_speed = data.get("wind", {}).get("speed", "N/A")
-    weather_list = data.get("weather", [{}])
-    description = weather_list[0].get("description", "Unknown")
+    location = data.get("location", {})
+    current = data.get("current", {})
+    city = location.get("name", "Unknown")
+    country = location.get("country", "Unknown")
+    temp = current.get("temperature_2m", "N/A")
+    humidity = current.get("relative_humidity_2m", "N/A")
+    wind_speed = current.get("wind_speed_10m", "N/A")
 
     return (
         f"{city}, {country}\n"
         f"Temperature: {temp}°C\n"
         f"Humidity: {humidity}%\n"
         f"Wind Speed: {wind_speed} m/s\n"
-        f"Conditions: {description}\n"
     )
 
 

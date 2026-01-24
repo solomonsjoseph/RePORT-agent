@@ -104,17 +104,11 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
     orchestrator_state = dict(state.get("orchestrator", {}))
     next_action = orchestrator_state.get("next_action")
     if not next_action:
-        planner_mode = state.get("planner_mode", "rules")
-        if planner_mode == "rules":
-            next_action = choose_next_action(state, available_actions)
-        elif planner_mode == "llm":
-            next_action = llm_select_next_action(state, llm, available_actions)
+        llm_choice = llm_select_next_action(state, llm, available_actions)
+        if llm_choice != "end":
+            next_action = llm_choice
         else:
-            llm_choice = llm_select_next_action(state, llm, available_actions)
-            if llm_choice != "end":
-                next_action = llm_choice
-            else:
-                next_action = choose_next_action(state, available_actions)
+            next_action = choose_next_action(state, available_actions)
     orchestrator_state["next_action"] = next_action
     observations = list(state.get("observations", []))
     observations.append(f"orchestrator: next_action={next_action}")
