@@ -15,13 +15,10 @@ def get_args():
     parser.add_argument('--path_to_data', type=str, 
                         default='/projects/f_wj183_1/work/xutao/2025_epi_LLM/simple_rag/data/',
                         help='Path to directory containing data.json and column.json')
-    parser.add_argument('--path_to_output', type=str, 
-                        default='/projects/f_wj183_1/work/xutao/2025_epi_LLM/simple_rag/llm_output',
-                        help='Path for output files'),
     parser.add_argument('--db_path', type=str, 
-                        default='/projects/f_wj183_1/work/xutao/2025_epi_LLM/RePORTAI_db/agent_memory.db',
+                        default='/projects/f_wj183_1/reflib/report-agent_db/agent_memory.db',
                         help='Path for memory database')
-    parser.add_argument('--model_name', type=str, default='meta-llama/Llama-3.1-8B-Instruct')
+    parser.add_argument('--model_name', type=str)
     parser.add_argument('--temperature', type=float, default=0.1)
     parser.add_argument('--top_p', type=float, default=0.9)
     return parser.parse_args()
