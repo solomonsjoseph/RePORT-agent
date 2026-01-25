@@ -142,7 +142,7 @@ def load_llm(model_name, temperature, top_p, api_key):
 @st.cache_resource
 def load_app(llm, df, schema):
     return build_graph(llm, df, schema, 
-                       db_path='/projects/f_wj183_1/work/xutao/2025_epi_LLM/RePORTAI_db/agent_memory.db')
+                       db_path='/projects/f_wj183_1/reflib/report-agent_db/agent_memory.db')
 
 
 llm = load_llm(model_name, temperature, top_p, api_key)
