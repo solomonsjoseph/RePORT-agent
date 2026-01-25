@@ -7,6 +7,7 @@ from langchain_core.messages import HumanMessage, AIMessage
 from graph.builder import build_graph
 from llm_vllm import build_llm, detect_vllm_model
 from UI.ui_before_run_review import ui_before_run_review
+from UI.ui_after_error_review import ui_after_error_review
 from UI.ui_final_review import ui_final_review
 # --------------------------
 # Streamlit Config
@@ -198,9 +199,13 @@ if user_text:
         },
         "agents": {
             "executor": {"run_status": "idle"},
-            "human_review": {"before_run_decision": None, "final_decision": None},
+            "human_review": {
+                "before_run_decision": None,
+                "after_error_decision": None,
+                "final_decision": None,
+            },
         },
-        "meta": {},
+        "meta": {"error_iterations": 0},
     }
 
     app.invoke(new_state, config=config)
@@ -251,6 +256,8 @@ if interrupt_event:
     # --------------------------------------------------------
     if ui_type == "before_run_review":
         ui_before_run_review(app, config, payload, interrupt_id)
+    elif ui_type == "after_error_review":
+        ui_after_error_review(app, config, payload, interrupt_id)
     elif ui_type == "final_review":
         ui_final_review(app, config, payload, interrupt_id)
     st.stop()

@@ -58,9 +58,12 @@ def execute_code_node(state, df):
     output_payload["text"] = output_text
     if figure_png:
         output_payload["figure_png"] = figure_png
+    meta = dict(state.get("meta", {}))
+    meta["error_iterations"] = 0
     updated_state = {
         **state,
         "output": output_payload,
+        "meta": meta,
     }
     return update_agent_state(
         updated_state,

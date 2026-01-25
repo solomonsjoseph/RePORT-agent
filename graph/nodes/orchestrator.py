@@ -9,6 +9,9 @@ from .state_helpers import get_agent_state
 from prompts.planner_prompt import make_planner_prompt
 
 
+MAX_ERROR_ITERATIONS = 5
+
+
 @dataclass(frozen=True)
 class AgentPolicy:
     name: str
@@ -23,11 +26,22 @@ def _is_tool_requested(state: AgentState) -> bool:
     return False
 
 
+def _error_iterations(state: AgentState) -> int:
+    return int(state.get("meta", {}).get("error_iterations", 0))
+
+
 def build_default_policies() -> list[AgentPolicy]:
     return [
         AgentPolicy(
             name="error_handler",
-            is_ready=lambda s: get_agent_state(s, "executor").get("run_status") == "error",
+            is_ready=lambda s: get_agent_state(s, "executor").get("run_status") == "error"
+            and _error_iterations(s) < MAX_ERROR_ITERATIONS,
+        ),
+        AgentPolicy(
+            name="human_review_after_error",
+            is_ready=lambda s: get_agent_state(s, "executor").get("run_status") == "error"
+            and _error_iterations(s) >= MAX_ERROR_ITERATIONS
+            and get_agent_state(s, "human_review").get("after_error_decision") is None,
         ),
         AgentPolicy(
             name="generate_code",
@@ -94,6 +108,7 @@ def _format_state_summary(state: AgentState) -> str:
         f"executor_run_status={executor_state.get('run_status')}",
         f"before_run_decision={review_state.get('before_run_decision')}",
         f"final_decision={review_state.get('final_decision')}",
+        f"error_iterations={_error_iterations(state)}",
         f"tool_requests_pending={_is_tool_requested(state)}",
         f"last_action={state.get('last_action')}",
         "tool_results:\n" + _format_tool_results(state),
