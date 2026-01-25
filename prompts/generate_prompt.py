@@ -34,6 +34,9 @@ DATA CONTEXT:
 
 Output from previous code execution (if any):
 {output}
+
+Tool results (if any):
+{tool_results}
 """
 example_prompt = ChatPromptTemplate.from_messages([
         ("human", "Question: {question}"),
