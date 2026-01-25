@@ -12,6 +12,7 @@ from .nodes.error_handler import error_handler_node
 from .nodes.qa import qa_node
 from .nodes.tool_handler import tool_handler_node
 from .nodes.human_review_before_run import human_review_before_run_node
+from .nodes.human_review_after_error import human_review_after_error_node
 from .nodes.human_review_final import human_review_final_node
 
 def build_graph(llm, df, schema, db_path):
@@ -22,6 +23,7 @@ def build_graph(llm, df, schema, db_path):
         "generate_code",
         "execute_code",
         "error_handler",
+        "human_review_after_error",
         "human_review_before_run",
         "human_review_final",
         "tool_handler",
@@ -45,6 +47,7 @@ def build_graph(llm, df, schema, db_path):
         "error_handler",
         lambda s: error_handler_node(s, llm, context)
     )
+    workflow.add_node("human_review_after_error", human_review_after_error_node)
     workflow.add_node("tool_handler", tool_handler_node)
     workflow.add_node(
         "qa",
@@ -64,6 +67,7 @@ def build_graph(llm, df, schema, db_path):
             "generate_code": "generate_code",
             "execute_code": "execute_code",
             "error_handler": "error_handler",
+            "human_review_after_error": "human_review_after_error",
             "human_review_before_run": "human_review_before_run",
             "human_review_final": "human_review_final",
             "tool_handler": "tool_handler",
@@ -76,6 +80,7 @@ def build_graph(llm, df, schema, db_path):
         "generate_code",
         "execute_code",
         "error_handler",
+        "human_review_after_error",
         "human_review_before_run",
         "human_review_final",
         "tool_handler",

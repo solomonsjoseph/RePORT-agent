@@ -71,9 +71,13 @@ def main():
             },
             "agents": {
                 "executor": {"run_status": "idle"},
-                "human_review": {"before_run_decision": None, "final_decision": None},
+                "human_review": {
+                    "before_run_decision": None,
+                    "after_error_decision": None,
+                    "final_decision": None,
+                },
             },
-            "meta": {},
+            "meta": {"error_iterations": 0},
         }
         config = {"configurable": {"thread_id": thread_id}}
 
