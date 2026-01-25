@@ -90,7 +90,7 @@ top_p = st.sidebar.number_input(
 # 1. File Upload UI
 # ============================================================
 
-uploaded_csv = st.file_uploader("Upload your dataset (.csv)", type=["csv", "json"])
+uploaded_csv = st.file_uploader("Upload your dataset (.csv)", type=["csv"])
 uploaded_schema = st.file_uploader("Upload your schema (.json)", type=["json"])
 
 # ============================================================
