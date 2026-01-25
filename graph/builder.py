@@ -11,9 +11,8 @@ from .nodes.execute_code import execute_code_node
 from .nodes.error_handler import error_handler_node
 from .nodes.qa import qa_node
 from .nodes.tool_handler import tool_handler_node
-from .nodes.human_checkpoints import (
-    human_review_before_run_node, 
-    human_review_final_node)
+from .nodes.human_review_before_run import human_review_before_run_node
+from .nodes.human_review_final import human_review_final_node
 
 def build_graph(llm, df, schema, db_path):
     workflow = StateGraph(AgentState)
