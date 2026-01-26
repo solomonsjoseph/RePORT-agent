@@ -1,7 +1,7 @@
 from langchain_core.messages import HumanMessage
 from utils.code_parser import extract_python_code
 from prompts.generate_prompt import make_generate_code_prompt
-from .state_helpers import get_agent_state, update_agent_state
+from .state_helpers import enqueue_tool_requester, get_agent_state, update_agent_state
 from .tool_routing import format_tool_results, latest_user_message, request_tools_for_question
 
 def generate_code_node(state, llm, context):
@@ -19,10 +19,13 @@ def generate_code_node(state, llm, context):
         if tool_requests:
             observations = list(state.get("observations", []))
             observations.append("generate_code: requested tools")
-            updated_state = {
-                **state,
-                "observations": observations,
-            }
+            updated_state = enqueue_tool_requester(
+                {
+                    **state,
+                    "observations": observations,
+                },
+                "generate_code",
+            )
             return update_agent_state(
                 updated_state,
                 "generate_code",
