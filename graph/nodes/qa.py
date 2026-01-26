@@ -4,7 +4,7 @@ from langchain_core.messages import AIMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 from ..state import AgentState
-from .state_helpers import get_agent_state, update_agent_state
+from .state_helpers import enqueue_tool_requester, get_agent_state, update_agent_state
 from .tool_routing import (
     format_tool_results,
     latest_user_message,
@@ -23,10 +23,13 @@ def qa_node(state: AgentState, llm) -> AgentState:
         if tool_requests:
             observations = list(state.get("observations", []))
             observations.append("qa: requested tools")
-            updated_state = {
-                **state,
-                "observations": observations,
-            }
+            updated_state = enqueue_tool_requester(
+                {
+                    **state,
+                    "observations": observations,
+                },
+                "qa",
+            )
             return update_agent_state(
                 updated_state,
                 "qa",

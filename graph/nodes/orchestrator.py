@@ -1,11 +1,13 @@
-import json
 from __future__ import annotations
+
+import json
 
 from dataclasses import dataclass
 from typing import Callable, Iterable
 
 from ..state import AgentState
 from .state_helpers import get_agent_state
+from .tool_routing import is_tool_requested
 from prompts.planner_prompt import make_planner_prompt
 
 
@@ -18,16 +20,20 @@ class AgentPolicy:
     is_ready: Callable[[AgentState], bool]
 
 
-def _is_tool_requested(state: AgentState) -> bool:
-    agents = state.get("agents", {})
-    for agent_state in agents.values():
-        if agent_state.get("tool_requests"):
-            return True
-    return False
-
-
 def _error_iterations(state: AgentState) -> int:
     return int(state.get("meta", {}).get("error_iterations", 0))
+
+
+def _tool_request_queue(state: AgentState) -> list[str]:
+    return list(state.get("meta", {}).get("tool_request_queue", []))
+
+
+def _next_tool_requester(state: AgentState) -> str | None:
+    for requester in _tool_request_queue(state):
+        agent_state = get_agent_state(state, requester)
+        if agent_state.get("tool_results"):
+            return requester
+    return None
 
 
 def build_default_policies() -> list[AgentPolicy]:
@@ -44,12 +50,18 @@ def build_default_policies() -> list[AgentPolicy]:
             and get_agent_state(s, "human_review").get("after_error_decision") is None,
         ),
         AgentPolicy(
-            name="generate_code",
-            is_ready=lambda s: not (s.get("output") or {}).get("generated_code"),
+            name="tool_handler",
+            is_ready=is_tool_requested,
         ),
         AgentPolicy(
-            name="tool_handler",
-            is_ready=_is_tool_requested,
+            name="qa",
+            is_ready=lambda s: s.get("meta", {}).get("intent") == "qa"
+            and not is_tool_requested(s),
+        ),
+        AgentPolicy(
+            name="generate_code",
+            is_ready=lambda s: not (s.get("output") or {}).get("generated_code")
+            and not is_tool_requested(s),
         ),
         AgentPolicy(
             name="human_review_before_run",
@@ -62,10 +74,6 @@ def build_default_policies() -> list[AgentPolicy]:
             is_ready=lambda s: (s.get("output") or {}).get("generated_code")
             and get_agent_state(s, "executor").get("run_status") in ("idle", "pending")
             and get_agent_state(s, "human_review").get("before_run_decision") == "approve",
-        ),
-        AgentPolicy(
-            name="qa",
-            is_ready=lambda s: s.get("meta", {}).get("intent") == "qa",
         ),
         AgentPolicy(
             name="human_review_final",
@@ -109,38 +117,72 @@ def _format_state_summary(state: AgentState) -> str:
         f"before_run_decision={review_state.get('before_run_decision')}",
         f"final_decision={review_state.get('final_decision')}",
         f"error_iterations={_error_iterations(state)}",
-        f"tool_requests_pending={_is_tool_requested(state)}",
+        f"tool_requests_pending={is_tool_requested(state)}",
         f"last_action={state.get('last_action')}",
         "tool_results:\n" + _format_tool_results(state),
     ]
     return "\n".join(parts)
 
 
+def _parse_planner_response(
+    content: str,
+    available_actions: Iterable[str],
+) -> tuple[str, str]:
+    content = content.strip()
+    if not content:
+        return "end", ""
+    try:
+        payload = json.loads(content)
+    except json.JSONDecodeError:
+        action = content
+        return action if action in set(available_actions) else "end", ""
+    if not isinstance(payload, dict):
+        return "end", ""
+    action = payload.get("action", "")
+    thought = payload.get("thought", "")
+    if action in set(available_actions):
+        return action, str(thought or "")
+    return "end", str(thought or "")
+
+
 def llm_select_next_action(
     state: AgentState,
     llm,
     available_actions: Iterable[str],
-) -> str:
+) -> tuple[str, str]:
     actions = ", ".join(sorted(set(available_actions)))
     prompt = make_planner_prompt().format_prompt(
         actions=actions,
         summary=_format_state_summary(state),
     )
     response = llm.invoke(prompt.to_messages())
-    choice = response.content.strip()
-    return choice if choice in set(available_actions) else "end"
+    return _parse_planner_response(response.content, available_actions)
 
 
 def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) -> AgentState:
     orchestrator_state = dict(state.get("orchestrator", {}))
     next_action = orchestrator_state.get("next_action")
+    thought = orchestrator_state.get("thought", "")
+    meta = dict(state.get("meta", {}))
     if not next_action:
-        llm_choice = llm_select_next_action(state, llm, available_actions)
-        if llm_choice != "end":
-            next_action = llm_choice
-        else:
-            next_action = choose_next_action(state, available_actions)
+        if state.get("last_action") == "tool_handler":
+            requester = _next_tool_requester(state)
+            if requester and requester in set(available_actions):
+                next_action = requester
+                queue = _tool_request_queue(state)
+                meta["tool_request_queue"] = [name for name in queue if name != requester]
+        if not next_action:
+            llm_choice, thought = llm_select_next_action(state, llm, available_actions)
+            if llm_choice != "end":
+                next_action = llm_choice
+            else:
+                next_action = choose_next_action(state, available_actions)
     orchestrator_state["next_action"] = next_action
+    if thought:
+        orchestrator_state["thought"] = thought
+        thoughts = list(orchestrator_state.get("thoughts", []))
+        thoughts.append(thought)
+        orchestrator_state["thoughts"] = thoughts
     observations = list(state.get("observations", []))
     observations.append(f"orchestrator: next_action={next_action}")
 
@@ -150,4 +192,5 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
         "last_action": "orchestrator",
         "orchestrator": orchestrator_state,
         "observations": observations,
+        "meta": meta,
     }
