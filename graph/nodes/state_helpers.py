@@ -25,3 +25,15 @@ def update_agent_state(state: dict, agent_name: str, updates: dict[str, Any]) ->
         **state,
         "agents": agents,
     }
+
+
+def enqueue_tool_requester(state: dict, agent_name: str) -> dict[str, Any]:
+    meta = dict(state.get("meta", {}))
+    queue = list(meta.get("tool_request_queue", []))
+    if agent_name not in queue:
+        queue.append(agent_name)
+    meta["tool_request_queue"] = queue
+    return {
+        **state,
+        "meta": meta,
+    }

@@ -11,8 +11,12 @@ TOOLS_CATALOG: list[dict[str, object]] = [
     {
         "tool_name": "query_weather",
         "server": "weather",
-        "description": "Get current weather for a city.",
-        "schema": {"city": "string (e.g., Boston)"},
+        "description": "Get weather for a city and optional date range (includes observation date/time).",
+        "schema": {
+            "city": "string (e.g., Boston)",
+            "start_date": "optional YYYY-MM-DD",
+            "end_date": "optional YYYY-MM-DD",
+        },
     },
     {
         "tool_name": "get_weather_tips",
@@ -59,6 +63,14 @@ def format_tool_catalog(tools_catalog: list[dict[str, object]] | None = None) ->
             f"schema={schema}"
         )
     return "\n".join(lines)
+
+
+def is_tool_requested(state: AgentState) -> bool:
+    agents = state.get("agents", {})
+    for agent_state in agents.values():
+        if agent_state.get("tool_requests"):
+            return True
+    return False
 
 
 def parse_tool_requests(text: str) -> list[dict[str, object]]:
