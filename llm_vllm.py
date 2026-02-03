@@ -1,7 +1,7 @@
 from langchain_openai import ChatOpenAI
 import os
 import requests
-
+# Info for vllm
 def detect_vllm_model(base_url: str) -> str:
     url = base_url.rstrip("/") + "/models"
     r = requests.get(url, timeout=5)
