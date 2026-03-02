@@ -13,12 +13,12 @@ from UI.ui_final_review import ui_final_review
 # Streamlit Config
 # --------------------------
 st.set_page_config(
-    page_title="Code Agent",
+    page_title="Multi Agent",
     layout="wide",
 )
 
 
-st.title("Code Agent (LangGraph)")
+st.title("Multi Agent (LangGraph)")
 st.write("Upload your **dataset CSV** and **schema JSON**, then start chatting.")
 
 
@@ -218,6 +218,24 @@ if user_text:
 # --------------------------------------------------
 snapshot = app.get_state(config)
 state = snapshot.values if snapshot else {}
+
+# For check workflow state, DEBUG ONLY
+with st.expander("🧭 Current workflow state", expanded=False):
+    executor_state = state.get("agents", {}).get("executor", {})
+    review_state = state.get("agents", {}).get("human_review", {})
+    st.write(
+        {
+            "last_action": state.get("last_action"),
+            "next_action": state.get("next_action"),
+            "next_nodes": list(snapshot.next or []) if snapshot else [],
+            "executor_run_status": executor_state.get("run_status"),
+            "before_run_decision": review_state.get("before_run_decision"),
+            "after_error_decision": review_state.get("after_error_decision"),
+            "final_decision": review_state.get("final_decision"),
+            "workflow_trace_tail": list(state.get("meta", {}).get("workflow_trace", []))[-12:],
+        }
+    )
+
 if state and state.get("messages"):
     st.session_state.chat_history = state["messages"]
 
@@ -240,11 +258,11 @@ for msg in st.session_state.chat_history:
 interrupt_event = snapshot.interrupts[0] if snapshot.interrupts else None
 
 # For DEBUGGING purpose, DO NOT delete
-# st.write("current state values from langraph are:", state)
-# st.write("Next nodes:", snapshot.next)
-# st.write("interrupts:", snapshot.interrupts)
-# if interrupt_event:
-#     st.write("Interrupt event is:", interrupt_event)
+st.write("current state values from langraph are:", state)
+st.write("Next nodes:", snapshot.next)
+st.write("interrupts:", snapshot.interrupts)
+if interrupt_event:
+    st.write("Interrupt event is:", interrupt_event)
 
 if interrupt_event:
     interrupt_id = interrupt_event.id

@@ -13,6 +13,18 @@ from prompts.planner_prompt import make_planner_prompt
 
 MAX_ERROR_ITERATIONS = 5
 
+NODE_CAPABILITIES: dict[str, str] = {
+    "generate_code": "Generate Python analysis code from the user's analytical request and available context.",
+    "execute_code": "Execute previously generated Python code against the loaded dataframe and collect outputs/errors.",
+    "error_handler": "Revise broken code after execution failures and increment retry state.",
+    "human_review_after_error": "Ask human for guidance after repeated execution failures.",
+    "human_review_before_run": "Ask human approval before running generated code.",
+    "human_review_final": "Ask human approval of final successful output.",
+    "tool_handler": "Execute requested external tools and store tool results back to requesting agents.",
+    "qa": "Answer user questions directly in natural language (optionally using tool results), without code unless requested.",
+    "end": "Stop graph execution for the current turn.",
+}
+
 
 @dataclass(frozen=True)
 class AgentPolicy:
@@ -119,6 +131,7 @@ def _format_state_summary(state: AgentState) -> str:
         f"error_iterations={_error_iterations(state)}",
         f"tool_requests_pending={is_tool_requested(state)}",
         f"last_action={state.get('last_action')}",
+        f"workflow_trace_tail={list(state.get('meta', {}).get('workflow_trace', []))[-8:]}",
         "tool_results:\n" + _format_tool_results(state),
     ]
     return "\n".join(parts)
@@ -144,6 +157,13 @@ def _parse_planner_response(
         return action, str(thought or "")
     return "end", str(thought or "")
 
+def _format_node_capabilities(available_actions: Iterable[str]) -> str:
+    lines: list[str] = []
+    for action in sorted(set(available_actions)):
+        description = NODE_CAPABILITIES.get(action, "No description provided.")
+        lines.append(f"- {action}: {description}")
+    return "\n".join(lines)
+
 
 def llm_select_next_action(
     state: AgentState,
@@ -154,6 +174,7 @@ def llm_select_next_action(
     prompt = make_planner_prompt().format_prompt(
         actions=actions,
         summary=_format_state_summary(state),
+        node_capabilities=_format_node_capabilities(available_actions),
     )
     response = llm.invoke(prompt.to_messages())
     return _parse_planner_response(response.content, available_actions)
@@ -186,10 +207,14 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
     observations = list(state.get("observations", []))
     observations.append(f"orchestrator: next_action={next_action}")
 
+    workflow_trace = list(meta.get("workflow_trace", []))
+    workflow_trace.append("orchestrator")
+    meta["workflow_trace"] = workflow_trace[-100:]
+
     return {
         **state,
         "next_action": next_action,
-        "last_action": "orchestrator",
+        "last_action": state.get("last_action"),
         "orchestrator": orchestrator_state,
         "observations": observations,
         "meta": meta,

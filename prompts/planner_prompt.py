@@ -4,6 +4,9 @@ SYSTEM_TEXT = """
 You are the orchestrator for a multi-agent system. Select the single best next action
 from the allowed list, based on the current state summary.
 
+Node capabilities:
+{node_capabilities}
+
 Return a JSON object with:
 - "thought": a short rationale for the choice
 - "action": the chosen action name from the allowed list
