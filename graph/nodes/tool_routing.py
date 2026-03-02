@@ -109,8 +109,8 @@ def request_tools_for_question(
                 "system",
                 "You are a tool routing assistant. Decide if the user question needs "
                 "external tools. Use only the tools listed. If no tool is needed, "
-                "return {\"tool_requests\": []}. Otherwise return JSON with tool requests "
-                "in the form {\"tool_requests\": [{\"tool_name\": ..., \"payload\": {...}}]}. "
+                "return {{\"tool_requests\": []}}. Otherwise return JSON with tool requests "
+                "in the form {{\"tool_requests\": [{{\"tool_name\": ..., \"payload\": {{...}}}}]}}. "
                 "Each payload MUST include \"server\" and any required fields.",
             ),
             (

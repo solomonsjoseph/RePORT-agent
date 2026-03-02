@@ -15,48 +15,53 @@ from .nodes.human_review_before_run import human_review_before_run_node
 from .nodes.human_review_after_error import human_review_after_error_node
 from .nodes.human_review_final import human_review_final_node
 
+def _run_and_mark(node_name, fn):
+    def _wrapped(state):
+        updated_state = fn(state)
+        if not isinstance(updated_state, dict):
+            updated_state = dict(state)
+
+        orchestrator_state = dict(updated_state.get("orchestrator", {}))
+        orchestrator_state.pop("next_action", None)
+        meta = dict(updated_state.get("meta", {}))
+        workflow_trace = list(meta.get("workflow_trace", []))
+        workflow_trace.append(node_name)
+        meta["workflow_trace"] = workflow_trace[-100:]
+
+        return {
+            **updated_state,
+            "next_action": None,
+            "last_action": node_name,
+            "orchestrator": orchestrator_state,
+            "meta": meta,
+        }
+
+    return _wrapped
+
+
 def build_graph(llm, df, schema, db_path):
     workflow = StateGraph(AgentState)
     context = build_context(df, schema)
-
-    available_actions = [
-        "generate_code",
-        "execute_code",
-        "error_handler",
-        "human_review_after_error",
-        "human_review_before_run",
-        "human_review_final",
-        "tool_handler",
-        "qa",
-        "end",
-    ]
+    action_nodes = {
+        "generate_code": _run_and_mark("generate_code", lambda s: generate_code_node(s, llm, context)),
+        "execute_code": _run_and_mark("execute_code", lambda s: execute_code_node(s, df)),
+        "error_handler": _run_and_mark("error_handler", lambda s: error_handler_node(s, llm, context)),
+        "human_review_after_error": _run_and_mark("human_review_after_error", human_review_after_error_node),
+        "human_review_before_run": _run_and_mark("human_review_before_run", human_review_before_run_node),
+        "human_review_final": _run_and_mark("human_review_final", human_review_final_node),
+        "tool_handler": _run_and_mark("tool_handler", tool_handler_node),
+        "qa": _run_and_mark("qa", lambda s: qa_node(s, llm)),
+    }
+    available_actions = [*action_nodes.keys(), "end"]
 
     workflow.add_node(
         "orchestrator",
         lambda s: orchestrator_node(s, llm, available_actions)
     )
-    workflow.add_node(
-        "generate_code",
-        lambda s: generate_code_node(s, llm, context)
-    )
-    workflow.add_node(
-        "execute_code",
-        lambda s: execute_code_node(s, df)
-    )
-    workflow.add_node(
-        "error_handler",
-        lambda s: error_handler_node(s, llm, context)
-    )
-    workflow.add_node("human_review_after_error", human_review_after_error_node)
-    workflow.add_node("tool_handler", tool_handler_node)
-    workflow.add_node(
-        "qa",
-        lambda s: qa_node(s, llm)
-    )
+    
+    for node_name, node_fn in action_nodes.items():
+        workflow.add_node(node_name, node_fn)
 
-    # Interruptable review nodes
-    workflow.add_node("human_review_before_run", human_review_before_run_node)
-    workflow.add_node("human_review_final", human_review_final_node)
 
     # Orchestrator-driven control flow
     workflow.add_edge(START, "orchestrator")
@@ -64,28 +69,12 @@ def build_graph(llm, df, schema, db_path):
         "orchestrator",
         route_by_next_action,
         {
-            "generate_code": "generate_code",
-            "execute_code": "execute_code",
-            "error_handler": "error_handler",
-            "human_review_after_error": "human_review_after_error",
-            "human_review_before_run": "human_review_before_run",
-            "human_review_final": "human_review_final",
-            "tool_handler": "tool_handler",
-            "qa": "qa",
+            **{name: name for name in action_nodes},
             END: END,
         }
     )
 
-    for node_name in [
-        "generate_code",
-        "execute_code",
-        "error_handler",
-        "human_review_after_error",
-        "human_review_before_run",
-        "human_review_final",
-        "tool_handler",
-        "qa",
-    ]:
+    for node_name in action_nodes:
         workflow.add_edge(node_name, "orchestrator")
 
     conn = sqlite3.connect(db_path, check_same_thread=False)
