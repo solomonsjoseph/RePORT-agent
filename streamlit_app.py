@@ -108,7 +108,7 @@ top_p = st.sidebar.number_input(
 # ============================================================
 # 1. File Upload UI
 # ============================================================
-st.write("Upload your **dataset CSV** and **schema JSON**, then start chatting.")
+st.write("Upload your **dataset CSV** and **schema JSON**")
 
 uploaded_csv = st.file_uploader("Upload your dataset (.csv)", type=["csv"])
 uploaded_schema = st.file_uploader("Upload your schema (.json)", type=["json"])
@@ -138,7 +138,7 @@ if uploaded_csv and uploaded_schema:
         st.stop()
 
 else:
-    st.warning("No dataset/schema provided. Running in metadata-only mode.")
+    # st.warning("No dataset/schema provided. Running in metadata-only mode.")
     df = pd.DataFrame()
     schema = {}
 
@@ -159,7 +159,7 @@ def load_app(llm, df, schema):
                        db_path='/projects/f_wj183_1/reflib/report-agent_db/agent_memory.db')
 
 
-llm = load_llm(model_name, temperature, top_p, api_key, base_url, provider)
+llm = load_llm(model_name, temperature, top_p, base_url, api_key, provider)
 app = load_app(llm, df, schema)
 
 

@@ -14,7 +14,7 @@ from prompts.planner_prompt import make_planner_prompt
 MAX_ERROR_ITERATIONS = 5
 
 NODE_CAPABILITIES: dict[str, str] = {
-    "generate_code": "Generate Python analysis code from the user's analytical request and available context.",
+    "generate_code": "Generate Python analysis code from the user's analytical request and available context. Usually when dataset and schema are not null.",
     "execute_code": "Execute previously generated Python code against the loaded dataframe and collect outputs/errors.",
     "error_handler": "Revise broken code after execution failures and increment retry state.",
     "human_review_after_error": "Ask human for guidance after repeated execution failures.",
@@ -123,7 +123,16 @@ def _format_tool_results(state: AgentState) -> str:
 def _format_state_summary(state: AgentState) -> str:
     executor_state = get_agent_state(state, "executor")
     review_state = get_agent_state(state, "human_review")
+
+    latest_user = ""
+    messages = list(state.get("messages", []))
+    for message in reversed(messages):
+        if getattr(message, "type", None) == "human":
+            latest_user = str(getattr(message, "content", "") or "").strip()
+            break
+
     parts = [
+        f"latest_user_message={latest_user}",
         f"generated_code_present={bool((state.get('output') or {}).get('generated_code'))}",
         f"executor_run_status={executor_state.get('run_status')}",
         f"before_run_decision={review_state.get('before_run_decision')}",
