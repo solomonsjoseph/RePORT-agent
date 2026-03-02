@@ -1,4 +1,5 @@
 from langchain_openai import ChatOpenAI
+from langchain_anthropic import ChatAnthropic
 import os
 import requests
 # Info for vllm
@@ -8,25 +9,38 @@ def detect_vllm_model(base_url: str) -> str:
     r.raise_for_status()
     return r.json()["data"][0]["id"]
 
-def build_llm(model_name, temperature=0.0, top_p=1.0, base_url=None, api_key=None):
-    kwargs = dict(
-        model=model_name,
-        temperature=temperature,
-        top_p=top_p,
-    )
-
-    if base_url:
+def build_llm(model_name, temperature, top_p, base_url, api_key, provider):
+    if provider == "vllm":
         # vLLM / OpenAI-compatible server
-        kwargs["base_url"] = base_url
-        kwargs["api_key"] = "dummy"
-        # DO NOT set max_tokens
-    else:
-        # OpenAI
+        return ChatOpenAI(
+            model=model_name,
+            temperature=temperature,
+            top_p=top_p,
+            base_url=base_url,
+            api_key="dummy",
+        )
+
+    if provider == "openai":
         if api_key:
             os.environ["OPENAI_API_KEY"] = api_key
-        kwargs["max_tokens"] = 4096  # safe for OpenAI
+        return ChatOpenAI(
+            model=model_name,
+            temperature=temperature,
+            top_p=top_p,
+            max_tokens=4096,
+        )
 
-    return ChatOpenAI(**kwargs)
+    if provider == "anthropic":
+        if api_key:
+            os.environ["ANTHROPIC_API_KEY"] = api_key
+        return ChatAnthropic(
+            model=model_name,
+            temperature=temperature,
+            top_p=top_p,
+            max_tokens=4096,
+        )
+
+    raise ValueError(f"Unsupported provider: {provider}")
 
 
 # from langchain_core.prompts import ChatPromptTemplate
@@ -45,5 +59,3 @@ def build_llm(model_name, temperature=0.0, top_p=1.0, base_url=None, api_key=Non
 
 # result = chain.invoke({"question": "What is PCA in machine learning?"})
 # print(result.content)
-
-

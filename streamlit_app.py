@@ -1,6 +1,8 @@
 import streamlit as st
 import pandas as pd
 import json
+import os
+import requests
 # from pathlib import Path
 import uuid
 from langchain_core.messages import HumanMessage, AIMessage
@@ -9,6 +11,7 @@ from llm_vllm import build_llm, detect_vllm_model
 from UI.ui_before_run_review import ui_before_run_review
 from UI.ui_after_error_review import ui_after_error_review
 from UI.ui_final_review import ui_final_review
+from UI.load_openai import load_openai
 # --------------------------
 # Streamlit Config
 # --------------------------
@@ -19,8 +22,6 @@ st.set_page_config(
 
 
 st.title("Multi Agent (LangGraph)")
-st.write("Upload your **dataset CSV** and **schema JSON**, then start chatting.")
-
 
 # ============================================================
 # Sidebar UI — Model Configuration
@@ -28,28 +29,63 @@ st.write("Upload your **dataset CSV** and **schema JSON**, then start chatting."
 
 st.sidebar.header("⚙️ Model Settings")
 base_url = "http://localhost:8000/v1"
-model_name = detect_vllm_model(base_url)
-short = model_name.split("/")[-1]
-st.sidebar.markdown(f"**🧠 Model:**")
-st.sidebar.markdown(f"### {short}")
-st.sidebar.caption(model_name)
 
 # default_model = 'meta-llama/Llama-3.1-8B-Instruct'
 default_temp = 0.1
 default_api_key = ""
-# default_max_token = 1024
-# Define allowed model options
-# model_options = [
-# #    "Qwen/Qwen2.5-32B",
-#     default_model,   # keep your default as an option too
-# ]
+default_openai_model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+default_anthropic_model = os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20240620")
+openai_env_key = os.getenv("OPENAI_API_KEY", "")
+anthropic_env_key = os.getenv("ANTHROPIC_API_KEY", "")
 
-# model_name = st.sidebar.selectbox(
-#     "Model name",
-#     model_options,
-#     index=model_options.index(default_model) if default_model in model_options else 0,
-#     help="Choose the model you want to use."
-# )
+provider = st.sidebar.selectbox(
+    "Provider",
+    ["openai", "anthropic", "vllm"],
+    index=0,
+    help="Choose the model provider to use."
+)
+
+api_key = ""
+model_name = ""
+
+@st.cache_data(show_spinner=False)
+def load_openai_models(effective_api_key):
+    headers = {"Authorization": f"Bearer {effective_api_key}"}
+    resp = requests.get("https://api.openai.com/v1/models", headers=headers, timeout=10)
+    resp.raise_for_status()
+    data = resp.json().get("data", [])
+    model_ids = sorted({item.get("id") for item in data if item.get("id")})
+    return model_ids
+
+@st.cache_data(show_spinner=False)
+def load_anthropic_models(effective_api_key):
+    headers = {
+        "x-api-key": effective_api_key,
+        "anthropic-version": "2023-06-01",
+    }
+    resp = requests.get("https://api.anthropic.com/v1/models", headers=headers, timeout=10)
+    resp.raise_for_status()
+    data = resp.json().get("data", [])
+    model_ids = sorted({item.get("id") for item in data if item.get("id")})
+    return model_ids
+
+if provider == "vllm":
+    try:
+        model_name = detect_vllm_model(base_url)
+    except Exception as e:
+        st.sidebar.error("Invalid vllm backend.")
+        st.stop()
+    short = model_name.split("/")[-1]
+    st.sidebar.markdown("**🧠 Model:**")
+    st.sidebar.markdown(f"### {short}")
+    st.sidebar.caption(model_name)
+elif provider == "openai":
+    api_key, model_name = load_openai(
+        default_api_key=default_api_key,
+        openai_env_key=openai_env_key,
+        default_openai_model=default_openai_model,
+        load_openai_models_fn=load_openai_models,
+    )
 
 temperature = st.sidebar.slider(
     "Temperature",
@@ -60,22 +96,6 @@ temperature = st.sidebar.slider(
     help="Higher temperature = more creative code."
 )
 
-api_key = st.sidebar.text_input(
-    "API Key (optional)",
-    value=default_api_key,
-    type="password",
-    help="Leave blank if using environment variable."
-)
-
-# max_tokens = st.sidebar.number_input(
-#     "Max Tokens",
-#     value=4096,
-#     min_value=512,
-#     max_value=32768,
-#     step=512,
-#     help="Set a token limit or leave as default."
-# )
-
 top_p = st.sidebar.number_input(
     "Top probablity",
     value=0.9,
@@ -85,10 +105,10 @@ top_p = st.sidebar.number_input(
     help="Set the top-p value, lowering it increases creativity."
 )
 
-
 # ============================================================
 # 1. File Upload UI
 # ============================================================
+st.write("Upload your **dataset CSV** and **schema JSON**, then start chatting.")
 
 uploaded_csv = st.file_uploader("Upload your dataset (.csv)", type=["csv"])
 uploaded_schema = st.file_uploader("Upload your schema (.json)", type=["json"])
@@ -128,16 +148,10 @@ else:
 
 # Caching resources so LLM + LangGraph are not recreated every turn
 @st.cache_resource
-def load_llm(model_name, temperature, top_p, api_key):
-    # If user supplies an API key, override OPENAI_API_KEY
-    if api_key:
-        import os
-        os.environ["OPENAI_API_KEY"] = api_key
-
+def load_llm(model_name, temperature, top_p, base_url, api_key, provider):
     return build_llm(model_name = model_name, temperature = temperature, 
-                     top_p = top_p, api_key = api_key,
-                     base_url= base_url)
-
+                     top_p = top_p, base_url= base_url, api_key = api_key,
+                     provider = provider)
 
 @st.cache_resource
 def load_app(llm, df, schema):
@@ -145,7 +159,7 @@ def load_app(llm, df, schema):
                        db_path='/projects/f_wj183_1/reflib/report-agent_db/agent_memory.db')
 
 
-llm = load_llm(model_name, temperature, top_p, api_key)
+llm = load_llm(model_name, temperature, top_p, api_key, base_url, provider)
 app = load_app(llm, df, schema)
 
 
