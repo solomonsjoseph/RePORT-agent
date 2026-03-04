@@ -1,25 +1,96 @@
 import asyncio
+from contextlib import AsyncExitStack
+from importlib import import_module
+from typing import Any
+
 from mcp.client.stdio import stdio_client
+
 from tools.mcp_tools import get_server_config
 
-_POOL = {}
+_POOL: dict[str, Any] = {}
 _LOCK = asyncio.Lock()
+
+
+def _load_client_session_class() -> type[Any] | None:
+    candidates = (
+        ("mcp", "ClientSession"),
+        ("mcp.client.session", "ClientSession"),
+    )
+    for module_name, attr in candidates:
+        try:
+            module = import_module(module_name)
+            return getattr(module, attr)
+        except (ImportError, AttributeError):
+            continue
+    return None
+
+
+async def _build_stdio_client(command: str, args: list[str], env: dict[str, str] | None):
+    # mcp-python changed stdio_client from accepting a plain command list
+    # to requiring a server parameters object. Support both call styles.
+    try:
+        from mcp.client.stdio import StdioServerParameters
+
+        return stdio_client(StdioServerParameters(command=command, args=args, env=env))
+    except ImportError:
+        return stdio_client([command, *args])
+
+
+async def _create_mcp_client(cfg: dict[str, Any]):
+    stack = AsyncExitStack()
+    try:
+        command = cfg["command"]
+        args = cfg.get("args", [])
+        env = cfg.get("env")
+
+        stdio = await _build_stdio_client(command=command, args=args, env=env)
+        stdio_result = await stack.enter_async_context(stdio)
+
+        if hasattr(stdio_result, "call_tool"):
+            client = stdio_result
+            if hasattr(client, "initialize"):
+                await client.initialize()
+            return client, stack
+
+        if isinstance(stdio_result, tuple) and len(stdio_result) >= 2:
+            client_session_cls = _load_client_session_class()
+            if client_session_cls is None:
+                raise RuntimeError("Could not import MCP ClientSession class")
+
+            read_stream, write_stream = stdio_result[0], stdio_result[1]
+            session = await stack.enter_async_context(
+                client_session_cls(read_stream, write_stream)
+            )
+            if hasattr(session, "initialize"):
+                await session.initialize()
+            return session, stack
+
+        raise RuntimeError(
+            f"Unsupported stdio_client result type: {type(stdio_result).__name__}"
+        )
+    except Exception:
+        await stack.aclose()
+        raise
 
 
 async def get_mcp_client(server_name: str):
     async with _LOCK:
         if server_name in _POOL:
-            return _POOL[server_name]
+            return _POOL[server_name]["client"]
 
         cfg = get_server_config(server_name)
+        if not cfg:
+            raise ValueError(f"Unknown MCP server: {server_name}")
 
-        cmd = [cfg["command"]] + cfg.get("args", [])
+        command = cfg.get("command")
+        if not command:
+            raise ValueError(
+                f"Invalid MCP server config for '{server_name}': missing 'command'"
+            )
 
-        client = await stdio_client(cmd).__aenter__()
-
-        _POOL[server_name] = client
+        client, stack = await _create_mcp_client(cfg)
+        _POOL[server_name] = {"client": client, "stack": stack}
         return client
-
 
 async def call_mcp_tool(server_name: str, tool_name: str, payload: dict):
     client = await get_mcp_client(server_name)
