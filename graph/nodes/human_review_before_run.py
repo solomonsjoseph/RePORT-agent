@@ -16,9 +16,12 @@ def human_review_before_run_node(state):
     if suggestion:
         messages.append(HumanMessage(content=suggestion))
     # On resume, 'decision' becomes the user input
+    meta = dict(state.get("meta", {}))
+    approved_hash = meta.get("current_code_hash") if decision == "approve" else None
     updated_state = {
         **state,
-        "messages": messages
+        "messages": messages,
+        "meta": meta,
     }
     return update_agent_state(
         updated_state,
@@ -26,5 +29,6 @@ def human_review_before_run_node(state):
         {
             "status": "done",
             "before_run_decision": decision,
+            "approved_code_hash": approved_hash,
         },
     )

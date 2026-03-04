@@ -1,33 +1,73 @@
 from __future__ import annotations
 
+import asyncio
+
 from typing import Any
+from tools.mcp_pool import call_mcp_tool
+
+from mcp.client.stdio import stdio_client
 
 from ..state import AgentState
-from tools.mcp_tools import run_mcp_tool
+from tools.mcp_tools import make_mcp_tool, get_server_config
 from .state_helpers import get_agent_state, update_agent_state
 
 
 def tool_handler_node(state: AgentState) -> AgentState:
     tool_results: list[dict[str, Any]] = []
     agents = dict(state.get("agents", {}))
+
     for agent_name in list(agents.keys()):
         agent_state = get_agent_state(state, agent_name)
         requests = list(agent_state.get("tool_requests", []))
+
         if not requests:
             continue
+
         agent_results: list[dict[str, Any]] = []
+
         for request in requests:
             tool_name = request.get("tool_name")
             payload = request.get("payload", {})
+
             if not tool_name:
                 continue
-            result = {
+
+            result = make_mcp_tool(tool_name, payload)
+
+            # If MCP tool is queued → execute it
+            if result.get("status") == "queued":
+                server_name = result["server"]
+
+                try:
+                    output = asyncio.run(
+                        call_mcp_tool(server_name, tool_name, payload)
+                    )
+
+                    result = {
+                        "status": "done",
+                        "server": server_name,
+                        "tool_name": tool_name,
+                        "payload": payload,
+                        "output": output,
+                    }
+                except Exception as e:
+                    result = {
+                        "status": "error",
+                        "server": server_name,
+                        "tool_name": tool_name,
+                        "payload": payload,
+                        "message": str(e),
+                    }
+
+            tool_result = {
                 "agent": agent_name,
                 "tool_name": tool_name,
-                "result": run_mcp_tool(tool_name, payload),
+                "result": result,
             }
-            tool_results.append(result)
-            agent_results.append(result)
+
+            tool_results.append(tool_result)
+            agent_results.append(tool_result)
+
         agent_state["tool_requests"] = []
         agent_state.setdefault("tool_results", []).extend(agent_results)
         agents[agent_name] = agent_state
@@ -43,6 +83,7 @@ def tool_handler_node(state: AgentState) -> AgentState:
         "agents": agents,
         "observations": observations,
     }
+
     return update_agent_state(
         updated_state,
         "tool_handler",
