@@ -18,6 +18,5 @@ async def calculate(expression: str) -> str:
     except Exception as exc:
         return f"Calculation error: {exc}"
 
-
 if __name__ == "__main__":
     mcp.run(transport="stdio")
