@@ -35,6 +35,140 @@ class AgentPolicy:
 def _error_iterations(state: AgentState) -> int:
     return int(state.get("meta", {}).get("error_iterations", 0))
 
+# Hybrid routing guardrails are common in agent systems: they provide deterministic
+# fallbacks when LLM routing outputs are invalid/ambiguous.
+# Keep these lexical cues short and domain-agnostic to reduce overfitting.
+QA_LEADING_PHRASES = (
+    "what is",
+    "what's",
+    "who is",
+    "define",
+    "explain",
+    "tell me about",
+)
+
+CODE_REQUEST_CUES = (
+    "write code",
+    "generate code",
+    "show code",
+    "python",
+    "plot",
+    "chart",
+    "analyze",
+    "calculate",
+    "compute",
+    "run",
+)
+
+DATA_OPERATION_CUES = (
+    "dataset",
+    "dataframe",
+    "csv",
+    "table",
+    "columns",
+)
+
+INFO_CODE_CUES = (
+    "sample code",
+    "example code",
+    "code example",
+    "template",
+    "for reference",
+    "without running",
+    "do not run",
+    "dont run",
+)
+
+EXECUTION_CUES = (
+    "execute",
+    "run it",
+    "use my dataset",
+    "on my dataset",
+    "for my dataset",
+    "on this dataset",
+    "fit the model",
+)
+
+
+def _latest_user_message(state: AgentState) -> str:
+    messages = list(state.get("messages", []))
+    for message in reversed(messages):
+        if getattr(message, "type", None) == "human":
+            return str(getattr(message, "content", "") or "").strip()
+    return ""
+
+
+def _has_unanswered_human_message(state: AgentState) -> bool:
+    """Return True when the latest chat turn is a human message awaiting a reply."""
+    messages = list(state.get("messages", []))
+    if not messages:
+        return False
+
+    last_human_index = -1
+    last_ai_index = -1
+    for idx, message in enumerate(messages):
+        message_type = getattr(message, "type", None)
+        if message_type == "human":
+            last_human_index = idx
+        elif message_type == "ai":
+            last_ai_index = idx
+    return last_human_index > last_ai_index
+
+
+def _should_end_now(state: AgentState) -> bool:
+    # This flag is different from graph interrupts. It marks that model output
+    # asked for clarification and the orchestrator should pause until new user input.
+    if state.get("meta", {}).get("awaiting_user_clarification"):
+        return True
+    if state.get("last_action") == "qa" and not _has_unanswered_human_message(state):
+        return True
+    return False
+
+
+def infer_intent_from_latest_user(state: AgentState) -> str | None:
+    user_message = _latest_user_message(state).lower()
+    if not user_message:
+        return None
+
+    has_code_request = any(token in user_message for token in CODE_REQUEST_CUES)
+    has_info_code_request = any(token in user_message for token in INFO_CODE_CUES)
+    has_data_context = any(token in user_message for token in DATA_OPERATION_CUES) or "my data" in user_message
+    has_execution_request = any(token in user_message for token in EXECUTION_CUES) or has_data_context
+
+    # Distinguish code-as-information from true analysis execution tasks.
+    # Example: "give me sample code for survival analysis" should route to QA
+    # and respond directly, without entering run/approval flow.
+    if has_code_request and has_info_code_request and not has_execution_request:
+        return "qa"
+
+    code_score = 0
+    if has_code_request:
+        code_score += 1
+    if has_data_context:
+        code_score += 1
+
+    qa_score = 0
+    if user_message.endswith("?"):
+        qa_score += 1
+    if user_message.startswith(QA_LEADING_PHRASES):
+        qa_score += 1
+
+    # Prefer explicit code/data operation requests over generic question form.
+    if code_score >= 1 and (qa_score == 0 or code_score > qa_score):
+        return "code"
+    if qa_score >= 1:
+        return "qa"
+    return None
+
+
+def _has_fresh_run_approval(state: AgentState) -> bool:
+    review_state = get_agent_state(state, "human_review")
+    if review_state.get("before_run_decision") != "approve":
+        return False
+    approved_hash = review_state.get("approved_code_hash")
+    current_hash = (state.get("meta", {}) or {}).get("current_code_hash")
+    return bool(approved_hash and current_hash and approved_hash == current_hash)
+
 
 def _tool_request_queue(state: AgentState) -> list[str]:
     return list(state.get("meta", {}).get("tool_request_queue", []))
@@ -85,7 +219,7 @@ def build_default_policies() -> list[AgentPolicy]:
             name="execute_code",
             is_ready=lambda s: (s.get("output") or {}).get("generated_code")
             and get_agent_state(s, "executor").get("run_status") in ("idle", "pending")
-            and get_agent_state(s, "human_review").get("before_run_decision") == "approve",
+            and _has_fresh_run_approval(s),
         ),
         AgentPolicy(
             name="human_review_final",
@@ -96,14 +230,18 @@ def build_default_policies() -> list[AgentPolicy]:
 
 
 def choose_next_action(state: AgentState, available_actions: Iterable[str]) -> str:
+    intent = (state.get("meta", {}).get("intent") or infer_intent_from_latest_user(state) or "").strip()
     available = set(available_actions)
+    if _should_end_now(state):
+        return "end"
+    if intent == "qa" and "qa" in available and not is_tool_requested(state):
+        return "qa"
     policies = build_default_policies()
     for policy in policies:
         if policy.name in available and policy.is_ready(state):
             return policy.name
     if get_agent_state(state, "human_review").get("final_decision") == "approve":
         return "end"
-    return "end"
 
 
 def _format_tool_results(state: AgentState) -> str:
@@ -124,15 +262,13 @@ def _format_state_summary(state: AgentState) -> str:
     executor_state = get_agent_state(state, "executor")
     review_state = get_agent_state(state, "human_review")
 
-    latest_user = ""
-    messages = list(state.get("messages", []))
-    for message in reversed(messages):
-        if getattr(message, "type", None) == "human":
-            latest_user = str(getattr(message, "content", "") or "").strip()
-            break
+    latest_user = _latest_user_message(state)
+    inferred_intent = infer_intent_from_latest_user(state)
+    
 
     parts = [
         f"latest_user_message={latest_user}",
+        f"inferred_intent={inferred_intent}",
         f"generated_code_present={bool((state.get('output') or {}).get('generated_code'))}",
         f"executor_run_status={executor_state.get('run_status')}",
         f"before_run_decision={review_state.get('before_run_decision')}",
@@ -194,6 +330,11 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
     next_action = orchestrator_state.get("next_action")
     thought = orchestrator_state.get("thought", "")
     meta = dict(state.get("meta", {}))
+    if meta.get("awaiting_user_clarification") and _has_unanswered_human_message(state):
+        meta.pop("awaiting_user_clarification", None)
+    inferred_intent = infer_intent_from_latest_user(state)
+    if not meta.get("intent") and inferred_intent:
+        meta["intent"] = inferred_intent
     if not next_action:
         if state.get("last_action") == "tool_handler":
             requester = _next_tool_requester(state)
@@ -203,10 +344,11 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
                 meta["tool_request_queue"] = [name for name in queue if name != requester]
         if not next_action:
             llm_choice, thought = llm_select_next_action(state, llm, available_actions)
-            if llm_choice != "end":
+            fallback_action = choose_next_action(state, available_actions)
+            if llm_choice != "end" and not _should_end_now(state):
                 next_action = llm_choice
             else:
-                next_action = choose_next_action(state, available_actions)
+                next_action = fallback_action
     orchestrator_state["next_action"] = next_action
     if thought:
         orchestrator_state["thought"] = thought

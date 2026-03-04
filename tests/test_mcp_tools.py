@@ -24,8 +24,8 @@ def test_load_servers_config_reads_file(tmp_path: Path) -> None:
     assert result == config
 
 
-def test_run_mcp_tool_requires_server_name() -> None:
-    result = mcp_tools.run_mcp_tool("demo", {})
+def test_make_mcp_tool_requires_server_name() -> None:
+    result = mcp_tools.make_mcp_tool("demo", {})
 
     assert result == {
         "status": "error",
@@ -33,10 +33,10 @@ def test_run_mcp_tool_requires_server_name() -> None:
     }
 
 
-def test_run_mcp_tool_reports_unknown_server(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_make_mcp_tool_reports_unknown_server(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(mcp_tools, "load_servers_config", lambda: {"mcpServers": {}})
 
-    result = mcp_tools.run_mcp_tool("demo", {"server": "unknown"})
+    result = mcp_tools.make_mcp_tool("demo", {"server": "unknown"})
 
     assert result == {
         "status": "error",
@@ -44,7 +44,7 @@ def test_run_mcp_tool_reports_unknown_server(monkeypatch: pytest.MonkeyPatch) ->
     }
 
 
-def test_run_mcp_tool_returns_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_make_mcp_tool_returns_payload(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         mcp_tools,
         "load_servers_config",
@@ -52,7 +52,7 @@ def test_run_mcp_tool_returns_payload(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
     payload = {"server": "demo", "query": "hello"}
-    result = mcp_tools.run_mcp_tool("do", payload)
+    result = mcp_tools.make_mcp_tool("do", payload)
 
     assert result == {
         "status": "queued",

@@ -43,7 +43,7 @@ def qa_node(state: AgentState, llm) -> AgentState:
         [
             (
                 "system",
-                "You are a helpful epidemiology assistant. Answer the user's question "
+                "You are a helpful data scientist. Answer the user's question "
                 "directly and clearly. If the question requires analysis, explain the "
                 "recommended steps without writing code unless requested.",
             ),

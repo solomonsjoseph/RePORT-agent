@@ -20,7 +20,7 @@ def get_server_config(server_name: str) -> dict[str, Any] | None:
     return config.get("mcpServers", {}).get(server_name)
 
 
-def run_mcp_tool(tool_name: str, payload: dict[str, Any]) -> dict[str, Any]:
+def make_mcp_tool(tool_name: str, payload: dict[str, Any]) -> dict[str, Any]:
     server_name = payload.get("server")
     if not server_name:
         return {

@@ -40,7 +40,7 @@ anthropic_env_key = os.getenv("ANTHROPIC_API_KEY", "")
 
 provider = st.sidebar.selectbox(
     "Provider",
-    ["openai", "anthropic", "vllm"],
+    ["openai", "vllm"],
     index=0,
     help="Choose the model provider to use."
 )
@@ -162,7 +162,19 @@ def load_app(llm, df, schema):
 llm = load_llm(model_name, temperature, top_p, base_url, api_key, provider)
 app = load_app(llm, df, schema)
 
+with st.sidebar.expander("🐛 Debug: LLM instance", expanded=False):
+    info = {"llm_type": type(llm).__name__}
 
+    # Common LangChain wrappers
+    for attr in ["model", "model_name", "model_id"]:
+        if hasattr(llm, attr):
+            info[attr] = getattr(llm, attr)
+
+    # Some wrappers store it in .client or .kwargs
+    if hasattr(llm, "model_kwargs"):
+        info["model_kwargs"] = getattr(llm, "model_kwargs")
+
+    st.write(info)
 # ============================================================
 # 3. Session state
 # ============================================================
@@ -271,12 +283,14 @@ for msg in st.session_state.chat_history:
                 )
 interrupt_event = snapshot.interrupts[0] if snapshot.interrupts else None
 
-# For DEBUGGING purpose, DO NOT delete
+# For DEBUGGING purpose, DO NOT delete, comment out in demo
+####
 st.write("current state values from langraph are:", state)
 st.write("Next nodes:", snapshot.next)
 st.write("interrupts:", snapshot.interrupts)
 if interrupt_event:
     st.write("Interrupt event is:", interrupt_event)
+####
 
 if interrupt_event:
     interrupt_id = interrupt_event.id
@@ -303,14 +317,20 @@ if snapshot and snapshot.next:
 # Final Output
 # ============================================================
 
-if (
-    state.get("agents", {}).get("executor", {}).get("run_status") == "ok"
-    and state.get("agents", {}).get("human_review", {}).get("final_decision") == "approve"
-):
-    # st.session_state.chat_history = state["messages"]
+output = state.get("output", {}) if state else {}
+executor_ok = state.get("agents", {}).get("executor", {}).get("run_status") == "ok" if state else False
+final_approved = state.get("agents", {}).get("human_review", {}).get("final_decision") == "approve" if state else False
+qa_ready = bool(output.get("qa_response"))
+analysis_ready = executor_ok and final_approved
+
+# QA answers should be surfaced immediately (no final human approval required).
+if qa_ready and not analysis_ready:
+    st.success("Response ready")
+    st.write(output.get("qa_response"))
+
+if analysis_ready:
     st.success("Analysis completed")
 
-    output = state.get("output", {})
     if output.get("text"):
         st.write("Output")
         st.code(output["text"], language="python")

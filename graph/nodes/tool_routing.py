@@ -73,30 +73,51 @@ def is_tool_requested(state: AgentState) -> bool:
     return False
 
 
-def parse_tool_requests(text: str) -> list[dict[str, object]]:
+def parse_tool_requests(
+    text: str,
+    tools_catalog: list[dict[str, object]] | None = None,
+) -> list[dict[str, object]]:
     try:
         data = json.loads(text)
     except json.JSONDecodeError:
         return []
+
     requests = data.get("tool_requests", [])
     if not isinstance(requests, list):
         return []
+
+    # Build tool_name -> server mapping from catalog
+    tool_to_server: dict[str, str] = {}
+    for t in tools_catalog or TOOLS_CATALOG:
+        name = str(t.get("tool_name") or "")
+        server = str(t.get("server") or "")
+        if name and server:
+            tool_to_server[name] = server
+
     validated: list[dict[str, object]] = []
     for request in requests:
         if not isinstance(request, dict):
             continue
+
         tool_name = request.get("tool_name")
         payload = request.get("payload")
+
         if not tool_name or not isinstance(payload, dict):
             continue
-        validated.append(
-            {
-                "tool_name": tool_name,
-                "payload": payload,
-            }
-        )
-    return validated
 
+        tool_name = str(tool_name)
+
+        # Enforce / inject server
+        payload = dict(payload)  # copy
+        payload.setdefault("server", tool_to_server.get(tool_name))
+
+        # If still missing (unknown tool), drop it
+        if not payload.get("server"):
+            continue
+
+        validated.append({"tool_name": tool_name, "payload": payload})
+
+    return validated
 
 def request_tools_for_question(
     llm,
@@ -126,4 +147,4 @@ def request_tools_for_question(
             question=question,
         ).to_messages()
     )
-    return parse_tool_requests(tool_response.content)
+    return parse_tool_requests(tool_response.content, tools_catalog=tools_catalog)

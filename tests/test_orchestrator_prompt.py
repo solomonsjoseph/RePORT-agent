@@ -73,6 +73,28 @@ def test_planner_prompt_formats_with_node_capabilities() -> None:
     assert "- qa: answer directly" in rendered[0]["content"]
 
 
+def test_orchestrator_fallback_prefers_qa_for_concept_questions() -> None:
+    _install_langchain_and_langgraph_stubs()
+    orchestrator = importlib.import_module("graph.nodes.orchestrator")
+
+    state = {
+        "messages": [SimpleNamespace(type="human", content="What's PCA in machine learning?")],
+        "output": {},
+        "observations": [],
+        "last_action": None,
+        "orchestrator": {},
+        "agents": {
+            "executor": {"run_status": "idle"},
+            "human_review": {"before_run_decision": None, "final_decision": None},
+        },
+        "meta": {"error_iterations": 0, "workflow_trace": []},
+    }
+
+    fallback = orchestrator.orchestrator_node(state, _LLM("not-json"), ["qa", "generate_code", "end"])
+
+    assert fallback["next_action"] == "qa"
+    assert fallback["meta"]["intent"] == "qa"
+    
 def test_orchestrator_uses_llm_action_and_fallback_policy() -> None:
     _install_langchain_and_langgraph_stubs()
     orchestrator = importlib.import_module("graph.nodes.orchestrator")
@@ -100,3 +122,25 @@ def test_orchestrator_uses_llm_action_and_fallback_policy() -> None:
     llm_invalid = _LLM("not-json")
     fallback = orchestrator.orchestrator_node(state, llm_invalid, available_actions)
     assert fallback["next_action"] == "generate_code"
+
+def test_orchestrator_routes_sample_code_request_to_qa_without_execution_flow() -> None:
+    _install_langchain_and_langgraph_stubs()
+    orchestrator = importlib.import_module("graph.nodes.orchestrator")
+
+    state = {
+        "messages": [SimpleNamespace(type="human", content="Give me sample code to run survival analysis")],
+        "output": {},
+        "observations": [],
+        "last_action": None,
+        "orchestrator": {},
+        "agents": {
+            "executor": {"run_status": "idle"},
+            "human_review": {"before_run_decision": None, "final_decision": None},
+        },
+        "meta": {"error_iterations": 0, "workflow_trace": []},
+    }
+
+    fallback = orchestrator.orchestrator_node(state, _LLM("not-json"), ["qa", "generate_code", "end"])
+
+    assert fallback["next_action"] == "qa"
+    assert fallback["meta"]["intent"] == "qa"
