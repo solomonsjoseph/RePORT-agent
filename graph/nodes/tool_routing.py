@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from ..state import AgentState
 
 
@@ -11,31 +12,60 @@ TOOLS_CATALOG: list[dict[str, object]] = [
         "tool_name": "query_weather",
         "server": "weather",
         "description": "Get weather for a city and optional date range (includes observation date/time).",
-        "schema": {
-            "city": "string (e.g., Boston)",
-            "start_date": "optional YYYY-MM-DD",
-            "end_date": "optional YYYY-MM-DD",
-        },
+        "required_fields": {"city": "string (e.g., Boston)"},
+        "optional_fields": {"start_date": "YYYY-MM-DD", "end_date": "YYYY-MM-DD"},
     },
     {
         "tool_name": "get_weather_tips",
         "server": "weather",
         "description": "Get seasonal weather tips.",
-        "schema": {"season": "spring|summer|autumn|winter"},
+        "required_fields": {"season": "spring|summer|autumn|winter"},
+        "optional_fields": {},
     },
     {
         "tool_name": "search",
         "server": "search",
         "description": "Run a web search (Tavily).",
-        "schema": {"query": "string", "max_results": "int (default 5)"},
+        "required_fields": {"query": "string"},
+        "optional_fields": {"max_results": "int (default 5)"},
     },
     {
         "tool_name": "calculate",
         "server": "calculator",
         "description": "Evaluate a math expression.",
-        "schema": {"expression": "string (e.g., 2 + 3 * 4)"},
+        "required_fields": {"expression": "string (e.g., 2 + 3 * 4)"},
+        "optional_fields": {},
     },
 ]
+
+_TOOL_ROUTING_SYSTEM = (
+    "You are a tool routing assistant. Decide if the user question needs external tools.\n"
+    "Each tool lists required_fields (must be populated) and optional_fields (omit if not mentioned).\n"
+    "\n"
+    "RULES:\n"
+    "- If all required_fields can be filled from the question or recent context\n"
+    "  (e.g. 'today' for a date, a city named in a prior message), return tool_requests JSON.\n"
+    "- If a required_field is missing and CANNOT be reasonably inferred, return a\n"
+    "  clarification_question asking the user for that ONE missing field only.\n"
+    "- NEVER ask about optional_fields — simply omit them from the payload.\n"
+    "- If no tool is needed, return {\"tool_requests\": []}.\n"
+    "\n"
+    "Output format — choose exactly one:\n"
+    "  {\"tool_requests\": [{\"tool_name\": \"...\", \"payload\": {\"server\": \"...\", ...}}]}\n"
+    "  {\"clarification_question\": \"Which city would you like weather for?\"}"
+)
+
+
+@dataclass
+class ToolRoutingResult:
+    """Discriminated result from :func:`request_tools_for_question`.
+
+    Exactly one of ``tool_requests`` (non-empty) or ``clarification_question``
+    (non-None) is set per result.  Both being empty/None means no tool is needed.
+    """
+
+    tool_requests: list[dict]
+    clarification_question: str | None
 
 
 def latest_user_message(state: AgentState) -> str:
@@ -56,10 +86,12 @@ def format_tool_results(results: list[dict[str, object]]) -> str:
 def format_tool_catalog(tools_catalog: list[dict[str, object]] | None = None) -> str:
     lines = []
     for tool in tools_catalog or TOOLS_CATALOG:
-        schema = json.dumps(tool["schema"], ensure_ascii=False)
+        required = json.dumps(tool.get("required_fields", {}), ensure_ascii=False)
+        optional = json.dumps(tool.get("optional_fields", {}), ensure_ascii=False)
         lines.append(
-            f"- {tool['tool_name']} (server={tool['server']}): {tool['description']} "
-            f"schema={schema}"
+            f"- {tool['tool_name']} (server={tool['server']}): {tool['description']}\n"
+            f"  required: {required}\n"
+            f"  optional: {optional}"
         )
     return "\n".join(lines)
 
@@ -118,25 +150,33 @@ def parse_tool_requests(
 
     return validated
 
+
 def request_tools_for_question(
     llm,
     question: str,
+    recent_messages: list | None = None,
     tools_catalog: list[dict[str, object]] | None = None,
-) -> list[dict[str, object]]:
+) -> ToolRoutingResult:
+    """Decide whether an external tool is needed for *question*.
+
+    Returns a :class:`ToolRoutingResult` that either carries ready-to-execute
+    ``tool_requests`` *or* a targeted ``clarification_question`` to ask the user
+    when a required tool field cannot be inferred from context.
+
+    Args:
+        llm: The language model to invoke for routing decisions.
+        question: The latest user message text.
+        recent_messages: Optional short window of prior messages (typically the
+            last 3 turns) so the LLM can resolve conversational references such
+            as pronouns or implicit locations.
+        tools_catalog: Override the default :data:`TOOLS_CATALOG` (useful in tests).
+    """
     tool_prompt = ChatPromptTemplate.from_messages(
         [
-            (
-                "system",
-                "You are a tool routing assistant. Decide if the user question needs "
-                "external tools. Use only the tools listed. If no tool is needed, "
-                "return {{\"tool_requests\": []}}. Otherwise return JSON with tool requests "
-                "in the form {{\"tool_requests\": [{{\"tool_name\": ..., \"payload\": {{...}}}}]}}. "
-                "Each payload MUST include \"server\" and any required fields.",
-            ),
-            (
-                "system",
-                "Available tools:\n{tools_catalog}",
-            ),
+            ("system", _TOOL_ROUTING_SYSTEM),
+            ("system", "Available tools:\n{tools_catalog}"),
+            ("system", "Recent conversation context (for resolving references):"),
+            MessagesPlaceholder("recent_messages", optional=True),
             ("human", "{question}"),
         ]
     )
@@ -144,6 +184,21 @@ def request_tools_for_question(
         tool_prompt.format_prompt(
             tools_catalog=format_tool_catalog(tools_catalog),
             question=question,
+            recent_messages=recent_messages or [],
         ).to_messages()
     )
-    return parse_tool_requests(tool_response.content, tools_catalog=tools_catalog)
+
+    try:
+        data = json.loads(tool_response.content)
+    except json.JSONDecodeError:
+        return ToolRoutingResult(tool_requests=[], clarification_question=None)
+
+    clarification = data.get("clarification_question")
+    if isinstance(clarification, str) and clarification.strip():
+        return ToolRoutingResult(
+            tool_requests=[],
+            clarification_question=clarification.strip(),
+        )
+
+    tool_requests = parse_tool_requests(tool_response.content, tools_catalog=tools_catalog)
+    return ToolRoutingResult(tool_requests=tool_requests, clarification_question=None)
