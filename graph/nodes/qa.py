@@ -10,6 +10,7 @@ from .tool_routing import (
     latest_user_message,
     request_tools_for_question,
 )
+from utils.message_window import window_messages
 
 
 def qa_node(state: AgentState, llm) -> AgentState:
@@ -19,8 +20,30 @@ def qa_node(state: AgentState, llm) -> AgentState:
     tool_results = list(qa_state.get("tool_results", []))
 
     if question and not tool_results and not tool_requests:
-        tool_requests = request_tools_for_question(llm, question)
-        if tool_requests:
+        recent_msgs = window_messages(state.get("messages", []), max_turns=3)
+        routing_result = request_tools_for_question(llm, question, recent_messages=recent_msgs)
+
+        # Clarification needed — required tool field is missing and can't be inferred.
+        if routing_result.clarification_question:
+            messages = list(state.get("messages", []))
+            messages.append(AIMessage(content=routing_result.clarification_question))
+            meta = dict(state.get("meta", {}))
+            meta["awaiting_user_clarification"] = True
+            output = dict(state.get("output") or {})
+            output["qa_response"] = routing_result.clarification_question
+            observations = list(state.get("observations", []))
+            observations.append("qa: asked clarification for missing required tool field")
+            updated_state = {
+                **state,
+                "messages": messages,
+                "meta": meta,
+                "output": output,
+                "observations": observations,
+            }
+            return update_agent_state(updated_state, "qa", {"status": "done"})
+
+        # Tool(s) identified — enqueue and wait for tool_handler.
+        if routing_result.tool_requests:
             observations = list(state.get("observations", []))
             observations.append("qa: requested tools")
             updated_state = enqueue_tool_requester(
@@ -35,10 +58,11 @@ def qa_node(state: AgentState, llm) -> AgentState:
                 "qa",
                 {
                     "status": "pending",
-                    "tool_requests": tool_requests,
+                    "tool_requests": routing_result.tool_requests,
                 },
             )
 
+    windowed = window_messages(state.get("messages", []), max_turns=10)
     prompt = ChatPromptTemplate.from_messages(
         [
             (
@@ -56,7 +80,7 @@ def qa_node(state: AgentState, llm) -> AgentState:
     )
     response = llm.invoke(
         prompt.format_prompt(
-            messages=state.get("messages", []),
+            messages=windowed,
             tool_results=format_tool_results(tool_results),
         ).to_messages()
     )

@@ -8,20 +8,30 @@ from types import ModuleType, SimpleNamespace
 
 def _install_langchain_stubs() -> None:
     class _FormattedPrompt:
-        def __init__(self, rendered: list[dict[str, str]]) -> None:
+        def __init__(self, rendered: list) -> None:
             self._rendered = rendered
 
         def to_messages(self):
             return self._rendered
 
+    class _MessagesPlaceholder:
+        """Stub — renders as nothing when format_prompt is called."""
+        def __init__(self, variable_name: str, optional: bool = False) -> None:
+            self.variable_name = variable_name
+            self.optional = optional
+
     class _PromptTemplate:
         def __init__(self, messages):
-            self._messages = messages
+            # Keep only (role, template) tuples; skip placeholder objects.
+            self._messages = [m for m in messages if isinstance(m, tuple)]
 
         def format_prompt(self, **kwargs):
             rendered = []
             for role, template in self._messages:
-                rendered.append({"role": role, "content": template.format(**kwargs)})
+                try:
+                    rendered.append({"role": role, "content": template.format(**kwargs)})
+                except KeyError:
+                    rendered.append({"role": role, "content": template})
             return _FormattedPrompt(rendered)
 
     class _ChatPromptTemplate:
@@ -31,6 +41,7 @@ def _install_langchain_stubs() -> None:
 
     prompts_mod = ModuleType("langchain_core.prompts")
     prompts_mod.ChatPromptTemplate = _ChatPromptTemplate
+    prompts_mod.MessagesPlaceholder = _MessagesPlaceholder
 
     messages_mod = ModuleType("langchain_core.messages")
     messages_mod.BaseMessage = object
@@ -56,9 +67,18 @@ class _LLM:
         return SimpleNamespace(content=self.response_text)
 
 
-def test_request_tools_for_question_returns_parsed_requests() -> None:
+def _fresh_tool_routing():
     _install_langchain_stubs()
-    tool_routing = importlib.import_module("graph.nodes.tool_routing")
+    sys.modules.pop("graph.nodes.tool_routing", None)
+    return importlib.import_module("graph.nodes.tool_routing")
+
+
+# ---------------------------------------------------------------------------
+# Existing tests — updated to unwrap ToolRoutingResult
+# ---------------------------------------------------------------------------
+
+def test_request_tools_for_question_returns_parsed_requests() -> None:
+    tool_routing = _fresh_tool_routing()
 
     llm = _LLM(
         json.dumps(
@@ -75,7 +95,8 @@ def test_request_tools_for_question_returns_parsed_requests() -> None:
 
     result = tool_routing.request_tools_for_question(llm, "what is pca?")
 
-    assert result == [
+    assert result.clarification_question is None
+    assert result.tool_requests == [
         {
             "tool_name": "search",
             "payload": {"server": "search", "query": "what is pca"},
@@ -84,10 +105,76 @@ def test_request_tools_for_question_returns_parsed_requests() -> None:
 
 
 def test_request_tools_for_question_handles_no_tools_without_keyerror() -> None:
-    _install_langchain_stubs()
-    tool_routing = importlib.import_module("graph.nodes.tool_routing")
+    tool_routing = _fresh_tool_routing()
 
     llm = _LLM('{"tool_requests": []}')
     result = tool_routing.request_tools_for_question(llm, "what is pca?")
 
-    assert result == []
+    assert result.tool_requests == []
+    assert result.clarification_question is None
+
+
+# ---------------------------------------------------------------------------
+# New tests
+# ---------------------------------------------------------------------------
+
+def test_request_tools_emits_clarification_question_when_required_field_missing() -> None:
+    tool_routing = _fresh_tool_routing()
+
+    llm = _LLM('{"clarification_question": "Which city would you like weather for?"}')
+    result = tool_routing.request_tools_for_question(llm, "What is the weather like?")
+
+    assert result.tool_requests == []
+    assert result.clarification_question == "Which city would you like weather for?"
+
+
+def test_request_tools_no_clarification_when_all_fields_present() -> None:
+    tool_routing = _fresh_tool_routing()
+
+    llm = _LLM(
+        json.dumps(
+            {
+                "tool_requests": [
+                    {
+                        "tool_name": "query_weather",
+                        "payload": {"server": "weather", "city": "Boston"},
+                    }
+                ]
+            }
+        )
+    )
+    result = tool_routing.request_tools_for_question(llm, "What is the weather in Boston?")
+
+    assert result.clarification_question is None
+    assert len(result.tool_requests) == 1
+    assert result.tool_requests[0]["payload"]["city"] == "Boston"
+
+
+def test_request_tools_returns_empty_on_invalid_json() -> None:
+    tool_routing = _fresh_tool_routing()
+
+    llm = _LLM("This is not JSON at all.")
+    result = tool_routing.request_tools_for_question(llm, "some question")
+
+    assert result.tool_requests == []
+    assert result.clarification_question is None
+
+
+def test_format_tool_catalog_renders_required_and_optional_fields() -> None:
+    tool_routing = _fresh_tool_routing()
+
+    catalog = [
+        {
+            "tool_name": "query_weather",
+            "server": "weather",
+            "description": "Get weather.",
+            "required_fields": {"city": "string"},
+            "optional_fields": {"start_date": "YYYY-MM-DD"},
+        }
+    ]
+    rendered = tool_routing.format_tool_catalog(catalog)
+
+    assert "required" in rendered
+    assert "optional" in rendered
+    assert "city" in rendered
+    assert "start_date" in rendered

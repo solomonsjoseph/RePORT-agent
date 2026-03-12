@@ -18,9 +18,16 @@ class _LLM:
         return SimpleNamespace(content=self.content)
 
 
+class _AIMessage:
+    type = "ai"
+    def __init__(self, content: str = ""):
+        self.content = content
+
+
 def _install_stubs() -> None:
     messages_mod = ModuleType("langchain_core.messages")
     messages_mod.BaseMessage = object
+    messages_mod.AIMessage = _AIMessage
 
     fix_mod = ModuleType("prompts.fix_prompt")
     fix_mod.make_fix_code_prompt = lambda: _Prompt()
@@ -31,7 +38,8 @@ def _install_stubs() -> None:
 
 def test_error_handler_non_code_response_sets_clarification_wait() -> None:
     _install_stubs()
-    sys.modules.pop("graph.nodes.error_handler", None)
+    for _mod in ("utils.message_window", "graph.nodes.error_handler"):
+        sys.modules.pop(_mod, None)
     mod = importlib.import_module("graph.nodes.error_handler")
 
     state = {
