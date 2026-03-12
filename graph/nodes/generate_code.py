@@ -1,6 +1,7 @@
 from langchain_core.messages import AIMessage
 from langchain_core.messages import HumanMessage
 from utils.code_parser import extract_python_code
+from utils.message_window import window_messages
 from prompts.generate_prompt import make_generate_code_prompt
 from .state_helpers import enqueue_tool_requester, get_agent_state, update_agent_state
 from .tool_routing import format_tool_results, latest_user_message, request_tools_for_question
@@ -16,9 +17,41 @@ def generate_code_node(state, llm, context):
     # Safety: must have human input
     if not any(isinstance(m, HumanMessage) for m in messages):
         return state
+
     if question and not tool_results and not tool_requests:
-        tool_requests = request_tools_for_question(llm, question)
-        if tool_requests:
+        recent_msgs = window_messages(state.get("messages", []), max_turns=3)
+        routing_result = request_tools_for_question(llm, question, recent_messages=recent_msgs)
+
+        # Clarification needed — required tool field is missing and can't be inferred.
+        if routing_result.clarification_question:
+            msgs = list(state.get("messages", []))
+            msgs.append(AIMessage(content=routing_result.clarification_question))
+            output = dict(state.get("output") or {})
+            output["generated_code"] = ""
+            output["qa_response"] = routing_result.clarification_question
+            meta = dict(state.get("meta", {}))
+            meta["awaiting_user_clarification"] = True
+            observations = list(state.get("observations", []))
+            observations.append("generate_code: asked clarification for missing required tool field")
+            updated_state = {
+                **state,
+                "messages": msgs,
+                "output": output,
+                "meta": meta,
+                "observations": observations,
+            }
+            return update_agent_state(
+                updated_state,
+                "generate_code",
+                {
+                    "status": "done",
+                    "generated_code": "",
+                    "notes": ["Asked clarification for missing required tool field."],
+                },
+            )
+
+        # Tool(s) identified — enqueue and wait for tool_handler.
+        if routing_result.tool_requests:
             observations = list(state.get("observations", []))
             observations.append("generate_code: requested tools")
             updated_state = enqueue_tool_requester(
@@ -33,15 +66,17 @@ def generate_code_node(state, llm, context):
                 "generate_code",
                 {
                     "status": "pending",
-                    "tool_requests": tool_requests,
+                    "tool_requests": routing_result.tool_requests,
                 },
             )
+
     output = dict(state.get("output") or {})
     if tool_results:
         output["tool_results"] = format_tool_results(tool_results)
+    windowed = window_messages(messages, max_turns=10)
     prompt = make_generate_code_prompt().invoke(
         {
-            "messages": messages,
+            "messages": windowed,
             "context": context,
             "output": output,
             "tool_results": output.get("tool_results", ""),
@@ -53,8 +88,8 @@ def generate_code_node(state, llm, context):
     # If the model returned guidance text (not executable Python), return that
     # guidance to the user and stop the turn rather than attempting execution.
     if not is_executable_python(code):
-        messages = list(state.get("messages", []))
-        messages.append(AIMessage(content=response.content))
+        msgs = list(state.get("messages", []))
+        msgs.append(AIMessage(content=response.content))
         output = dict(state.get("output") or {})
         output["generated_code"] = ""
         output["qa_response"] = response.content
@@ -64,7 +99,7 @@ def generate_code_node(state, llm, context):
         meta["awaiting_user_clarification"] = True
         updated_state = {
             **state,
-            "messages": messages,
+            "messages": msgs,
             "output": output,
             "meta": meta,
         }

@@ -1,4 +1,5 @@
 from utils.code_parser import extract_python_code
+from utils.message_window import window_messages
 from prompts.fix_prompt import make_fix_code_prompt
 from .state_helpers import update_agent_state
 from .code_guardrails import code_fingerprint, is_executable_python
@@ -17,9 +18,10 @@ def error_handler_node(state, llm, context):
         state = {**state, "agents": agents}
     meta["error_iterations"] = error_iterations + 1
 
+    windowed = window_messages(state.get("messages", []), max_turns=10)
     prompt = make_fix_code_prompt().invoke(
         {
-            "messages": state["messages"],
+            "messages": windowed,
             "context": context,
             "code": code,
             "error_type": error["type"],
