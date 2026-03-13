@@ -19,8 +19,11 @@ def qa_node(state: AgentState, llm, context: str = "") -> AgentState:
     question = latest_user_message(state)
     tool_requests = list(qa_state.get("tool_requests", []))
     tool_results = list(qa_state.get("tool_results", []))
+    awaiting_tool_clarification = bool(qa_state.get("awaiting_tool_clarification"))
 
-    if question and not tool_results and not tool_requests and should_route_tools(question):
+    should_attempt_tool_routing = should_route_tools(question) or awaiting_tool_clarification
+
+    if question and not tool_results and not tool_requests and should_attempt_tool_routing:
         recent_msgs = window_messages(state.get("messages", []), max_turns=3)
         routing_result = request_tools_for_question(llm, question, recent_messages=recent_msgs)
 
@@ -41,7 +44,14 @@ def qa_node(state: AgentState, llm, context: str = "") -> AgentState:
                 "output": output,
                 "observations": observations,
             }
-            return update_agent_state(updated_state, "qa", {"status": "done"})
+            return update_agent_state(
+                updated_state,
+                "qa",
+                {
+                    "status": "done",
+                    "awaiting_tool_clarification": True,
+                },
+            )
 
         # Tool(s) identified — enqueue and wait for tool_handler.
         if routing_result.tool_requests:
@@ -60,6 +70,7 @@ def qa_node(state: AgentState, llm, context: str = "") -> AgentState:
                 {
                     "status": "pending",
                     "tool_requests": routing_result.tool_requests,
+                    "awaiting_tool_clarification": False,
                 },
             )
 
@@ -115,5 +126,6 @@ def qa_node(state: AgentState, llm, context: str = "") -> AgentState:
         {
             "status": "done",
             "response": response.content,
+            "awaiting_tool_clarification": False,
         },
     )
