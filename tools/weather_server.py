@@ -42,7 +42,7 @@ async def fetch_weather(
         try:
             geo_response = await client.get(
                 OPEN_METEO_GEOCODE,
-                params={"name": city, "count": 1, "language": "en", "format": "json"},
+                params={"name": city, "count": 10, "language": "en", "format": "json"},
                 headers=headers,
                 timeout=30.0,
             )
@@ -51,12 +51,20 @@ async def fetch_weather(
             results = geo_data.get("results") or []
             if not results:
                 return {"error": "No matching city found."}
-            location = results[0]
+
+            normalized_city = city.strip().lower()
+            exact_name_matches = [
+                r for r in results if str(r.get("name", "")).strip().lower() == normalized_city
+            ]
+            candidates = exact_name_matches or results
+            location = max(candidates, key=lambda r: int(r.get("population") or 0))
             start_date, end_date = _normalize_date_range(start_date, end_date)
             forecast_params: dict[str, Any] = {
                 "latitude": location["latitude"],
                 "longitude": location["longitude"],
-                "current": "temperature_2m,relative_humidity_2m,wind_speed_10m",
+                "current": "temperature_2m,apparent_temperature,relative_humidity_2m,wind_speed_10m",
+                "temperature_unit": "celsius",
+                "wind_speed_unit": "ms",
                 "timezone": "auto",
             }
             if start_date and end_date:
@@ -65,6 +73,13 @@ async def fetch_weather(
                         "daily": "temperature_2m_max,temperature_2m_min,precipitation_sum",
                         "start_date": start_date,
                         "end_date": end_date,
+                    }
+                )
+            else:
+                forecast_params.update(
+                    {
+                        "daily": "temperature_2m_max,temperature_2m_min,precipitation_sum",
+                        "forecast_days": 1,
                     }
                 )
             forecast_response = await client.get(
@@ -78,7 +93,9 @@ async def fetch_weather(
             return {
                 "location": location,
                 "current": forecast_data.get("current", {}),
+                "current_units": forecast_data.get("current_units", {}),
                 "daily": forecast_data.get("daily", {}),
+                "daily_units": forecast_data.get("daily_units", {}),
             }
         except httpx.HTTPStatusError as exc:
             return {"error": f"HTTP error: {exc.response.status_code}"}
@@ -108,8 +125,16 @@ def format_weather(data: dict[str, Any] | str) -> str:
     temp = current.get("temperature_2m", "N/A")
     humidity = current.get("relative_humidity_2m", "N/A")
     wind_speed = current.get("wind_speed_10m", "N/A")
+    apparent_temp = current.get("apparent_temperature")
+    current_units = data.get("current_units") or {}
+    temp_unit = current_units.get("temperature_2m", "°C")
+    humidity_unit = current_units.get("relative_humidity_2m", "%")
+    wind_unit = current_units.get("wind_speed_10m", "m/s")
     observation_time = current.get("time", "N/A")
     daily = data.get("daily") or {}
+    daily_units = data.get("daily_units") or {}
+    daily_temp_unit = daily_units.get("temperature_2m_max", temp_unit)
+    daily_precip_unit = daily_units.get("precipitation_sum", "mm")
     daily_dates = daily.get("time", [])
     daily_max = daily.get("temperature_2m_max", [])
     daily_min = daily.get("temperature_2m_min", [])
@@ -118,9 +143,10 @@ def format_weather(data: dict[str, Any] | str) -> str:
     lines = [
         f"{city}, {country}\n"
         f"Observed: {observation_time}\n"
-        f"Temperature: {temp}°C\n"
-        f"Humidity: {humidity}%\n"
-        f"Wind Speed: {wind_speed} m/s\n"
+        f"Temperature: {temp}{temp_unit}\n"
+        + (f"Feels Like: {apparent_temp}{temp_unit}\n" if apparent_temp not in (None, "N/A") else "")
+        + f"Humidity: {humidity}{humidity_unit}\n"
+        + f"Wind Speed: {wind_speed} {wind_unit}\n"
     ]
     if daily_dates:
         lines.append("\nForecast:\n")
@@ -129,8 +155,8 @@ def format_weather(data: dict[str, Any] | str) -> str:
             min_temp = daily_min[idx] if idx < len(daily_min) else "N/A"
             precip = daily_precip[idx] if idx < len(daily_precip) else "N/A"
             lines.append(
-                f"- {date}: max {max_temp}°C, min {min_temp}°C, "
-                f"precipitation {precip} mm\n"
+                f"- {date}: max {max_temp}{daily_temp_unit}, min {min_temp}{daily_temp_unit}, "
+                f"precipitation {precip} {daily_precip_unit}\n"
             )
     return "".join(lines)
 

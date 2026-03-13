@@ -130,6 +130,12 @@ def infer_intent_from_latest_user(state: AgentState) -> str | None:
     if not user_message:
         return None
 
+    # If QA previously asked for a required tool field, treat the next user
+    # message as a QA follow-up even when it's a terse value with no keyword.
+    qa_state = get_agent_state(state, "qa")
+    if qa_state.get("awaiting_tool_clarification"):
+        return "qa"
+
     has_code_request = any(token in user_message for token in CODE_REQUEST_CUES)
     has_info_code_request = any(token in user_message for token in INFO_CODE_CUES)
     has_data_context = any(token in user_message for token in DATA_OPERATION_CUES) or "my data" in user_message
@@ -335,17 +341,21 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
     inferred_intent = infer_intent_from_latest_user(state)
     if not meta.get("intent") and inferred_intent:
         meta["intent"] = inferred_intent
+    working_state = {
+        **state,
+        "meta": meta,
+    }
     if not next_action:
-        if state.get("last_action") == "tool_handler":
-            requester = _next_tool_requester(state)
+        if working_state.get("last_action") == "tool_handler":
+            requester = _next_tool_requester(working_state)
             if requester and requester in set(available_actions):
                 next_action = requester
-                queue = _tool_request_queue(state)
+                queue = _tool_request_queue(working_state)
                 meta["tool_request_queue"] = [name for name in queue if name != requester]
         if not next_action:
-            llm_choice, thought = llm_select_next_action(state, llm, available_actions)
-            fallback_action = choose_next_action(state, available_actions)
-            if llm_choice != "end" and not _should_end_now(state):
+            llm_choice, thought = llm_select_next_action(working_state, llm, available_actions)
+            fallback_action = choose_next_action(working_state, available_actions)
+            if llm_choice != "end" and not _should_end_now(working_state):
                 next_action = llm_choice
             else:
                 next_action = fallback_action
