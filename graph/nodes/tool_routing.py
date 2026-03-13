@@ -48,11 +48,11 @@ _TOOL_ROUTING_SYSTEM = (
     "- If a required_field is missing and CANNOT be reasonably inferred, return a\n"
     "  clarification_question asking the user for that ONE missing field only.\n"
     "- NEVER ask about optional_fields — simply omit them from the payload.\n"
-    "- If no tool is needed, return {\"tool_requests\": []}.\n"
+    "- If no tool is needed, return {{\"tool_requests\": []}}.\n"
     "\n"
     "Output format — choose exactly one:\n"
-    "  {\"tool_requests\": [{\"tool_name\": \"...\", \"payload\": {\"server\": \"...\", ...}}]}\n"
-    "  {\"clarification_question\": \"Which city would you like weather for?\"}"
+    "  {{\"tool_requests\": [{{\"tool_name\": \"...\", \"payload\": {{\"server\": \"...\", ...}}}}]}}\n"
+    "  {{\"clarification_question\": \"Which city would you like weather for?\"}}"
 )
 
 
