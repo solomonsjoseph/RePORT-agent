@@ -112,7 +112,6 @@ def test_generate_code_handles_non_code_response_without_execution_path() -> Non
         },
     }
 
-    # LLM returns non-code text on every call (tool routing + code gen).
     llm = _LLM(
         "I cannot write the code without duration/event columns. Please provide schema."
     )
@@ -138,8 +137,6 @@ def test_generate_code_resets_approval_and_sets_current_code_hash() -> None:
         },
     }
 
-    # First call (tool routing): non-JSON → empty ToolRoutingResult → falls through.
-    # Second call (code gen): valid Python.
     llm = _LLM("```python\nprint(123)\n```")
     updated = generate_code.generate_code_node(state, llm, context="")
 
@@ -149,9 +146,7 @@ def test_generate_code_resets_approval_and_sets_current_code_hash() -> None:
     assert updated["meta"].get("current_code_hash")
 
 
-def test_generate_code_asks_clarification_when_tool_field_missing() -> None:
-    """When tool routing signals a missing required field, the node should emit
-    a clarification question and set awaiting_user_clarification."""
+def test_generate_code_does_not_run_tool_routing_clarification_path() -> None:
     generate_code = _fresh_generate_code()
 
     state = {
@@ -166,27 +161,16 @@ def test_generate_code_asks_clarification_when_tool_field_missing() -> None:
     }
 
     class _LLMClarification:
-        """Returns clarification JSON on the first call (tool routing), then
-        raises to verify no second LLM call is made."""
-        def __init__(self):
-            self._calls = 0
-
         def invoke(self, _prompt):
-            self._calls += 1
-            if self._calls == 1:
-                return SimpleNamespace(
-                    content=json.dumps(
-                        {"clarification_question": "Which city would you like weather for?"}
-                    )
+            return SimpleNamespace(
+                content=json.dumps(
+                    {"clarification_question": "Which city would you like weather for?"}
                 )
-            raise AssertionError("LLM should not be called after clarification is returned")
+            )
 
     updated = generate_code.generate_code_node(state, _LLMClarification(), context="")
 
-    assert updated["meta"]["awaiting_user_clarification"] is True
-    assert updated["output"]["generated_code"] == ""
-    assert updated["output"]["qa_response"] == "Which city would you like weather for?"
-    last_msg = updated["messages"][-1]
-    assert getattr(last_msg, "type", None) == "ai"
-    assert last_msg.content == "Which city would you like weather for?"
-    assert any("clarification" in obs for obs in updated.get("observations", []))
+    # No tool-routing clarification branch should execute in generate_code.
+    assert "awaiting_user_clarification" not in updated["meta"]
+    assert "qa_response" not in updated["output"]
+    assert updated["output"]["generated_code"]
