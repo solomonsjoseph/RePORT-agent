@@ -239,6 +239,12 @@ def infer_intent_from_latest_user(state: AgentState) -> str | None:
     if not user_message:
         return None
 
+    # If QA previously asked for a required tool field, treat the next user
+    # message as a QA follow-up even when it's a terse value with no keyword.
+    qa_state = get_agent_state(state, "qa")
+    if qa_state.get("awaiting_tool_clarification"):
+        return "qa"
+
     has_code_request = any(token in user_message for token in CODE_REQUEST_CUES)
     has_info_code_request = any(token in user_message for token in INFO_CODE_CUES)
     has_prototype_request = any(token in user_message for token in PROTOTYPE_CUES)
