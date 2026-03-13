@@ -114,6 +114,27 @@ async def get_mcp_client(server_name: str):
         _POOL[server_name] = {"client": client, "stack": stack}
         return client
 
+
+async def reset_mcp_client(server_name: str) -> None:
+    async with _LOCK:
+        existing = _POOL.pop(server_name, None)
+
+    if not existing:
+        return
+
+    stack = existing.get("stack")
+    if stack is not None:
+        await stack.aclose()
+
 async def call_mcp_tool(server_name: str, tool_name: str, payload: dict):
     client = await get_mcp_client(server_name)
-    return await client.call_tool(tool_name, payload)
+    try:
+        return await client.call_tool(tool_name, payload)
+    except Exception as exc:
+        if type(exc).__name__ != "ClosedResourceError":
+            raise
+        # The pooled session can become invalid when a previous event loop exits.
+        # Rebuild once and retry transparently.
+        await reset_mcp_client(server_name)
+        refreshed_client = await get_mcp_client(server_name)
+        return await refreshed_client.call_tool(tool_name, payload)
