@@ -194,9 +194,7 @@ if "dataset_signature" not in st.session_state:
     st.session_state.dataset_signature = dataset_signature
 elif st.session_state.dataset_signature != dataset_signature:
     st.session_state.dataset_signature = dataset_signature
-    st.session_state.chat_history = [AIMessage(content="Dataset/schema updated. Ask me anything about the new dataset.")]
-    st.session_state.thread_id = uuid.uuid4().hex
-    st.info("Detected new dataset/schema. Conversation memory was reset to avoid stale context.")
+    st.info("Detected new dataset/schema. Previous conversation is preserved. Use 'Reset Conversation' to clear history.")
     st.rerun()
         
 # Reset conversation (keeps uploaded files)
