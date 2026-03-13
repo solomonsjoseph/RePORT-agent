@@ -14,3 +14,23 @@ class AgentState(TypedDict):
 
     # extensibility
     meta: dict  # free-form (retry counts, tool info, etc.)
+
+
+class MetaKeys:
+    """Documented string keys used in AgentState['meta'].
+
+    Risk-5 fix: replaces magic string literals scattered across the codebase
+    with named constants so typos surface as NameErrors and the full contract
+    is visible in one place.
+
+    Usage:
+        meta[MetaKeys.INTENT] = "code"
+        meta.pop(MetaKeys.AWAITING_USER_CLARIFICATION, None)
+    """
+    INTENT = "intent"
+    ERROR_ITERATIONS = "error_iterations"
+    CURRENT_CODE_HASH = "current_code_hash"
+    AWAITING_USER_CLARIFICATION = "awaiting_user_clarification"
+    TOOL_REQUEST_QUEUE = "tool_request_queue"
+    WORKFLOW_TRACE = "workflow_trace"
+    LAST_USER_MESSAGE_HASH = "last_user_message_hash"

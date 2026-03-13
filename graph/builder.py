@@ -2,8 +2,9 @@ import sqlite3
 from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.sqlite import SqliteSaver
 from utils.context import build_context
-from .state import AgentState
+from .state import AgentState, MetaKeys
 from .routing import route_by_next_action
+from .nodes.node_registry import validate_registry
 
 from .nodes.orchestrator import orchestrator_node
 from .nodes.generate_code import generate_code_node
@@ -24,9 +25,9 @@ def _run_and_mark(node_name, fn):
         orchestrator_state = dict(updated_state.get("orchestrator", {}))
         orchestrator_state.pop("next_action", None)
         meta = dict(updated_state.get("meta", {}))
-        workflow_trace = list(meta.get("workflow_trace", []))
+        workflow_trace = list(meta.get(MetaKeys.WORKFLOW_TRACE, []))
         workflow_trace.append(node_name)
-        meta["workflow_trace"] = workflow_trace[-100:]
+        meta[MetaKeys.WORKFLOW_TRACE] = workflow_trace[-100:]
 
         return {
             **updated_state,
@@ -43,6 +44,9 @@ def build_graph(llm, df, schema, db_path):
     workflow = StateGraph(AgentState)
     context = build_context(df, schema)
     action_nodes = {
+        # Risk-2 fix: validate_registry() is called with the exact set of node names
+        # registered here.  Any mismatch (node in registry but not wired, or wired
+        # but missing a NodeDefinition) raises an AssertionError at startup.
         "generate_code": _run_and_mark("generate_code", lambda s: generate_code_node(s, llm, context)),
         "execute_code": _run_and_mark("execute_code", lambda s: execute_code_node(s, df)),
         "error_handler": _run_and_mark("error_handler", lambda s: error_handler_node(s, llm, context)),
@@ -53,6 +57,7 @@ def build_graph(llm, df, schema, db_path):
         "qa": _run_and_mark("qa", lambda s: qa_node(s, llm)),
     }
     available_actions = [*action_nodes.keys(), "end"]
+    validate_registry(known_action_names=list(action_nodes.keys()))
 
     workflow.add_node(
         "orchestrator",
