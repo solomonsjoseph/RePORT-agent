@@ -2,6 +2,8 @@ import streamlit as st
 import pandas as pd
 import json
 import os
+import hashlib
+import io
 import requests
 # from pathlib import Path
 import uuid
@@ -116,13 +118,16 @@ uploaded_schema = st.file_uploader("Upload your schema (.json)", type=["json"])
 # ============================================================
 # 2. Validate Uploaded Files
 # ============================================================
-
+dataset_signature = "no-data"
 if uploaded_csv and uploaded_schema:
     try:
-        df = pd.read_csv(uploaded_csv)
+        
+        csv_bytes = uploaded_csv.getvalue()
+        schema_bytes = uploaded_schema.getvalue()
 
-        schema_json = uploaded_schema.read().decode("utf-8")
-        schema = json.loads(schema_json)
+        df = pd.read_csv(io.BytesIO(csv_bytes))
+        schema = json.loads(schema_bytes.decode("utf-8"))
+        dataset_signature = hashlib.sha256(csv_bytes + schema_bytes).hexdigest()
 
         st.success("Dataset and schema loaded successfully!")
 
@@ -154,13 +159,13 @@ def load_llm(model_name, temperature, top_p, base_url, api_key, provider):
                      provider = provider)
 
 @st.cache_resource
-def load_app(llm, df, schema):
+def load_app(llm, df, schema, dataset_signature):
     return build_graph(llm, df, schema, 
                        db_path='/projects/f_wj183_1/reflib/report-agent_db/agent_memory.db')
 
 
 llm = load_llm(model_name, temperature, top_p, base_url, api_key, provider)
-app = load_app(llm, df, schema)
+app = load_app(llm, df, schema, dataset_signature)
 
 with st.sidebar.expander("🐛 Debug: LLM instance", expanded=False):
     info = {"llm_type": type(llm).__name__}
@@ -183,8 +188,15 @@ if "thread_id" not in st.session_state:
     # Use hashes so each dataset has its own memory namespace
     st.session_state.thread_id = uuid.uuid4().hex
 if "chat_history" not in st.session_state:
-    st.session_state.chat_history = [AIMessage(content="Hello! Ask me anything about your dataset.")]
-    
+    st.session_state.chat_history = [AIMessage(content="Hello! Ask me anything ...")]
+
+if "dataset_signature" not in st.session_state:
+    st.session_state.dataset_signature = dataset_signature
+elif st.session_state.dataset_signature != dataset_signature:
+    st.session_state.dataset_signature = dataset_signature
+    st.info("Detected new dataset/schema. Previous conversation is preserved. Use 'Reset Conversation' to clear history.")
+    st.rerun()
+        
 # Reset conversation (keeps uploaded files)
 if st.sidebar.button("🔄 Reset Conversation"):
     st.session_state.chat_history = []
