@@ -147,3 +147,41 @@ def test_qa_node_routes_tools_after_clarification_followup() -> None:
     assert second["agents"]["qa"]["awaiting_tool_clarification"] is False
     assert second["agents"]["qa"]["tool_requests"]
     assert second["agents"]["qa"]["tool_requests"][0]["tool_name"] == "query_weather"
+
+
+def test_qa_node_routes_tools_after_generic_clarification_followup() -> None:
+    qa = _fresh_qa_module()
+
+    class _LLM:
+        def __init__(self):
+            self.calls = 0
+
+        def invoke(self, _messages):
+            self.calls += 1
+            if self.calls == 1:
+                return SimpleNamespace(content='{"clarification_question": "What expression should I calculate?"}')
+            return SimpleNamespace(content='{"tool_requests":[{"tool_name":"calculate","payload":{"server":"calculator","expression":"(2 + 3) * 4"}}]}')
+
+    llm = _LLM()
+    state = {
+        "messages": [_HumanMessage("Please calculate for me")],
+        "output": {},
+        "meta": {"intent": "qa"},
+        "observations": [],
+        "agents": {"qa": {"tool_requests": [], "tool_results": []}},
+    }
+
+    first = qa.qa_node(state, llm, context="")
+    assert first["agents"]["qa"]["awaiting_tool_clarification"] is True
+    assert first["output"]["qa_response"].startswith("What expression")
+
+    followup = {
+        **first,
+        "messages": list(first["messages"]) + [_HumanMessage("(2 + 3) * 4")],
+    }
+
+    second = qa.qa_node(followup, llm, context="")
+    assert second["agents"]["qa"]["status"] == "pending"
+    assert second["agents"]["qa"]["awaiting_tool_clarification"] is False
+    assert second["agents"]["qa"]["tool_requests"]
+    assert second["agents"]["qa"]["tool_requests"][0]["tool_name"] == "calculate"
