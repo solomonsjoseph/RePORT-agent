@@ -7,6 +7,11 @@ from types import ModuleType, SimpleNamespace
 
 
 def _install_langchain_and_langgraph_stubs() -> None:
+    class _MessagesPlaceholder:
+        def __init__(self, variable_name: str, optional: bool = False) -> None:
+            self.variable_name = variable_name
+            self.optional = optional
+
     class _FormattedPrompt:
         def __init__(self, rendered: list[dict[str, str]]) -> None:
             self._rendered = rendered
@@ -31,6 +36,7 @@ def _install_langchain_and_langgraph_stubs() -> None:
 
     prompts_mod = ModuleType("langchain_core.prompts")
     prompts_mod.ChatPromptTemplate = _ChatPromptTemplate
+    prompts_mod.MessagesPlaceholder = _MessagesPlaceholder
 
     messages_mod = ModuleType("langchain_core.messages")
     messages_mod.BaseMessage = object
@@ -100,6 +106,7 @@ def test_orchestrator_uses_llm_action_and_fallback_policy() -> None:
     orchestrator = importlib.import_module("graph.nodes.orchestrator")
 
     state = {
+        "messages": [SimpleNamespace(type="human", content="Can you explain this?")],
         "output": {},
         "observations": [],
         "last_action": "qa",
@@ -121,7 +128,7 @@ def test_orchestrator_uses_llm_action_and_fallback_policy() -> None:
 
     llm_invalid = _LLM("not-json")
     fallback = orchestrator.orchestrator_node(state, llm_invalid, available_actions)
-    assert fallback["next_action"] == "generate_code"
+    assert fallback["next_action"] == "qa"
 
 def test_orchestrator_routes_sample_code_request_to_qa_without_execution_flow() -> None:
     _install_langchain_and_langgraph_stubs()
@@ -144,3 +151,68 @@ def test_orchestrator_routes_sample_code_request_to_qa_without_execution_flow() 
 
     assert fallback["next_action"] == "qa"
     assert fallback["meta"]["intent"] == "qa"
+
+
+def test_orchestrator_keeps_qa_intent_for_tool_clarification_followup() -> None:
+    _install_langchain_and_langgraph_stubs()
+    orchestrator = importlib.import_module("graph.nodes.orchestrator")
+
+    state = {
+        "messages": [
+            SimpleNamespace(type="human", content="what's weather in china"),
+            SimpleNamespace(type="ai", content="Which city in China would you like the weather for?"),
+            SimpleNamespace(type="human", content="Shanghai"),
+        ],
+        "output": {},
+        "observations": [],
+        "last_action": "qa",
+        "orchestrator": {},
+        "agents": {
+            "qa": {"awaiting_tool_clarification": True},
+            "executor": {"run_status": "idle"},
+            "human_review": {"before_run_decision": None, "final_decision": None},
+        },
+        "meta": {
+            "error_iterations": 0,
+            "workflow_trace": ["orchestrator", "qa", "orchestrator"],
+            "awaiting_user_clarification": True,
+        },
+    }
+
+    # Even if the planner suggests ending, fallback policy should keep QA flow.
+    updated = orchestrator.orchestrator_node(state, _LLM(json.dumps({"action": "end"})), ["qa", "generate_code", "end"])
+
+    assert updated["next_action"] == "qa"
+    assert updated["meta"]["intent"] == "qa"
+    assert "awaiting_user_clarification" not in updated["meta"]
+
+
+def test_orchestrator_does_not_force_qa_for_non_qa_clarification_followup() -> None:
+    _install_langchain_and_langgraph_stubs()
+    orchestrator = importlib.import_module("graph.nodes.orchestrator")
+
+    state = {
+        "messages": [
+            SimpleNamespace(type="ai", content="Please clarify constraints for code generation."),
+            SimpleNamespace(type="human", content="Use only pandas and sklearn."),
+        ],
+        "output": {},
+        "observations": [],
+        "last_action": "generate_code",
+        "orchestrator": {},
+        "agents": {
+            "qa": {"awaiting_tool_clarification": False},
+            "executor": {"run_status": "idle"},
+            "human_review": {"before_run_decision": None, "final_decision": None},
+        },
+        "meta": {
+            "error_iterations": 0,
+            "workflow_trace": ["orchestrator", "generate_code", "orchestrator"],
+            "awaiting_user_clarification": True,
+        },
+    }
+
+    updated = orchestrator.orchestrator_node(state, _LLM("not-json"), ["qa", "generate_code", "end"])
+
+    assert updated["next_action"] == "generate_code"
+    assert "awaiting_user_clarification" not in updated["meta"]
