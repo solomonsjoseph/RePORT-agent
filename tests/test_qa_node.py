@@ -109,3 +109,41 @@ def test_qa_node_includes_context_in_prompt() -> None:
     rendered = "\n".join(m.get("content", "") for m in llm.last_messages)
     assert "Dataset context (if available):" in rendered
     assert "- sex" in rendered
+
+
+def test_qa_node_routes_tools_after_clarification_followup() -> None:
+    qa = _fresh_qa_module()
+
+    class _LLM:
+        def __init__(self):
+            self.calls = 0
+
+        def invoke(self, _messages):
+            self.calls += 1
+            if self.calls == 1:
+                return SimpleNamespace(content='{"clarification_question": "Which city in China would you like the weather for?"}')
+            return SimpleNamespace(content='{"tool_requests":[{"tool_name":"query_weather","payload":{"server":"weather","city":"Shanghai"}}]}')
+
+    llm = _LLM()
+    state = {
+        "messages": [_HumanMessage("What's weather in china today?")],
+        "output": {},
+        "meta": {"intent": "qa"},
+        "observations": [],
+        "agents": {"qa": {"tool_requests": [], "tool_results": []}},
+    }
+
+    first = qa.qa_node(state, llm, context="")
+    assert first["agents"]["qa"]["awaiting_tool_clarification"] is True
+    assert first["output"]["qa_response"].startswith("Which city")
+
+    followup = {
+        **first,
+        "messages": list(first["messages"]) + [_HumanMessage("Shanghai")],
+    }
+
+    second = qa.qa_node(followup, llm, context="")
+    assert second["agents"]["qa"]["status"] == "pending"
+    assert second["agents"]["qa"]["awaiting_tool_clarification"] is False
+    assert second["agents"]["qa"]["tool_requests"]
+    assert second["agents"]["qa"]["tool_requests"][0]["tool_name"] == "query_weather"
