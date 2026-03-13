@@ -1,43 +1,51 @@
+"""Orchestrator node and all routing helpers.
+
+Responsibilities
+----------------
+* Determine the next action on every graph step (hybrid LLM + deterministic policy).
+* Detect and break infinite loops (recursion guards).
+* Reset ephemeral state when a new user turn begins (context-memory fix).
+* Infer user intent from the latest message (prototype vs. data-analysis).
+
+Adding a new node
+-----------------
+1. Add a NodeDefinition to ``graph/nodes/node_registry.py`` — capability text,
+   routing policy, and reset keys live there.
+2. Register the callable in ``builder.py``'s ``action_nodes`` dict.
+3. No changes needed here unless you need custom summary fields for the LLM.
+"""
 from __future__ import annotations
 
+import hashlib
 import json
 
-from dataclasses import dataclass
-from typing import Callable, Iterable
+from typing import Iterable
 
-from ..state import AgentState
+from ..state import AgentState, MetaKeys
 from .state_helpers import get_agent_state
 from .tool_routing import is_tool_requested
+from .node_registry import (
+    NODE_CAPABILITIES,
+    NODE_REGISTRY,
+    NODE_REGISTRY_MAP,
+    validate_registry,
+)
 from prompts.planner_prompt import make_planner_prompt
 
 
-MAX_ERROR_ITERATIONS = 5
+# ---------------------------------------------------------------------------
+# Loop-guard constants
+# ---------------------------------------------------------------------------
 
-NODE_CAPABILITIES: dict[str, str] = {
-    "generate_code": "Generate Python analysis code from the user's analytical request and available context. Usually when dataset and schema are not null.",
-    "execute_code": "Execute previously generated Python code against the loaded dataframe and collect outputs/errors.",
-    "error_handler": "Revise broken code after execution failures and increment retry state.",
-    "human_review_after_error": "Ask human for guidance after repeated execution failures.",
-    "human_review_before_run": "Ask human approval before running generated code.",
-    "human_review_final": "Ask human approval of final successful output.",
-    "tool_handler": "Execute requested external tools and store tool results back to requesting agents.",
-    "qa": "Answer user questions directly in natural language (optionally using tool results), without code unless requested.",
-    "end": "Stop graph execution for the current turn.",
-}
+MAX_ACTION_REPEATS = 3    # max same-action appearances in LOOP_GUARD_LOOKBACK window
+LOOP_GUARD_LOOKBACK = 8   # trace entries examined by loop-detection helpers
 
 
-@dataclass(frozen=True)
-class AgentPolicy:
-    name: str
-    is_ready: Callable[[AgentState], bool]
+# ---------------------------------------------------------------------------
+# Intent-detection cue lists
+# Keep cues short and domain-agnostic to reduce overfitting.
+# ---------------------------------------------------------------------------
 
-
-def _error_iterations(state: AgentState) -> int:
-    return int(state.get("meta", {}).get("error_iterations", 0))
-
-# Hybrid routing guardrails are common in agent systems: they provide deterministic
-# fallbacks when LLM routing outputs are invalid/ambiguous.
-# Keep these lexical cues short and domain-agnostic to reduce overfitting.
 QA_LEADING_PHRASES = (
     "what is",
     "what's",
@@ -68,6 +76,34 @@ DATA_OPERATION_CUES = (
     "columns",
 )
 
+# Risk-6 fix (part 1): prototype/tutorial phrasing that does NOT imply running code.
+PROTOTYPE_CUES = (
+    "example of",
+    "how to",
+    "show me how",
+    "how do i",
+    "how would i",
+    "for example",
+    "prototype",
+    "demo",
+)
+
+# Risk-6 fix (part 2): explicit references to the user's own uploaded data.
+OWN_DATA_CUES = (
+    "my file",
+    "my attached",
+    "attached file",
+    "this file",
+    "this data",
+    "this dataset",
+    "my csv",
+    "my excel",
+    "uploaded",
+    "for my data",
+    "on my data",
+    "my data",
+)
+
 INFO_CODE_CUES = (
     "sample code",
     "example code",
@@ -89,6 +125,20 @@ EXECUTION_CUES = (
     "fit the model",
 )
 
+# Generic analysis-action verbs that, combined with OWN_DATA_CUES, signal code-execution.
+ANALYSIS_CUES = (
+    "perform",
+    "conduct",
+    "carry out",
+    "do a",
+    "run a",
+    "apply",
+)
+
+
+# ---------------------------------------------------------------------------
+# Message helpers
+# ---------------------------------------------------------------------------
 
 def _latest_user_message(state: AgentState) -> str:
     messages = list(state.get("messages", []))
@@ -103,7 +153,6 @@ def _has_unanswered_human_message(state: AgentState) -> bool:
     messages = list(state.get("messages", []))
     if not messages:
         return False
-
     last_human_index = -1
     last_ai_index = -1
     for idx, message in enumerate(messages):
@@ -115,17 +164,77 @@ def _has_unanswered_human_message(state: AgentState) -> bool:
     return last_human_index > last_ai_index
 
 
+# ---------------------------------------------------------------------------
+# End-condition helpers
+# ---------------------------------------------------------------------------
+
 def _should_end_now(state: AgentState) -> bool:
-    # This flag is different from graph interrupts. It marks that model output
-    # asked for clarification and the orchestrator should pause until new user input.
-    if state.get("meta", {}).get("awaiting_user_clarification"):
+    if (state.get("meta") or {}).get(MetaKeys.AWAITING_USER_CLARIFICATION):
         return True
     if state.get("last_action") == "qa" and not _has_unanswered_human_message(state):
         return True
     return False
 
 
+# ---------------------------------------------------------------------------
+# New-turn detection and ephemeral-state reset  (Risk-3 + context-memory fix)
+# ---------------------------------------------------------------------------
+
+def _user_message_hash(state: AgentState) -> str | None:
+    """Return a short SHA-256 hex digest of the latest user message, or None."""
+    msg = _latest_user_message(state)
+    if not msg:
+        return None
+    return hashlib.sha256(msg.encode()).hexdigest()[:16]
+
+
+def _reset_for_new_turn(output: dict, agents: dict, meta: dict) -> tuple[dict, dict, dict]:
+    """Clear ephemeral routing/execution state when a new user message is detected.
+
+    Preserves: messages history, workflow_trace, observations, last_user_message_hash.
+    Resets:    generated_code, error state, human-review decisions, intent, code hashes.
+
+    The set of agent keys to reset is driven by NodeDefinition.reset_agent_keys so
+    new nodes self-register their cleanup needs (Risk-3 fix).
+    """
+    output = dict(output)
+    output.pop("generated_code", None)
+    output.pop("error", None)
+    output.pop("tool_results", None)
+
+    agents = dict(agents)
+    # Collect all agent keys that need resetting from the registry.
+    keys_to_reset: set[str] = set()
+    for nd in NODE_REGISTRY:
+        keys_to_reset.update(nd.reset_agent_keys)
+
+    for key in keys_to_reset:
+        if key in agents:
+            agents[key] = {}  # wipe; get_agent_state will re-populate defaults on next access
+
+    meta = dict(meta)
+    meta.pop(MetaKeys.INTENT, None)
+    meta.pop(MetaKeys.CURRENT_CODE_HASH, None)
+    meta.pop(MetaKeys.AWAITING_USER_CLARIFICATION, None)
+    meta.pop(MetaKeys.TOOL_REQUEST_QUEUE, None)
+    meta[MetaKeys.ERROR_ITERATIONS] = 0
+
+    return output, agents, meta
+
+
+# ---------------------------------------------------------------------------
+# Intent inference  (Risk-6 fix)
+# ---------------------------------------------------------------------------
+
 def infer_intent_from_latest_user(state: AgentState) -> str | None:
+    """Classify the latest user message as 'code', 'qa', or None (unknown).
+
+    Rule priority (highest first):
+      1. Explicit no-execute request + code mention → qa
+      2. Prototype/tutorial phrasing with no own-data reference → qa
+      3. Any reference to the user's own data → code
+      4. Score-based fallback using CODE_REQUEST_CUES vs. QA_LEADING_PHRASES
+    """
     user_message = _latest_user_message(state).lower()
     if not user_message:
         return None
@@ -138,14 +247,33 @@ def infer_intent_from_latest_user(state: AgentState) -> str | None:
 
     has_code_request = any(token in user_message for token in CODE_REQUEST_CUES)
     has_info_code_request = any(token in user_message for token in INFO_CODE_CUES)
-    has_data_context = any(token in user_message for token in DATA_OPERATION_CUES) or "my data" in user_message
-    has_execution_request = any(token in user_message for token in EXECUTION_CUES) or has_data_context
+    has_prototype_request = any(token in user_message for token in PROTOTYPE_CUES)
+    has_data_context = any(token in user_message for token in DATA_OPERATION_CUES)
+    has_own_data = any(token in user_message for token in OWN_DATA_CUES)
+    has_analysis_action = any(token in user_message for token in ANALYSIS_CUES)
+    has_execution_request = (
+        any(token in user_message for token in EXECUTION_CUES)
+        or has_data_context
+        or has_own_data
+    )
 
-    # Distinguish code-as-information from true analysis execution tasks.
-    # Example: "give me sample code for survival analysis" should route to QA
-    # and respond directly, without entering run/approval flow.
+    # Rule 1: "give me sample code / template" — never execute
     if has_code_request and has_info_code_request and not has_execution_request:
         return "qa"
+
+    # Rule 2: Prototype/tutorial request with no reference to own data → QA
+    # e.g. "give me example of how to perform survival analysis"
+    if has_prototype_request and not has_own_data and not has_data_context:
+        return "qa"
+
+    # Rule 3: User references their own uploaded data → always execute
+    # e.g. "help me perform survival analysis for my attached file"
+    if has_own_data:
+        return "code"
+
+    # Rule 4: Analysis verb + data context → execute
+    if has_analysis_action and has_data_context:
+        return "code"
 
     code_score = 0
     if has_code_request:
@@ -159,7 +287,6 @@ def infer_intent_from_latest_user(state: AgentState) -> str | None:
     if user_message.startswith(QA_LEADING_PHRASES):
         qa_score += 1
 
-    # Prefer explicit code/data operation requests over generic question form.
     if code_score >= 1 and (qa_score == 0 or code_score > qa_score):
         return "code"
     if qa_score >= 1:
@@ -167,17 +294,78 @@ def infer_intent_from_latest_user(state: AgentState) -> str | None:
     return None
 
 
-def _has_fresh_run_approval(state: AgentState) -> bool:
-    review_state = get_agent_state(state, "human_review")
-    if review_state.get("before_run_decision") != "approve":
-        return False
-    approved_hash = review_state.get("approved_code_hash")
-    current_hash = (state.get("meta", {}) or {}).get("current_code_hash")
-    return bool(approved_hash and current_hash and approved_hash == current_hash)
+# ---------------------------------------------------------------------------
+# Loop / cycle detection  (recursion-guard helpers)
+# ---------------------------------------------------------------------------
 
+def _detect_two_node_cycle(trace: list[str], lookback: int = LOOP_GUARD_LOOKBACK) -> bool:
+    """Return True when the recent trace contains an A→B→A→B alternating pattern.
+
+    Uses a sliding 4-element window so cycles that start just before the tail are
+    still caught.
+    """
+    window = trace[-lookback:]
+    if len(window) < 4:
+        return False
+    for i in range(len(window) - 3):
+        a, b, c, d = window[i], window[i + 1], window[i + 2], window[i + 3]
+        if a == c and b == d and a != b:
+            return True
+    return False
+
+
+def _count_action_in_recent_trace(
+    action: str,
+    trace: list[str],
+    lookback: int = LOOP_GUARD_LOOKBACK,
+) -> int:
+    """Count appearances of ``action`` within the last ``lookback`` trace entries."""
+    return trace[-lookback:].count(action)
+
+
+def _apply_loop_guards(
+    next_action: str,
+    state: AgentState,
+    observations: list[str],
+) -> tuple[str, list[str], bool]:
+    """Apply cycle-detection and repeat-action guards.
+
+    Returns (next_action, observations, guard_fired).
+    Overrides next_action to 'end' when a loop is detected.
+    """
+    if next_action == "end":
+        return next_action, observations, False
+
+    trace = list((state.get("meta") or {}).get(MetaKeys.WORKFLOW_TRACE, []))
+    obs = list(observations)
+
+    # Guard 1: strict A→B→A→B cycle
+    if _detect_two_node_cycle(trace):
+        obs.append(
+            f"orchestrator [loop_guard]: two-node cycle detected "
+            f"(tail={trace[-LOOP_GUARD_LOOKBACK:]}); overriding '{next_action}' → 'end'"
+        )
+        return "end", obs, True
+
+    # Guard 2: same action repeated too many times in the lookback window
+    repeat_count = _count_action_in_recent_trace(next_action, trace)
+    if repeat_count >= MAX_ACTION_REPEATS:
+        obs.append(
+            f"orchestrator [loop_guard]: '{next_action}' appeared {repeat_count}× "
+            f"in the last {LOOP_GUARD_LOOKBACK} steps (max={MAX_ACTION_REPEATS}); "
+            "overriding → 'end'"
+        )
+        return "end", obs, True
+
+    return next_action, obs, False
+
+
+# ---------------------------------------------------------------------------
+# Tool-queue helpers
+# ---------------------------------------------------------------------------
 
 def _tool_request_queue(state: AgentState) -> list[str]:
-    return list(state.get("meta", {}).get("tool_request_queue", []))
+    return list((state.get("meta") or {}).get(MetaKeys.TOOL_REQUEST_QUEUE, []))
 
 
 def _next_tool_requester(state: AgentState) -> str | None:
@@ -188,67 +376,43 @@ def _next_tool_requester(state: AgentState) -> str | None:
     return None
 
 
-def build_default_policies() -> list[AgentPolicy]:
-    return [
-        AgentPolicy(
-            name="error_handler",
-            is_ready=lambda s: get_agent_state(s, "executor").get("run_status") == "error"
-            and _error_iterations(s) < MAX_ERROR_ITERATIONS,
-        ),
-        AgentPolicy(
-            name="human_review_after_error",
-            is_ready=lambda s: get_agent_state(s, "executor").get("run_status") == "error"
-            and _error_iterations(s) >= MAX_ERROR_ITERATIONS
-            and get_agent_state(s, "human_review").get("after_error_decision") is None,
-        ),
-        AgentPolicy(
-            name="tool_handler",
-            is_ready=is_tool_requested,
-        ),
-        AgentPolicy(
-            name="qa",
-            is_ready=lambda s: s.get("meta", {}).get("intent") == "qa"
-            and not is_tool_requested(s),
-        ),
-        AgentPolicy(
-            name="generate_code",
-            is_ready=lambda s: not (s.get("output") or {}).get("generated_code")
-            and not is_tool_requested(s),
-        ),
-        AgentPolicy(
-            name="human_review_before_run",
-            is_ready=lambda s: (s.get("output") or {}).get("generated_code")
-            and get_agent_state(s, "executor").get("run_status") in ("idle", "pending")
-            and get_agent_state(s, "human_review").get("before_run_decision") is None,
-        ),
-        AgentPolicy(
-            name="execute_code",
-            is_ready=lambda s: (s.get("output") or {}).get("generated_code")
-            and get_agent_state(s, "executor").get("run_status") in ("idle", "pending")
-            and _has_fresh_run_approval(s),
-        ),
-        AgentPolicy(
-            name="human_review_final",
-            is_ready=lambda s: get_agent_state(s, "executor").get("run_status") == "ok"
-            and get_agent_state(s, "human_review").get("final_decision") is None,
-        ),
-    ]
-
+# ---------------------------------------------------------------------------
+# Deterministic policy routing  (driven by the registry)
+# ---------------------------------------------------------------------------
 
 def choose_next_action(state: AgentState, available_actions: Iterable[str]) -> str:
-    intent = (state.get("meta", {}).get("intent") or infer_intent_from_latest_user(state) or "").strip()
+    """Return the deterministic next action based on registry policies.
+
+    Risk-2 fix: policies are sorted by NodeDefinition.priority, so ordering is
+    explicit and documented rather than implicit list position.
+    """
+    intent = (
+        (state.get("meta") or {}).get(MetaKeys.INTENT)
+        or infer_intent_from_latest_user(state)
+        or ""
+    ).strip()
     available = set(available_actions)
+
     if _should_end_now(state):
         return "end"
+
     if intent == "qa" and "qa" in available and not is_tool_requested(state):
         return "qa"
-    policies = build_default_policies()
-    for policy in policies:
-        if policy.name in available and policy.is_ready(state):
-            return policy.name
+
+    sorted_nodes = sorted(NODE_REGISTRY, key=lambda nd: nd.priority)
+    for nd in sorted_nodes:
+        if nd.name in available and nd.is_ready(state):
+            return nd.name
+
     if get_agent_state(state, "human_review").get("final_decision") == "approve":
         return "end"
 
+    return "end"
+
+
+# ---------------------------------------------------------------------------
+# LLM-based planning helpers  (Risk-4 fix: state summary includes registry status)
+# ---------------------------------------------------------------------------
 
 def _format_tool_results(state: AgentState) -> str:
     agents = state.get("agents", {})
@@ -265,12 +429,25 @@ def _format_tool_results(state: AgentState) -> str:
 
 
 def _format_state_summary(state: AgentState) -> str:
+    """Build a compact state summary for the LLM planner prompt.
+
+    Risk-4 fix: the registry-driven section at the bottom automatically surfaces
+    the status of any registered node, so new nodes appear in the summary without
+    manual edits here.
+    """
     executor_state = get_agent_state(state, "executor")
     review_state = get_agent_state(state, "human_review")
 
     latest_user = _latest_user_message(state)
     inferred_intent = infer_intent_from_latest_user(state)
-    
+
+    trace = list((state.get("meta") or {}).get(MetaKeys.WORKFLOW_TRACE, []))
+    trace_tail = trace[-LOOP_GUARD_LOOKBACK:]
+    cycle_detected = _detect_two_node_cycle(trace)
+    max_repeats = max(
+        (_count_action_in_recent_trace(a, trace) for a in set(trace_tail)),
+        default=0,
+    )
 
     parts = [
         f"latest_user_message={latest_user}",
@@ -279,12 +456,23 @@ def _format_state_summary(state: AgentState) -> str:
         f"executor_run_status={executor_state.get('run_status')}",
         f"before_run_decision={review_state.get('before_run_decision')}",
         f"final_decision={review_state.get('final_decision')}",
-        f"error_iterations={_error_iterations(state)}",
+        f"error_iterations={(state.get('meta') or {}).get(MetaKeys.ERROR_ITERATIONS, 0)}",
         f"tool_requests_pending={is_tool_requested(state)}",
         f"last_action={state.get('last_action')}",
-        f"workflow_trace_tail={list(state.get('meta', {}).get('workflow_trace', []))[-8:]}",
-        "tool_results:\n" + _format_tool_results(state),
+        f"workflow_trace_tail={trace_tail}",
+        f"loop_cycle_detected={cycle_detected}",
+        f"max_action_repeats_in_window={max_repeats}",
     ]
+
+    # Registry-driven node status — automatically includes any new node's status.
+    agents = state.get("agents") or {}
+    for nd in sorted(NODE_REGISTRY, key=lambda n: n.priority):
+        agent_st = agents.get(nd.name, {})
+        status = agent_st.get("status")
+        if status and status not in ("idle", None):
+            parts.append(f"{nd.name}_status={status}")
+
+    parts.append("tool_results:\n" + _format_tool_results(state))
     return "\n".join(parts)
 
 
@@ -307,6 +495,7 @@ def _parse_planner_response(
     if action in set(available_actions):
         return action, str(thought or "")
     return "end", str(thought or "")
+
 
 def _format_node_capabilities(available_actions: Iterable[str]) -> str:
     lines: list[str] = []
@@ -331,46 +520,97 @@ def llm_select_next_action(
     return _parse_planner_response(response.content, available_actions)
 
 
+# ---------------------------------------------------------------------------
+# Orchestrator node
+# ---------------------------------------------------------------------------
+
 def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) -> AgentState:
     orchestrator_state = dict(state.get("orchestrator", {}))
     next_action = orchestrator_state.get("next_action")
     thought = orchestrator_state.get("thought", "")
-    meta = dict(state.get("meta", {}))
-    if meta.get("awaiting_user_clarification") and _has_unanswered_human_message(state):
-        meta.pop("awaiting_user_clarification", None)
+    meta = dict(state.get("meta") or {})
+
+    # ------------------------------------------------------------------
+    # New-turn detection — reset ephemeral state on each fresh user message
+    # so follow-up questions are not contaminated by the previous turn's
+    # routing state.  The full messages history is preserved for LLM context.
+    # ------------------------------------------------------------------
+    output = dict(state.get("output") or {})
+    agents = dict(state.get("agents") or {})
+    current_hash = _user_message_hash(state)
+    if current_hash and current_hash != meta.get(MetaKeys.LAST_USER_MESSAGE_HASH):
+        output, agents, meta = _reset_for_new_turn(output, agents, meta)
+        meta[MetaKeys.LAST_USER_MESSAGE_HASH] = current_hash
+        next_action = None
+        orchestrator_state.pop("next_action", None)
+
+    # ------------------------------------------------------------------
+    # Clear stale awaiting-clarification flag when the user has replied.
+    # ------------------------------------------------------------------
+    if meta.get(MetaKeys.AWAITING_USER_CLARIFICATION) and _has_unanswered_human_message(state):
+        meta.pop(MetaKeys.AWAITING_USER_CLARIFICATION, None)
+
+    # ------------------------------------------------------------------
+    # Set intent once per turn (re-inferred after reset above).
+    # Risk-6 fix: LLM choice is used to backfill intent when keyword
+    # detection returns None, so the policy fires correctly on the next step.
+    # ------------------------------------------------------------------
     inferred_intent = infer_intent_from_latest_user(state)
-    if not meta.get("intent") and inferred_intent:
-        meta["intent"] = inferred_intent
-    working_state = {
-        **state,
-        "meta": meta,
-    }
+    if not meta.get(MetaKeys.INTENT) and inferred_intent:
+        meta[MetaKeys.INTENT] = inferred_intent
+
+    # ------------------------------------------------------------------
+    # Routing decision
+    # ------------------------------------------------------------------
     if not next_action:
-        if working_state.get("last_action") == "tool_handler":
-            requester = _next_tool_requester(working_state)
+        # Special case: return to the agent that requested tools after tool_handler ran.
+        if state.get("last_action") == "tool_handler":
+            requester = _next_tool_requester(state)
             if requester and requester in set(available_actions):
                 next_action = requester
-                queue = _tool_request_queue(working_state)
-                meta["tool_request_queue"] = [name for name in queue if name != requester]
+                queue = _tool_request_queue(state)
+                meta[MetaKeys.TOOL_REQUEST_QUEUE] = [n for n in queue if n != requester]
+
         if not next_action:
-            llm_choice, thought = llm_select_next_action(working_state, llm, available_actions)
-            fallback_action = choose_next_action(working_state, available_actions)
-            if llm_choice != "end" and not _should_end_now(working_state):
+            llm_choice, thought = llm_select_next_action(state, llm, available_actions)
+            fallback_action = choose_next_action(state, available_actions)
+
+            if llm_choice != "end" and not _should_end_now(state):
                 next_action = llm_choice
+                # Risk-6 fix: backfill intent from LLM choice when keyword detection
+                # was inconclusive, so deterministic policies work on the next step.
+                if not meta.get(MetaKeys.INTENT):
+                    if llm_choice == "qa":
+                        meta[MetaKeys.INTENT] = "qa"
+                    elif llm_choice in ("generate_code", "execute_code", "error_handler"):
+                        meta[MetaKeys.INTENT] = "code"
             else:
                 next_action = fallback_action
+
+    # ------------------------------------------------------------------
+    # Recursion guards — applied AFTER routing decision, BEFORE committing.
+    # Reads the trace as it existed before this orchestrator call appends itself.
+    # ------------------------------------------------------------------
+    observations = list(state.get("observations", []))
+    next_action, observations, _guard_fired = _apply_loop_guards(
+        next_action or "end", state, observations
+    )
+
+    # ------------------------------------------------------------------
+    # Commit decision
+    # ------------------------------------------------------------------
     orchestrator_state["next_action"] = next_action
     if thought:
         orchestrator_state["thought"] = thought
         thoughts = list(orchestrator_state.get("thoughts", []))
         thoughts.append(thought)
         orchestrator_state["thoughts"] = thoughts
-    observations = list(state.get("observations", []))
+
     observations.append(f"orchestrator: next_action={next_action}")
 
-    workflow_trace = list(meta.get("workflow_trace", []))
+    workflow_trace = list(meta.get(MetaKeys.WORKFLOW_TRACE, []))
     workflow_trace.append("orchestrator")
-    meta["workflow_trace"] = workflow_trace[-100:]
+    meta[MetaKeys.WORKFLOW_TRACE] = workflow_trace[-100:]
 
     return {
         **state,
@@ -378,5 +618,7 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
         "last_action": state.get("last_action"),
         "orchestrator": orchestrator_state,
         "observations": observations,
+        "output": output,
+        "agents": agents,
         "meta": meta,
     }
