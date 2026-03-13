@@ -38,6 +38,16 @@ TOOLS_CATALOG: list[dict[str, object]] = [
     },
 ]
 
+# Fast lexical gate to avoid routing unrelated questions through the tool-router
+# LLM call. This prevents false clarification prompts (e.g., asking for weather
+# city/file fields) when the user asks for dataset analysis/code generation.
+_TOOL_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "query_weather": ("weather", "temperature", "forecast", "rain", "snow"),
+    "get_weather_tips": ("weather tips", "season", "winter", "summer", "autumn", "spring"),
+    "search": ("search", "look up", "find online", "web", "internet", "news"),
+    "calculate": ("calculate", "compute", "what is", "evaluate", "math"),
+}
+
 _TOOL_ROUTING_SYSTEM = (
     "You are a tool routing assistant. Decide if the user question needs external tools.\n"
     "Each tool lists required_fields (must be populated) and optional_fields (omit if not mentioned).\n"
@@ -100,6 +110,22 @@ def is_tool_requested(state: AgentState) -> bool:
     agents = state.get("agents", {})
     for agent_state in agents.values():
         if agent_state.get("tool_requests"):
+            return True
+    return False
+
+
+def should_route_tools(question: str) -> bool:
+    """Heuristic pre-check for whether question is likely tool-oriented.
+
+    We intentionally keep this conservative: if no tool-domain cues are present,
+    skip tool-routing and let the primary node prompt handle the request.
+    """
+    normalized = (question or "").strip().lower()
+    if not normalized:
+        return False
+
+    for keywords in _TOOL_KEYWORDS.values():
+        if any(keyword in normalized for keyword in keywords):
             return True
     return False
 

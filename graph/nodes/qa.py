@@ -9,17 +9,18 @@ from .tool_routing import (
     format_tool_results,
     latest_user_message,
     request_tools_for_question,
+    should_route_tools,
 )
 from utils.message_window import window_messages
 
 
-def qa_node(state: AgentState, llm) -> AgentState:
+def qa_node(state: AgentState, llm, context: str = "") -> AgentState:
     qa_state = get_agent_state(state, "qa")
     question = latest_user_message(state)
     tool_requests = list(qa_state.get("tool_requests", []))
     tool_results = list(qa_state.get("tool_results", []))
 
-    if question and not tool_results and not tool_requests:
+    if question and not tool_results and not tool_requests and should_route_tools(question):
         recent_msgs = window_messages(state.get("messages", []), max_turns=3)
         routing_result = request_tools_for_question(llm, question, recent_messages=recent_msgs)
 
@@ -73,6 +74,10 @@ def qa_node(state: AgentState, llm) -> AgentState:
             ),
             (
                 "system",
+                "Dataset context (if available):\n{context}",
+            ),
+            (
+                "system",
                 "Tool results (if any):\n{tool_results}",
             ),
             MessagesPlaceholder("messages"),
@@ -81,6 +86,7 @@ def qa_node(state: AgentState, llm) -> AgentState:
     response = llm.invoke(
         prompt.format_prompt(
             messages=windowed,
+            context=context or "No dataset or schema provided.",
             tool_results=format_tool_results(tool_results),
         ).to_messages()
     )

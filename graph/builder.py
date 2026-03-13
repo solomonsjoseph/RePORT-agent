@@ -50,7 +50,7 @@ def build_graph(llm, df, schema, db_path):
         "human_review_before_run": _run_and_mark("human_review_before_run", human_review_before_run_node),
         "human_review_final": _run_and_mark("human_review_final", human_review_final_node),
         "tool_handler": _run_and_mark("tool_handler", tool_handler_node),
-        "qa": _run_and_mark("qa", lambda s: qa_node(s, llm)),
+        "qa": _run_and_mark("qa", lambda s: qa_node(s, llm, context)),
     }
     available_actions = [*action_nodes.keys(), "end"]
 

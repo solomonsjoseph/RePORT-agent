@@ -178,3 +178,17 @@ def test_format_tool_catalog_renders_required_and_optional_fields() -> None:
     assert "optional" in rendered
     assert "city" in rendered
     assert "start_date" in rendered
+
+
+def test_should_route_tools_false_for_dataset_analysis_question() -> None:
+    tool_routing = _fresh_tool_routing()
+
+    assert tool_routing.should_route_tools(
+        "perform survival analysis for my attached data stratified by sex"
+    ) is False
+
+
+def test_should_route_tools_true_for_weather_question() -> None:
+    tool_routing = _fresh_tool_routing()
+
+    assert tool_routing.should_route_tools("What is the weather in Boston?") is True
