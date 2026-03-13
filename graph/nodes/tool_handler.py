@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import asyncio
 import traceback
 from typing import Any
-from tools.mcp_pool import call_mcp_tool
+from tools.mcp_pool import call_mcp_tool_sync
 
 from ..state import AgentState
 from tools.mcp_tools import make_mcp_tool
@@ -37,9 +36,7 @@ def tool_handler_node(state: AgentState) -> AgentState:
                 server_name = result["server"]
 
                 try:
-                    output = asyncio.run(
-                        call_mcp_tool(server_name, tool_name, payload)
-                    )
+                    output = call_mcp_tool_sync(server_name, tool_name, payload)
 
                     result = {
                         "status": "done",
