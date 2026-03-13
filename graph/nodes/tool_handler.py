@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-
+import traceback
 from typing import Any
 from tools.mcp_pool import call_mcp_tool
 
-from mcp.client.stdio import stdio_client
-
 from ..state import AgentState
-from tools.mcp_tools import make_mcp_tool, get_server_config
+from tools.mcp_tools import make_mcp_tool
 from .state_helpers import get_agent_state, update_agent_state
 
 
@@ -51,12 +49,16 @@ def tool_handler_node(state: AgentState) -> AgentState:
                         "output": output,
                     }
                 except Exception as e:
+                    error_message = str(e).strip() or f"{type(e).__name__} (empty error message)"
                     result = {
                         "status": "error",
                         "server": server_name,
                         "tool_name": tool_name,
                         "payload": payload,
                         "message": str(e),
+                        "message": error_message,
+                        "error_type": type(e).__name__,
+                        "traceback": traceback.format_exc(),
                     }
 
             tool_result = {

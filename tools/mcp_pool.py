@@ -1,6 +1,7 @@
 import asyncio
 from contextlib import AsyncExitStack
 from importlib import import_module
+from pathlib import Path
 from typing import Any
 
 from mcp.client.stdio import stdio_client
@@ -35,12 +36,33 @@ async def _build_stdio_client(command: str, args: list[str], env: dict[str, str]
     except ImportError:
         return stdio_client([command, *args])
 
+def _resolve_command_args(args: list[str]) -> list[str]:
+    """Resolve local script paths robustly when launched from arbitrary CWDs."""
+    project_root = Path(__file__).resolve().parent.parent
+    resolved: list[str] = []
+    for arg in args:
+        if not isinstance(arg, str):
+            resolved.append(arg)
+            continue
+        if arg.startswith("-"):
+            resolved.append(arg)
+            continue
+        candidate = Path(arg)
+        if candidate.is_absolute() or candidate.exists():
+            resolved.append(str(candidate))
+            continue
+        repo_candidate = project_root / arg
+        if repo_candidate.exists():
+            resolved.append(str(repo_candidate))
+            continue
+        resolved.append(arg)
+    return resolved
 
 async def _create_mcp_client(cfg: dict[str, Any]):
     stack = AsyncExitStack()
     try:
         command = cfg["command"]
-        args = cfg.get("args", [])
+        args = _resolve_command_args(cfg.get("args", []))
         env = cfg.get("env")
 
         stdio = await _build_stdio_client(command=command, args=args, env=env)
