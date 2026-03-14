@@ -149,6 +149,44 @@ def test_qa_node_routes_tools_after_clarification_followup() -> None:
     assert second["agents"]["qa"]["tool_requests"][0]["tool_name"] == "query_weather"
 
 
+def test_qa_node_sets_awaiting_clarification_when_llm_asks_question() -> None:
+    """When tool routing returns nothing (falls through) but the QA LLM naturally
+    asks a clarifying question, the node must set AWAITING_USER_CLARIFICATION so
+    the orchestrator routes back to qa on the user's follow-up answer (Case A)
+    rather than treating it as a new independent turn (Case B / full reset).
+    """
+    qa = _fresh_qa_module()
+
+    class _LLM:
+        def __init__(self):
+            self.calls = 0
+
+        def invoke(self, _messages):
+            self.calls += 1
+            if self.calls == 1:
+                # Tool-routing LLM returns no tool and no clarification — falls through.
+                return SimpleNamespace(content='{"tool_requests": []}')
+            # QA LLM naturally asks a clarifying question.
+            return SimpleNamespace(content="Which city would you like weather for?")
+
+    llm = _LLM()
+    state = {
+        "messages": [_HumanMessage("what's weather today")],
+        "output": {},
+        "meta": {"intent": "qa"},
+        "observations": [],
+        "agents": {"qa": {"tool_requests": [], "tool_results": []}},
+    }
+
+    result = qa.qa_node(state, llm, context="")
+
+    assert result["meta"].get("awaiting_user_clarification") is True
+    assert result["meta"].get("pending_question") == "what's weather today"
+    assert result["meta"].get("clarification_return_node") == "qa"
+    assert result["agents"]["qa"]["awaiting_tool_clarification"] is True
+    assert result["output"]["qa_response"] == "Which city would you like weather for?"
+
+
 def test_qa_node_routes_tools_after_generic_clarification_followup() -> None:
     qa = _fresh_qa_module()
 

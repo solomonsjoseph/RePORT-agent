@@ -123,12 +123,25 @@ def qa_node(state: AgentState, llm, context: str = "") -> AgentState:
     messages.append(AIMessage(content=response.content))
 
     observations = list(state.get("observations", []))
-    observations.append("qa: responded to user question")
-
     meta = dict(state.get("meta", {}))
-    meta.pop(MetaKeys.INTENT, None)
-    meta.pop(MetaKeys.PENDING_QUESTION, None)
-    meta.pop(MetaKeys.CLARIFICATION_RETURN_NODE, None)
+
+    # If the QA LLM produced a question on a tool-related query, treat it as a
+    # clarification request so the orchestrator preserves context on the next turn.
+    # This handles the case where tool routing fell through (returned neither tools
+    # nor a structured clarification_question) but the LLM naturally asked for a
+    # missing required field (e.g. "Which city would you like weather for?").
+    if should_attempt_tool_routing and response.content.strip().endswith("?"):
+        meta[MetaKeys.AWAITING_USER_CLARIFICATION] = True
+        meta[MetaKeys.PENDING_QUESTION] = question
+        meta[MetaKeys.CLARIFICATION_RETURN_NODE] = "qa"
+        awaiting_tool_clarification_for_agent = True
+        observations.append("qa: asked clarification (llm path)")
+    else:
+        meta.pop(MetaKeys.INTENT, None)
+        meta.pop(MetaKeys.PENDING_QUESTION, None)
+        meta.pop(MetaKeys.CLARIFICATION_RETURN_NODE, None)
+        awaiting_tool_clarification_for_agent = False
+        observations.append("qa: responded to user question")
 
     updated_state = {
         **state,
@@ -146,6 +159,6 @@ def qa_node(state: AgentState, llm, context: str = "") -> AgentState:
         {
             "status": "done",
             "response": response.content,
-            "awaiting_tool_clarification": False,
+            "awaiting_tool_clarification": awaiting_tool_clarification_for_agent,
         },
     )
