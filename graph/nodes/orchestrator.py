@@ -53,6 +53,7 @@ QA_LEADING_PHRASES = (
     "define",
     "explain",
     "tell me about",
+    "which",
 )
 
 CODE_REQUEST_CUES = (
@@ -531,24 +532,36 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
     meta = dict(state.get("meta") or {})
 
     # ------------------------------------------------------------------
-    # New-turn detection — reset ephemeral state on each fresh user message
-    # so follow-up questions are not contaminated by the previous turn's
-    # routing state.  The full messages history is preserved for LLM context.
+    # New-turn detection — runs on every new user message.
+    #
+    # Two distinct cases:
+    #   A) User answered a clarification question  → preserve context, route back
+    #      to the node that asked the question (no state reset).
+    #   B) New independent question                → full ephemeral-state reset.
     # ------------------------------------------------------------------
     output = dict(state.get("output") or {})
     agents = dict(state.get("agents") or {})
     current_hash = _user_message_hash(state)
-    if current_hash and current_hash != meta.get(MetaKeys.LAST_USER_MESSAGE_HASH):
-        output, agents, meta = _reset_for_new_turn(output, agents, meta)
-        meta[MetaKeys.LAST_USER_MESSAGE_HASH] = current_hash
-        next_action = None
-        orchestrator_state.pop("next_action", None)
+    was_awaiting_clarification = bool(meta.get(MetaKeys.AWAITING_USER_CLARIFICATION))
 
-    # ------------------------------------------------------------------
-    # Clear stale awaiting-clarification flag when the user has replied.
-    # ------------------------------------------------------------------
-    if meta.get(MetaKeys.AWAITING_USER_CLARIFICATION) and _has_unanswered_human_message(state):
-        meta.pop(MetaKeys.AWAITING_USER_CLARIFICATION, None)
+    if current_hash and current_hash != meta.get(MetaKeys.LAST_USER_MESSAGE_HASH):
+        if was_awaiting_clarification:
+            # Case A: clarification answer — preserve everything, only update
+            # the hash and route straight back to the node that asked.
+            meta.pop(MetaKeys.AWAITING_USER_CLARIFICATION, None)
+            meta[MetaKeys.LAST_USER_MESSAGE_HASH] = current_hash
+            clarification_return = meta.get(MetaKeys.CLARIFICATION_RETURN_NODE, "qa")
+            if clarification_return in set(available_actions):
+                next_action = clarification_return
+            else:
+                next_action = "qa"
+            orchestrator_state["next_action"] = next_action
+        else:
+            # Case B: genuinely new question — full ephemeral-state reset.
+            output, agents, meta = _reset_for_new_turn(output, agents, meta)
+            meta[MetaKeys.LAST_USER_MESSAGE_HASH] = current_hash
+            next_action = None
+            orchestrator_state.pop("next_action", None)
 
     # ------------------------------------------------------------------
     # Set intent once per turn (re-inferred after reset above).

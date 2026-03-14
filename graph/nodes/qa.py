@@ -3,7 +3,7 @@ from __future__ import annotations
 from langchain_core.messages import AIMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
-from ..state import AgentState
+from ..state import AgentState, MetaKeys
 from .state_helpers import enqueue_tool_requester, get_agent_state, update_agent_state
 from .tool_routing import (
     format_tool_results,
@@ -24,15 +24,29 @@ def qa_node(state: AgentState, llm, context: str = "") -> AgentState:
     should_attempt_tool_routing = should_route_tools(question) or awaiting_tool_clarification
 
     if question and not tool_results and not tool_requests and should_attempt_tool_routing:
-        recent_msgs = window_messages(state.get("messages", []), max_turns=3)
-        routing_result = request_tools_for_question(llm, question, recent_messages=recent_msgs)
-
+          # If there is a stored pending question (original request before a
+        # clarification round), merge it with the user's follow-up so the tool
+        # routing LLM receives unambiguous context instead of a bare answer.
+        pending_question = (state.get("meta") or {}).get(MetaKeys.PENDING_QUESTION)
+        if pending_question:
+            effective_question = f"{pending_question}\n\nUser clarification: {question}"
+            recent_msgs = window_messages(state.get("messages", []), max_turns=5)
+        else:
+            effective_question = question
+            recent_msgs = window_messages(state.get("messages", []), max_turns=3)
+ 
+        routing_result = request_tools_for_question(llm, effective_question, recent_messages=recent_msgs)
         # Clarification needed — required tool field is missing and can't be inferred.
         if routing_result.clarification_question:
             messages = list(state.get("messages", []))
             messages.append(AIMessage(content=routing_result.clarification_question))
             meta = dict(state.get("meta", {}))
-            meta["awaiting_user_clarification"] = True
+
+            meta[MetaKeys.AWAITING_USER_CLARIFICATION] = True
+            # Store the original request and who handles the answer so the
+            # orchestrator can route back without a full new-turn reset.
+            meta[MetaKeys.PENDING_QUESTION] = effective_question
+            meta[MetaKeys.CLARIFICATION_RETURN_NODE] = "qa"
             output = dict(state.get("output") or {})
             output["qa_response"] = routing_result.clarification_question
             observations = list(state.get("observations", []))
@@ -53,13 +67,17 @@ def qa_node(state: AgentState, llm, context: str = "") -> AgentState:
                 },
             )
 
-        # Tool(s) identified — enqueue and wait for tool_handler.
+        # Tool(s) identified — clear pending clarification state and enqueue.
         if routing_result.tool_requests:
+            meta = dict(state.get("meta") or {})
+            meta.pop(MetaKeys.PENDING_QUESTION, None)
+            meta.pop(MetaKeys.CLARIFICATION_RETURN_NODE, None)
             observations = list(state.get("observations", []))
             observations.append("qa: requested tools")
             updated_state = enqueue_tool_requester(
                 {
                     **state,
+                    "meata":meta,
                     "observations": observations,
                 },
                 "qa",
@@ -108,7 +126,9 @@ def qa_node(state: AgentState, llm, context: str = "") -> AgentState:
     observations.append("qa: responded to user question")
 
     meta = dict(state.get("meta", {}))
-    meta.pop("intent", None)
+    meta.pop(MetaKeys.INTENT, None)
+    meta.pop(MetaKeys.PENDING_QUESTION, None)
+    meta.pop(MetaKeys.CLARIFICATION_RETURN_NODE, None)
 
     updated_state = {
         **state,
