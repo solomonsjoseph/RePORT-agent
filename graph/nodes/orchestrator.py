@@ -550,7 +550,11 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
             # the hash and route straight back to the node that asked.
             meta.pop(MetaKeys.AWAITING_USER_CLARIFICATION, None)
             meta[MetaKeys.LAST_USER_MESSAGE_HASH] = current_hash
-            clarification_return = meta.get(MetaKeys.CLARIFICATION_RETURN_NODE, "qa")
+            clarification_return = (
+                meta.get(MetaKeys.CLARIFICATION_RETURN_NODE)
+                or state.get("last_action")
+                or "qa"
+            )
             if clarification_return in set(available_actions):
                 next_action = clarification_return
             else:
