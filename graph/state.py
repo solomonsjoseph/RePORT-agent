@@ -34,3 +34,8 @@ class MetaKeys:
     TOOL_REQUEST_QUEUE = "tool_request_queue"
     WORKFLOW_TRACE = "workflow_trace"
     LAST_USER_MESSAGE_HASH = "last_user_message_hash"
+    # Set by any node that asks a clarification question.
+    # Stores the original user request so it can be reconstructed on re-entry.
+    PENDING_QUESTION = "pending_question"
+    # Which node should receive control when the user answers the clarification.
+    CLARIFICATION_RETURN_NODE = "clarification_return_node"
