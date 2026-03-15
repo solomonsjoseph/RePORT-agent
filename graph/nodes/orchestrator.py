@@ -64,6 +64,7 @@ CODE_REQUEST_CUES = (
     "plot",
     "chart",
     "analyze",
+    "analysis",
     "calculate",
     "compute",
     "run",
@@ -75,6 +76,7 @@ DATA_OPERATION_CUES = (
     "csv",
     "table",
     "columns",
+    "data",
 )
 
 # Risk-6 fix (part 1): prototype/tutorial phrasing that does NOT imply running code.
@@ -103,6 +105,7 @@ OWN_DATA_CUES = (
     "for my data",
     "on my data",
     "my data",
+    "attached data",
 )
 
 INFO_CODE_CUES = (
@@ -134,6 +137,8 @@ ANALYSIS_CUES = (
     "do a",
     "run a",
     "apply",
+    "analyze",
+    "analysis",
 )
 
 
