@@ -77,7 +77,7 @@ def qa_node(state: AgentState, llm, context: str = "") -> AgentState:
             updated_state = enqueue_tool_requester(
                 {
                     **state,
-                    "meata":meta,
+                    "meta":meta,
                     "observations": observations,
                 },
                 "qa",

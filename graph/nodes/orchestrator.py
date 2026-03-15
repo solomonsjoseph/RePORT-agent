@@ -37,7 +37,7 @@ from prompts.planner_prompt import make_planner_prompt
 # Loop-guard constants
 # ---------------------------------------------------------------------------
 
-MAX_ACTION_REPEATS = 3    # max same-action appearances in LOOP_GUARD_LOOKBACK window
+MAX_ACTION_REPEATS = 8    # max same-action appearances in LOOP_GUARD_LOOKBACK window
 LOOP_GUARD_LOOKBACK = 8   # trace entries examined by loop-detection helpers
 
 
