@@ -43,3 +43,16 @@ def test_run_and_mark_clears_next_action_and_marks_last_action() -> None:
     assert result["last_action"] == "qa"
     assert result["orchestrator"] == {"thought": "done"}
     assert result["meta"]["workflow_trace"] == ["orchestrator", "qa"]
+
+
+def test_run_and_mark_consumes_loop_guard_bypass_for_current_node() -> None:
+    run_and_mark = _load_run_and_mark()
+
+    wrapped = run_and_mark(
+        "generate_code",
+        lambda state: {**state, "meta": {"workflow_trace": ["orchestrator"], "loop_guard_bypass_actions": ["generate_code", "execute_code"]}},
+    )
+    result = wrapped({"meta": {"workflow_trace": ["orchestrator"], "loop_guard_bypass_actions": ["generate_code", "execute_code"]}})
+
+    assert result["meta"]["workflow_trace"] == ["orchestrator", "generate_code"]
+    assert result["meta"].get("loop_guard_bypass_actions") == ["execute_code"]
