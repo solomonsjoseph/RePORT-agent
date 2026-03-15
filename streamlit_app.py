@@ -74,7 +74,7 @@ def load_anthropic_models(effective_api_key):
 if provider == "vllm":
     try:
         model_name = detect_vllm_model(base_url)
-    except Exception as e:
+    except Exception:
         st.sidebar.error("Invalid vllm backend.")
         st.stop()
     short = model_name.split("/")[-1]

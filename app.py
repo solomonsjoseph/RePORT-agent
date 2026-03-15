@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 import argparse
-import sys
 from langchain_core.messages import HumanMessage
 from graph.builder import build_graph
 from utils.context import load_context
 from llm_vllm import build_llm
-from utils.misc import yesno_to_bool
 
 print("======= 🚀 Loading the model. This may take a moment =======")
 

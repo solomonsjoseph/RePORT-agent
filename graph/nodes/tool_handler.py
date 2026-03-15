@@ -52,7 +52,6 @@ def tool_handler_node(state: AgentState) -> AgentState:
                         "server": server_name,
                         "tool_name": tool_name,
                         "payload": payload,
-                        "message": str(e),
                         "message": error_message,
                         "error_type": type(e).__name__,
                         "traceback": traceback.format_exc(),

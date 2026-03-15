@@ -1,4 +1,4 @@
-from typing import Annotated, List, Literal, TypedDict
+from typing import Annotated, List, TypedDict
 from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
 
@@ -39,3 +39,6 @@ class MetaKeys:
     PENDING_QUESTION = "pending_question"
     # Which node should receive control when the user answers the clarification.
     CLARIFICATION_RETURN_NODE = "clarification_return_node"
+    # One-shot list of actions allowed to bypass loop guards after explicit
+    # human instruction (e.g., regenerate code in review).
+    LOOP_GUARD_BYPASS_ACTIONS = "loop_guard_bypass_actions"

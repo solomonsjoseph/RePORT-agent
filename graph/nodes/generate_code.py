@@ -3,7 +3,7 @@ from langchain_core.messages import HumanMessage
 from utils.code_parser import extract_python_code
 from utils.message_window import window_messages
 from prompts.generate_prompt import make_generate_code_prompt
-from .state_helpers import enqueue_tool_requester, get_agent_state, update_agent_state
+from .state_helpers import get_agent_state, update_agent_state
 from .tool_routing import format_tool_results
 from .code_guardrails import code_fingerprint, is_executable_python
 
