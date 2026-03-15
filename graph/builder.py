@@ -2,7 +2,7 @@ import sqlite3
 from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.sqlite import SqliteSaver
 from utils.context import build_context
-from .state import AgentState, MetaKeys
+from .state import AgentState
 from .routing import route_by_next_action
 from .nodes.node_registry import validate_registry
 
@@ -25,9 +25,21 @@ def _run_and_mark(node_name, fn):
         orchestrator_state = dict(updated_state.get("orchestrator", {}))
         orchestrator_state.pop("next_action", None)
         meta = dict(updated_state.get("meta", {}))
-        workflow_trace = list(meta.get(MetaKeys.WORKFLOW_TRACE, []))
+        # Keep this function self-contained so it can be unit-tested by loading
+        # only the function body via ``ast`` (without module-level imports).
+        workflow_trace = list(meta.get("workflow_trace", []))
         workflow_trace.append(node_name)
-        meta[MetaKeys.WORKFLOW_TRACE] = workflow_trace[-100:]
+        meta["workflow_trace"] = workflow_trace[-100:]
+
+        # Consume one-shot loop-guard bypass for the action that just ran.
+        bypass_actions = [
+            a for a in meta.get("loop_guard_bypass_actions", [])
+            if a != node_name
+        ]
+        if bypass_actions:
+            meta["loop_guard_bypass_actions"] = bypass_actions
+        else:
+            meta.pop("loop_guard_bypass_actions", None)
 
         return {
             **updated_state,

@@ -239,3 +239,96 @@ def test_orchestrator_routes_attached_data_analysis_to_generate_code() -> None:
 
     assert fallback["next_action"] == "generate_code"
     assert fallback["meta"]["intent"] == "code"
+
+
+def test_detect_two_node_cycle_ignores_orchestrator_ping_pong() -> None:
+    _install_langchain_and_langgraph_stubs()
+    orchestrator = importlib.import_module("graph.nodes.orchestrator")
+
+    trace = ["orchestrator", "execute_code", "orchestrator", "execute_code", "orchestrator"]
+    assert orchestrator._detect_two_node_cycle(trace) is False
+
+
+def test_orchestrator_regenerate_before_run_routes_back_to_generate_code() -> None:
+    _install_langchain_and_langgraph_stubs()
+    orchestrator = importlib.import_module("graph.nodes.orchestrator")
+
+    state = {
+        "messages": [SimpleNamespace(type="human", content="please regenerate with smoking and TB terms")],
+        "output": {"generated_code": "print('old')"},
+        "observations": [],
+        "last_action": "human_review_before_run",
+        "orchestrator": {"next_action": "execute_code"},
+        "agents": {
+            "executor": {"run_status": "idle"},
+            "human_review": {"before_run_decision": "regenerate", "approved_code_hash": "abc", "final_decision": None},
+        },
+        "meta": {"error_iterations": 0, "workflow_trace": ["orchestrator", "human_review_before_run"], "current_code_hash": "abc"},
+    }
+
+    updated = orchestrator.orchestrator_node(
+        state,
+        _LLM("not-json"),
+        ["qa", "generate_code", "execute_code", "human_review_before_run", "end"],
+    )
+
+    assert updated["next_action"] == "generate_code"
+    assert updated["output"].get("generated_code") is None
+    assert (updated["agents"].get("human_review") or {}).get("before_run_decision") is None
+    assert updated["meta"].get("current_code_hash") is None
+
+
+def test_detect_two_node_cycle_ignores_expected_execute_error_retry_pair() -> None:
+    _install_langchain_and_langgraph_stubs()
+    orchestrator = importlib.import_module("graph.nodes.orchestrator")
+
+    trace = [
+        "orchestrator", "execute_code", "orchestrator", "error_handler",
+        "orchestrator", "execute_code", "orchestrator", "error_handler",
+    ]
+    assert orchestrator._detect_two_node_cycle(trace) is False
+
+
+def test_apply_loop_guard_stops_repeated_execute_code_spam() -> None:
+    _install_langchain_and_langgraph_stubs()
+    orchestrator = importlib.import_module("graph.nodes.orchestrator")
+
+    state = {
+        "meta": {
+            "workflow_trace": [
+                "orchestrator", "execute_code", "orchestrator", "execute_code",
+                "orchestrator", "execute_code", "orchestrator", "execute_code",
+            ]
+        }
+    }
+
+    action, observations, fired = orchestrator._apply_loop_guards(
+        "execute_code", state, []
+    )
+
+    assert fired is True
+    assert action == "end"
+    assert observations and "execute_code" in observations[-1]
+
+
+def test_apply_loop_guard_allows_human_requested_generate_code_regeneration() -> None:
+    _install_langchain_and_langgraph_stubs()
+    orchestrator = importlib.import_module("graph.nodes.orchestrator")
+
+    state = {
+        "meta": {
+            "loop_guard_bypass_actions": ["generate_code"],
+            "workflow_trace": [
+                "orchestrator", "generate_code", "orchestrator", "generate_code",
+                "orchestrator", "generate_code", "orchestrator", "generate_code",
+            ],
+        }
+    }
+
+    action, observations, fired = orchestrator._apply_loop_guards(
+        "generate_code", state, []
+    )
+
+    assert fired is False
+    assert action == "generate_code"
+    assert observations and "bypass for human-requested action 'generate_code'" in observations[-1]
