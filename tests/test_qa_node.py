@@ -147,6 +147,7 @@ def test_qa_node_routes_tools_after_clarification_followup() -> None:
     assert second["agents"]["qa"]["awaiting_tool_clarification"] is False
     assert second["agents"]["qa"]["tool_requests"]
     assert second["agents"]["qa"]["tool_requests"][0]["tool_name"] == "query_weather"
+    assert "pending_question" not in second.get("meta", {})
 
 
 def test_qa_node_sets_awaiting_clarification_when_llm_asks_question() -> None:
