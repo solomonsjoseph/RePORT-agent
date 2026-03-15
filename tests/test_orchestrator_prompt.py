@@ -216,3 +216,26 @@ def test_orchestrator_does_not_force_qa_for_non_qa_clarification_followup() -> N
 
     assert updated["next_action"] == "generate_code"
     assert "awaiting_user_clarification" not in updated["meta"]
+
+
+def test_orchestrator_routes_attached_data_analysis_to_generate_code() -> None:
+    _install_langchain_and_langgraph_stubs()
+    orchestrator = importlib.import_module("graph.nodes.orchestrator")
+
+    state = {
+        "messages": [SimpleNamespace(type="human", content="Can you perform survival analysis on my attached data?")],
+        "output": {},
+        "observations": [],
+        "last_action": None,
+        "orchestrator": {},
+        "agents": {
+            "executor": {"run_status": "idle"},
+            "human_review": {"before_run_decision": None, "final_decision": None},
+        },
+        "meta": {"error_iterations": 0, "workflow_trace": []},
+    }
+
+    fallback = orchestrator.orchestrator_node(state, _LLM("not-json"), ["qa", "generate_code", "end"])
+
+    assert fallback["next_action"] == "generate_code"
+    assert fallback["meta"]["intent"] == "code"

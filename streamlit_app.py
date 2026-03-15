@@ -211,6 +211,35 @@ config = {
         "thread_id": st.session_state.thread_id
     }
 }
+
+def initial_graph_state(user_message: HumanMessage) -> dict:
+    """Bootstrap state for the first turn of a new thread.
+
+    Later turns should send only message deltas so checkpointed graph state is preserved.
+    """
+    return {
+        "messages": [user_message],
+        "output": {},
+        "next_action": None,
+        "last_action": None,
+        "observations": [],
+        "orchestrator": {},
+        "agents": {
+            "executor": {"run_status": "idle"},
+            "human_review": {
+                "before_run_decision": None,
+                "after_error_decision": None,
+                "final_decision": None,
+            },
+            "qa": {},
+            "generate_code": {},
+        },
+        "meta": {"error_iterations": 0, "workflow_trace": []},
+    }
+
+snapshot = app.get_state(config)
+has_graph_state = bool(snapshot and snapshot.values)
+
 st.subheader("💬 Conversation")
 
 # for msg in st.session_state.chat_history:
@@ -220,34 +249,17 @@ st.subheader("💬 Conversation")
 #         st.markdown(msg.content)
 user_text = st.chat_input("Ask a question about your dataset!")
 if user_text:
-    messages = st.session_state.get("chat_history", [])
-    st.session_state.chat_history.append(
-        HumanMessage(content=user_text)
-    )
+    user_message = HumanMessage(content=user_text)
+    st.session_state.chat_history.append(user_message)
 
-    # Reset execution artifacts for new question
-    new_state = {
-        "output": {},
-        "messages": st.session_state.chat_history,
-        "next_action": None,
-        "last_action": None,
-        "observations": [],
-        "orchestrator": {
-            "tool_results": [],
-        },
-        "agents": {
-            "executor": {"run_status": "idle"},
-            "human_review": {
-                "before_run_decision": None,
-                "after_error_decision": None,
-                "final_decision": None,
-            },
-        },
-        "meta": {"error_iterations": 0},
-    }
+    if has_graph_state:
+        # Existing thread: submit only the new user message delta so checkpointed
+        # graph state (intent, clarifications, tool queue, trace) is preserved.
+        app.invoke({"messages": [user_message]}, config=config)
+    else:
+        # New thread: seed the graph with required top-level keys once.
+        app.invoke(initial_graph_state(user_message), config=config)
 
-    app.invoke(new_state, config=config)
-    
     st.rerun()
 
 
@@ -293,7 +305,7 @@ for msg in st.session_state.chat_history:
                     mime="image/png",
                     key=f"dl_{id(msg)}",
                 )
-interrupt_event = snapshot.interrupts[0] if snapshot.interrupts else None
+interrupt_event = snapshot.interrupts[0] if snapshot and snapshot.interrupts else None
 
 # For DEBUGGING purpose, DO NOT delete, comment out in demo
 ####
