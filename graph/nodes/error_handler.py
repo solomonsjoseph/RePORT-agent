@@ -59,11 +59,18 @@ def error_handler_node(state, llm, context):
 
     output["generated_code"] = new_code
     review_state = dict(state.get("agents", {}).get("human_review", {}))
-    review_state["before_run_decision"] = None
-    review_state["approved_code_hash"] = None
+    new_hash = code_fingerprint(new_code)
+    # Preserve human approval across auto-fix retries so execution can continue
+    # without repeatedly asking for review in the error-recovery loop.
+    if review_state.get("before_run_decision") == "approve":
+        review_state["before_run_decision"] = "approve"
+        review_state["approved_code_hash"] = new_hash
+    else:
+        review_state["before_run_decision"] = None
+        review_state["approved_code_hash"] = None
     agents = dict(state.get("agents", {}))
     agents["human_review"] = review_state
-    meta["current_code_hash"] = code_fingerprint(new_code)
+    meta["current_code_hash"] = new_hash
     meta.pop("awaiting_user_clarification", None)
     updated_state = {
         **state,

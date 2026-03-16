@@ -6,12 +6,19 @@ from ...state import AgentState, MetaKeys
 from ..node_registry import NODE_REGISTRY
 
 
-def _latest_user_message(state: AgentState) -> str:
+def _latest_user_message_obj(state: AgentState):
     messages = list(state.get("messages", []))
     for message in reversed(messages):
         if getattr(message, "type", None) == "human":
-            return str(getattr(message, "content", "") or "").strip()
-    return ""
+            return message
+    return None
+
+
+def _latest_user_message(state: AgentState) -> str:
+    message = _latest_user_message_obj(state)
+    if message is None:
+        return ""
+    return str(getattr(message, "content", "") or "").strip()
 
 
 def _has_unanswered_human_message(state: AgentState) -> bool:
@@ -38,10 +45,17 @@ def _should_end_now(state: AgentState) -> bool:
 
 
 def _user_message_hash(state: AgentState) -> str | None:
-    msg = _latest_user_message(state)
-    if not msg:
+    message = _latest_user_message_obj(state)
+    if message is None:
         return None
-    return hashlib.sha256(msg.encode()).hexdigest()[:16]
+    content = str(getattr(message, "content", "") or "").strip()
+    msg_id = str(getattr(message, "id", "") or "").strip()
+    # Use message id when available so repeated identical text still counts as
+    # a fresh turn and stale intent/state does not bleed into new requests.
+    hash_basis = f"{msg_id}:{content}" if msg_id else content
+    if not hash_basis:
+        return None
+    return hashlib.sha256(hash_basis.encode()).hexdigest()[:16]
 
 
 def _reset_for_new_turn(output: dict, agents: dict, meta: dict) -> tuple[dict, dict, dict]:

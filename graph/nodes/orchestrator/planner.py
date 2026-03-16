@@ -268,11 +268,16 @@ def llm_select_next_action(
         "human_review_after_error",
         "human_review_final",
     }
+    critic_execute_risk_hints = (
+        "execute_code (already succeeded; move to human_review_final)",
+        "execute_code (requires fresh human approval)",
+    )
+
     should_use_critic = critic_mode == "always" or (
         critic_mode != "off"
         and (
             candidate_action in risky_actions
-            or any("execute_code" in b for b in blocked_actions)
+            or any(hint in blocked_actions for hint in critic_execute_risk_hints)
         )
     )
 

@@ -348,6 +348,12 @@ for msg in st.session_state.chat_history:
                     key=f"dl_{id(msg)}",
                 )
 interrupt_event = snapshot.interrupts[0] if snapshot and snapshot.interrupts else None
+dismissed_interrupt_id = str(st.session_state.get("dismissed_interrupt_id", "") or "")
+
+# Clear stale dismissal marker once there is no active interrupt.
+if not interrupt_event and dismissed_interrupt_id:
+    st.session_state.pop("dismissed_interrupt_id", None)
+    dismissed_interrupt_id = ""
 
 if show_debug_state:
     st.write("current state values from langraph are:", state)
@@ -356,7 +362,7 @@ if show_debug_state:
     if interrupt_event:
         st.write("Interrupt event is:", interrupt_event)
 
-if interrupt_event:
+if interrupt_event and str(interrupt_event.id) != dismissed_interrupt_id:
     interrupt_id = interrupt_event.id
     payload = interrupt_event.value
     ui_type = payload["type"]

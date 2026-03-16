@@ -1,6 +1,10 @@
 from langgraph.types import Command
 import streamlit as st
 
+
+def _dismiss_interrupt(interrupt_id):
+    st.session_state["dismissed_interrupt_id"] = str(interrupt_id)
+
 def ui_before_run_review(app, config, payload, interrupt_id):
     ui_type = "before_run_review"
     st.subheader("🔍 Review Code Before Execution")
@@ -24,11 +28,13 @@ def ui_before_run_review(app, config, payload, interrupt_id):
 
         if proceed:
             st.session_state[confirm_key] = False
+            _dismiss_interrupt(interrupt_id)
             app.invoke(Command(resume={interrupt_id: {"action": "approve"}}), config=config)
             st.rerun()
 
         if go_regen:
             st.session_state[confirm_key] = False
+            _dismiss_interrupt(interrupt_id)
             app.invoke(Command(resume={interrupt_id: {"action": "regenerate", "suggestion": suggestion}}), config=config)
             st.rerun()
 
@@ -43,6 +49,7 @@ def ui_before_run_review(app, config, payload, interrupt_id):
             st.session_state[confirm_key] = True
             st.rerun()
         else:
+            _dismiss_interrupt(interrupt_id)
             app.invoke(
                 Command(resume={interrupt_id: {"action": "approve"}}),
                 config=config,
@@ -55,6 +62,7 @@ def ui_before_run_review(app, config, payload, interrupt_id):
         if not suggestion:
             st.error("Please enter an edit instruction before regenerating.")
             st.stop()
+        _dismiss_interrupt(interrupt_id)
         app.invoke(
             Command(resume={
                 interrupt_id: {
