@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Iterable
 
 from prompts.action_critic_prompt import make_action_critic_prompt
@@ -259,14 +260,33 @@ def llm_select_next_action(
         available_actions,
     )
 
-    critic_action, critic_reason, critic_changed = _critic_review_action(
-        state,
-        llm,
-        candidate_action,
-        ready_actions,
-        blocked_actions,
-        available_actions,
+    critic_mode = os.getenv("ORCH_CRITIC_MODE", "conditional").strip().lower()
+    risky_actions = {
+        "execute_code",
+        "error_handler",
+        "human_review_before_run",
+        "human_review_after_error",
+        "human_review_final",
+    }
+    should_use_critic = critic_mode == "always" or (
+        critic_mode != "off"
+        and (
+            candidate_action in risky_actions
+            or any("execute_code" in b for b in blocked_actions)
+        )
     )
+
+    if should_use_critic:
+        critic_action, critic_reason, critic_changed = _critic_review_action(
+            state,
+            llm,
+            candidate_action,
+            ready_actions,
+            blocked_actions,
+            available_actions,
+        )
+    else:
+        critic_action, critic_reason, critic_changed = candidate_action, "critic_skipped", False
 
     final_action, critic_fallback = _select_ranked_candidate(
         critic_action,
@@ -282,7 +302,7 @@ def llm_select_next_action(
         notes.append(f"validator_selected={candidate_action}")
     if critic_changed:
         notes.append(f"critic_selected={critic_action}")
-    if critic_reason and critic_reason != "critic_unavailable":
+    if critic_reason and critic_reason not in ("critic_unavailable", "critic_skipped"):
         notes.append(f"critic_reason={critic_reason}")
     if critic_fallback and final_action != critic_action:
         notes.append(f"validator_rechecked={final_action}")
