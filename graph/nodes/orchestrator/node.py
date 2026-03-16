@@ -73,7 +73,10 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
     }
 
     inferred_intent = infer_intent_from_latest_user(state)
-    if not meta.get(MetaKeys.INTENT) and inferred_intent:
+    # Keep intent aligned with latest user message when it is confidently inferred.
+    # This prevents stale intent (e.g., previous code turn) from forcing bad routes
+    # on subsequent QA-style asks.
+    if inferred_intent:
         meta[MetaKeys.INTENT] = inferred_intent
 
     if not next_action:

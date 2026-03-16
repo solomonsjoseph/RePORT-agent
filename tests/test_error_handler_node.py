@@ -54,3 +54,27 @@ def test_error_handler_non_code_response_sets_clarification_wait() -> None:
     assert updated["output"]["generated_code"] == ""
     assert updated["meta"]["awaiting_user_clarification"] is True
     assert updated["agents"]["executor"]["run_status"] == "idle"
+
+
+def test_error_handler_preserves_approval_during_retry_loop() -> None:
+    _install_stubs()
+    for _mod in ("utils.message_window", "graph.nodes.error_handler"):
+        sys.modules.pop(_mod, None)
+    mod = importlib.import_module("graph.nodes.error_handler")
+
+    state = {
+        "messages": [],
+        "output": {"generated_code": "print('x')", "error": {"type": "NameError", "message": "bad"}},
+        "meta": {"error_iterations": 1, "current_code_hash": "old"},
+        "agents": {
+            "human_review": {"before_run_decision": "approve", "approved_code_hash": "old"},
+            "executor": {"run_status": "error"},
+        },
+    }
+
+    updated = mod.error_handler_node(state, _LLM("```python\nprint('fixed')\n```"), context="ctx")
+
+    review = updated["agents"]["human_review"]
+    assert review["before_run_decision"] == "approve"
+    assert review["approved_code_hash"] == updated["meta"]["current_code_hash"]
+    assert updated["agents"]["executor"]["run_status"] == "pending"

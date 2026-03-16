@@ -427,6 +427,38 @@ def test_orchestrator_resets_workflow_trace_on_new_user_turn() -> None:
     assert updated["next_action"] == "generate_code"
     assert updated["meta"]["workflow_trace"] == ["orchestrator"]
 
+
+def test_orchestrator_treats_same_text_new_message_id_as_new_turn() -> None:
+    _install_langchain_and_langgraph_stubs()
+    orchestrator = importlib.import_module("graph.nodes.orchestrator")
+
+    state = {
+        "messages": [SimpleNamespace(type="human", id="new-msg-id", content="What's the weather today")],
+        "output": {"generated_code": "print('stale')"},
+        "observations": [],
+        "last_action": "generate_code",
+        "orchestrator": {},
+        "agents": {
+            "executor": {"run_status": "idle"},
+            "human_review": {"before_run_decision": None, "final_decision": None},
+        },
+        "meta": {
+            "error_iterations": 0,
+            "intent": "code",
+            "last_user_message_hash": "old-hash-from-prior-message",
+            "workflow_trace": ["orchestrator", "generate_code"],
+        },
+    }
+
+    updated = orchestrator.orchestrator_node(
+        state,
+        _LLM("not-json"),
+        ["qa", "generate_code", "execute_code", "end"],
+    )
+
+    assert updated["meta"].get("intent") == "qa"
+    assert updated["output"].get("generated_code") is None
+
 def test_planner_two_stage_selection_uses_ranked_ready_candidate() -> None:
     _install_langchain_and_langgraph_stubs()
     planner = importlib.import_module("graph.nodes.orchestrator.planner")
@@ -544,3 +576,77 @@ def test_planner_can_skip_critic_in_fast_mode() -> None:
 
     assert action == "human_review_final"
     assert len(llm.calls) == 1
+
+
+def test_planner_does_not_trigger_critic_for_non_risky_qa_candidate() -> None:
+    _install_langchain_and_langgraph_stubs()
+    planner = importlib.import_module("graph.nodes.orchestrator.planner")
+
+    state = {
+        "messages": [SimpleNamespace(type="human", content="What's the weather today?")],
+        "output": {"generated_code": ""},
+        "agents": {
+            "executor": {"run_status": "idle"},
+            "human_review": {
+                "before_run_decision": None,
+                "approved_code_hash": None,
+                "final_decision": None,
+            },
+        },
+        "meta": {"workflow_trace": ["orchestrator"], "error_iterations": 0, "intent": "qa"},
+        "last_action": "qa",
+    }
+
+    llm = _SeqLLM([
+        json.dumps({
+            "action": "qa",
+            "ranked_actions": ["qa", "generate_code", "end"],
+            "thought": "answer directly"
+        }),
+    ])
+
+    prev = os.environ.get("ORCH_CRITIC_MODE")
+    os.environ["ORCH_CRITIC_MODE"] = "conditional"
+    try:
+        action, _thought = planner.llm_select_next_action(
+            state, llm, ["qa", "generate_code", "execute_code", "end"]
+        )
+    finally:
+        if prev is None:
+            os.environ.pop("ORCH_CRITIC_MODE", None)
+        else:
+            os.environ["ORCH_CRITIC_MODE"] = prev
+
+    assert action == "qa"
+    assert len(llm.calls) == 1
+
+
+def test_orchestrator_overrides_stale_code_intent_with_latest_qa_intent() -> None:
+    _install_langchain_and_langgraph_stubs()
+    orchestrator = importlib.import_module("graph.nodes.orchestrator")
+
+    state = {
+        "messages": [SimpleNamespace(type="human", content="What's the weather today?")],
+        "output": {},
+        "observations": [],
+        "last_action": "generate_code",
+        "orchestrator": {},
+        "agents": {
+            "executor": {"run_status": "idle"},
+            "human_review": {"before_run_decision": None, "final_decision": None},
+        },
+        "meta": {
+            "error_iterations": 0,
+            "intent": "code",  # stale from previous turn
+            "workflow_trace": ["orchestrator", "generate_code"],
+        },
+    }
+
+    updated = orchestrator.orchestrator_node(
+        state,
+        _LLM("not-json"),
+        ["qa", "generate_code", "execute_code", "end"],
+    )
+
+    assert updated["meta"].get("intent") == "qa"
+    assert updated["next_action"] == "qa"
