@@ -6,12 +6,19 @@ from ...state import AgentState, MetaKeys
 from ..node_registry import NODE_REGISTRY
 
 
-def _latest_user_message(state: AgentState) -> str:
+def _latest_user_message_obj(state: AgentState):
     messages = list(state.get("messages", []))
     for message in reversed(messages):
         if getattr(message, "type", None) == "human":
-            return str(getattr(message, "content", "") or "").strip()
-    return ""
+            return message
+    return None
+
+
+def _latest_user_message(state: AgentState) -> str:
+    message = _latest_user_message_obj(state)
+    if message is None:
+        return ""
+    return str(getattr(message, "content", "") or "").strip()
 
 
 def _has_unanswered_human_message(state: AgentState) -> bool:
@@ -38,10 +45,17 @@ def _should_end_now(state: AgentState) -> bool:
 
 
 def _user_message_hash(state: AgentState) -> str | None:
-    msg = _latest_user_message(state)
-    if not msg:
+    message = _latest_user_message_obj(state)
+    if message is None:
         return None
-    return hashlib.sha256(msg.encode()).hexdigest()[:16]
+    content = str(getattr(message, "content", "") or "").strip()
+    msg_id = str(getattr(message, "id", "") or "").strip()
+    # Use message id when available so repeated identical text still counts as
+    # a fresh turn and stale intent/state does not bleed into new requests.
+    hash_basis = f"{msg_id}:{content}" if msg_id else content
+    if not hash_basis:
+        return None
+    return hashlib.sha256(hash_basis.encode()).hexdigest()[:16]
 
 
 def _reset_for_new_turn(output: dict, agents: dict, meta: dict) -> tuple[dict, dict, dict]:
@@ -65,6 +79,8 @@ def _reset_for_new_turn(output: dict, agents: dict, meta: dict) -> tuple[dict, d
     meta.pop(MetaKeys.AWAITING_USER_CLARIFICATION, None)
     meta.pop(MetaKeys.TOOL_REQUEST_QUEUE, None)
     meta.pop(MetaKeys.LOOP_GUARD_BYPASS_ACTIONS, None)
+    # Prevent loop-guard history from bleeding into a new user turn.
+    meta.pop(MetaKeys.WORKFLOW_TRACE, None)
     meta[MetaKeys.ERROR_ITERATIONS] = 0
 
     return output, agents, meta
@@ -87,6 +103,43 @@ def _consume_regenerate_before_run(output: dict, agents: dict, meta: dict) -> tu
 
     updated_agents = dict(agents)
     updated_review = dict(review)
+    updated_review["before_run_decision"] = None
+    updated_review["approved_code_hash"] = None
+    updated_agents["human_review"] = updated_review
+
+    executor = dict((updated_agents.get("executor") or {}))
+    if executor:
+        executor["run_status"] = "idle"
+        updated_agents["executor"] = executor
+
+    return updated_output, updated_agents, updated_meta, True
+
+
+def _consume_final_review_regenerate(
+    output: dict,
+    agents: dict,
+    meta: dict,
+) -> tuple[dict, dict, dict, bool]:
+    review = (agents.get("human_review") or {}) if isinstance(agents, dict) else {}
+    if review.get("final_decision") != "regenerate":
+        return output, agents, meta, False
+
+    updated_output = dict(output)
+    updated_output.pop("generated_code", None)
+    updated_output.pop("text", None)
+    updated_output.pop("figure_png", None)
+    updated_output.pop("error", None)
+
+    updated_meta = dict(meta)
+    updated_meta.pop(MetaKeys.CURRENT_CODE_HASH, None)
+    bypass_actions = list(updated_meta.get(MetaKeys.LOOP_GUARD_BYPASS_ACTIONS, []))
+    if "generate_code" not in bypass_actions:
+        bypass_actions.append("generate_code")
+    updated_meta[MetaKeys.LOOP_GUARD_BYPASS_ACTIONS] = bypass_actions
+
+    updated_agents = dict(agents)
+    updated_review = dict(review)
+    updated_review["final_decision"] = None
     updated_review["before_run_decision"] = None
     updated_review["approved_code_hash"] = None
     updated_agents["human_review"] = updated_review

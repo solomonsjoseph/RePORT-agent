@@ -2,6 +2,10 @@ from langgraph.types import Command
 import streamlit as st
 
 
+def _dismiss_interrupt(interrupt_id):
+    st.session_state["dismissed_interrupt_id"] = str(interrupt_id)
+
+
 def ui_after_error_review(app, config, payload, interrupt_id):
     ui_type = "after_error_review"
     st.subheader("⚠️ Error Resolution Needed")
@@ -30,6 +34,7 @@ def ui_after_error_review(app, config, payload, interrupt_id):
         if not suggestion:
             st.error("Please enter feedback before continuing.")
             st.stop()
+        _dismiss_interrupt(interrupt_id)
         app.invoke(
             Command(resume={interrupt_id: {"action": "feedback", "suggestion": suggestion}}),
             config=config,

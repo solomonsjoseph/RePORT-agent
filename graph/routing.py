@@ -18,6 +18,7 @@ def _is_current_code_approved(state: AgentState) -> bool:
     return bool(approved_hash and current_hash and approved_hash == current_hash)
 
 
+
 def route_by_next_action(state: AgentState):
     next_action = state.get("next_action")
     if not next_action:
@@ -27,9 +28,9 @@ def route_by_next_action(state: AgentState):
 
     # Deterministic safety gate: never execute generated code without explicit
     # human approval captured in human_review.before_run_decision.
-    if next_action == "execute_code" and (
-        _before_run_decision(state) != "approve" or not _is_current_code_approved(state)
-    ):
-        return "human_review_before_run"
+    if next_action == "execute_code":
+        if _before_run_decision(state) != "approve" or not _is_current_code_approved(state):
+            return "human_review_before_run"
+
 
     return next_action
