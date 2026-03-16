@@ -70,7 +70,7 @@ execution_timeout = st.sidebar.slider(
     "Execution timeout (seconds)",
     min_value=5,
     max_value=120,
-    value=20,
+    value=60,
     step=5,
 )
 
@@ -424,26 +424,26 @@ analysis_ready = executor_ok and final_approved
 # QA answers should be surfaced immediately (no final human approval required).
 if qa_ready and not analysis_ready:
     st.success("Response ready")
-    st.write(output.get("qa_response"))
+    # st.write(output.get("qa_response"))
 
 if analysis_ready:
     st.success("Analysis completed")
 
-    if output.get("text"):
-        st.write("Output")
-        st.code(output["text"], language="python")
+    # if output.get("text"):
+    #     st.write("Output")
+    #     st.code(output["text"], language="python")
 
-    if output.get("generated_code"):
-        st.write("Code")
-        st.code(output["generated_code"], language="python")
-    if output.get("figure_png"):
-        st.write("Image")
-        st.image(output["figure_png"])
-        st.download_button(
-        label="⬇️ Download plot (PNG)",
-        data=output["figure_png"],
-        file_name="plot.png",
-        mime="image/png",
-        )
+    # if output.get("generated_code"):
+    #     st.write("Code")
+    #     st.code(output["generated_code"], language="python")
+    # if output.get("figure_png"):
+    #     st.write("Image")
+    #     st.image(output["figure_png"])
+    #     st.download_button(
+    #     label="⬇️ Download plot (PNG)",
+    #     data=output["figure_png"],
+    #     file_name="plot.png",
+    #     mime="image/png",
+    #     )
 
 # st.write("DEBUG chat types:", [type(m) for m in st.session_state.chat_history])
