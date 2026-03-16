@@ -332,3 +332,80 @@ def test_apply_loop_guard_allows_human_requested_generate_code_regeneration() ->
     assert fired is False
     assert action == "generate_code"
     assert observations and "bypass for human-requested action 'generate_code'" in observations[-1]
+
+
+def test_orchestrator_final_review_regenerate_routes_back_to_generate_code() -> None:
+    _install_langchain_and_langgraph_stubs()
+    orchestrator = importlib.import_module("graph.nodes.orchestrator")
+
+    state = {
+        "messages": [SimpleNamespace(type="ai", content="Please review final output")],
+        "output": {
+            "generated_code": "print('old')",
+            "text": "old output",
+            "figure_png": b"old-png",
+        },
+        "observations": [],
+        "last_action": "human_review_final",
+        "orchestrator": {"next_action": "end"},
+        "agents": {
+            "executor": {"run_status": "ok"},
+            "human_review": {
+                "before_run_decision": "approve",
+                "approved_code_hash": "abc",
+                "final_decision": "regenerate",
+            },
+        },
+        "meta": {
+            "error_iterations": 0,
+            "workflow_trace": ["orchestrator", "human_review_final"],
+            "current_code_hash": "abc",
+        },
+    }
+
+    updated = orchestrator.orchestrator_node(
+        state,
+        _LLM("not-json"),
+        ["qa", "generate_code", "execute_code", "human_review_final", "end"],
+    )
+
+    assert updated["next_action"] == "generate_code"
+    assert updated["output"].get("generated_code") is None
+    assert updated["output"].get("text") is None
+    assert updated["meta"].get("current_code_hash") is None
+    assert (updated["agents"].get("human_review") or {}).get("final_decision") is None
+    assert (updated["agents"].get("executor") or {}).get("run_status") == "idle"
+
+
+def test_orchestrator_resets_workflow_trace_on_new_user_turn() -> None:
+    _install_langchain_and_langgraph_stubs()
+    orchestrator = importlib.import_module("graph.nodes.orchestrator")
+
+    state = {
+        "messages": [SimpleNamespace(type="human", content="new request after previous loop")],
+        "output": {},
+        "observations": [],
+        "last_action": "end",
+        "orchestrator": {},
+        "agents": {
+            "executor": {"run_status": "idle"},
+            "human_review": {"before_run_decision": None, "final_decision": None},
+        },
+        "meta": {
+            "error_iterations": 0,
+            "last_user_message_hash": "old-hash",
+            "workflow_trace": [
+                "orchestrator", "execute_code", "orchestrator", "execute_code",
+                "orchestrator", "execute_code", "orchestrator", "execute_code",
+            ],
+        },
+    }
+
+    updated = orchestrator.orchestrator_node(
+        state,
+        _LLM(json.dumps({"action": "generate_code"})),
+        ["qa", "generate_code", "execute_code", "end"],
+    )
+
+    assert updated["next_action"] == "generate_code"
+    assert updated["meta"]["workflow_trace"] == ["orchestrator"]

@@ -1,0 +1,72 @@
+from __future__ import annotations
+
+import importlib
+import sys
+from types import ModuleType, SimpleNamespace
+
+
+def _install_stubs(decision: str, suggestion: str | None = None) -> None:
+    langgraph_types = ModuleType("langgraph.types")
+
+    def _interrupt(_payload):
+        data = {"action": decision}
+        if suggestion is not None:
+            data["suggestion"] = suggestion
+        return data
+
+    langgraph_types.interrupt = _interrupt
+
+    messages_mod = ModuleType("langchain_core.messages")
+
+    class _HumanMessage:
+        def __init__(self, content: str):
+            self.type = "human"
+            self.content = content
+
+    class _AIMessage:
+        def __init__(self, content: str, additional_kwargs: dict | None = None):
+            self.type = "ai"
+            self.content = content
+            self.additional_kwargs = additional_kwargs or {}
+
+    messages_mod.HumanMessage = _HumanMessage
+    messages_mod.AIMessage = _AIMessage
+    messages_mod.BaseMessage = SimpleNamespace
+
+    sys.modules["langgraph.types"] = langgraph_types
+    sys.modules["langchain_core.messages"] = messages_mod
+
+
+def test_human_review_final_only_emits_result_message_on_approve() -> None:
+    _install_stubs(decision="approve")
+    sys.modules.pop("graph.nodes.human_review_final", None)
+    mod = importlib.import_module("graph.nodes.human_review_final")
+
+    state = {
+        "messages": [],
+        "output": {"generated_code": "print(1)", "text": "ok", "figure_png": b"png"},
+        "agents": {},
+    }
+
+    updated = mod.human_review_final_node(state)
+    assert len(updated["messages"]) == 1
+    assert updated["messages"][0].type == "ai"
+    assert updated["agents"]["human_review"]["final_decision"] == "approve"
+
+
+def test_human_review_final_regenerate_skips_result_message_and_keeps_suggestion() -> None:
+    _install_stubs(decision="regenerate", suggestion="add covariates")
+    sys.modules.pop("graph.nodes.human_review_final", None)
+    mod = importlib.import_module("graph.nodes.human_review_final")
+
+    state = {
+        "messages": [],
+        "output": {"generated_code": "print(1)", "text": "ok"},
+        "agents": {},
+    }
+
+    updated = mod.human_review_final_node(state)
+    assert len(updated["messages"]) == 1
+    assert updated["messages"][0].type == "human"
+    assert updated["messages"][0].content == "add covariates"
+    assert updated["agents"]["human_review"]["final_decision"] == "regenerate"
