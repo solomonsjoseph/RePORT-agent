@@ -16,18 +16,19 @@ def human_review_final_node(state):
     output_text = output.get("text", None)
     messages = list(state.get("messages", []))
 
-    # if decision == "approve":
-    code = output.get("generated_code")
-    extra = {}
-    figure_png = output.get("figure_png", None)
-    if figure_png:
-        extra["figure_png"] = figure_png  # store raw bytes
-    ai_msg = AIMessage(content=
-                        f"Generated code:\n```python\n{code}\n```",
-                        additional_kwargs=extra)
-    if output_text:
-        ai_msg.content += f"\n\nOutput:\n```\n{output_text}\n```"
-    messages.append(ai_msg)
+    if decision == "approve":
+        code = output.get("generated_code")
+        extra = {}
+        figure_png = output.get("figure_png", None)
+        if figure_png:
+            extra["figure_png"] = figure_png  # store raw bytes
+        ai_msg = AIMessage(
+            content=f"Generated code:\n```python\n{code}\n```",
+            additional_kwargs=extra,
+        )
+        if output_text:
+            ai_msg.content += f"\n\nOutput:\n```\n{output_text}\n```"
+        messages.append(ai_msg)
 
     suggestion = feedback.get("suggestion", None)
     if suggestion:
