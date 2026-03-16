@@ -64,6 +64,20 @@ class _LLM:
         return SimpleNamespace(content=self._content)
 
 
+class _SeqLLM:
+    def __init__(self, contents: list[str]) -> None:
+        self._contents = list(contents)
+        self.calls = []
+
+    def invoke(self, messages):
+        self.calls.append(messages)
+        if self._contents:
+            content = self._contents.pop(0)
+        else:
+            content = ""
+        return SimpleNamespace(content=content)
+
+
 def test_planner_prompt_formats_with_node_capabilities() -> None:
     _install_langchain_and_langgraph_stubs()
     planner_prompt = importlib.import_module("prompts.planner_prompt")
@@ -72,6 +86,8 @@ def test_planner_prompt_formats_with_node_capabilities() -> None:
         actions="qa, generate_code",
         summary="generated_code_present=False",
         node_capabilities="- qa: answer directly",
+        ready_actions="qa",
+        blocked_actions="- generate_code",
     )
     rendered = prompt.to_messages()
 
@@ -90,7 +106,7 @@ def test_orchestrator_fallback_prefers_qa_for_concept_questions() -> None:
         "last_action": None,
         "orchestrator": {},
         "agents": {
-            "executor": {"run_status": "idle"},
+            "executor": {"run_status": "ok"},
             "human_review": {"before_run_decision": None, "final_decision": None},
         },
         "meta": {"error_iterations": 0, "workflow_trace": []},
@@ -112,7 +128,7 @@ def test_orchestrator_uses_llm_action_and_fallback_policy() -> None:
         "last_action": "qa",
         "orchestrator": {},
         "agents": {
-            "executor": {"run_status": "idle"},
+            "executor": {"run_status": "ok"},
             "human_review": {"before_run_decision": None, "final_decision": None},
         },
         "meta": {"error_iterations": 0, "workflow_trace": ["qa"]},
@@ -257,7 +273,7 @@ def test_orchestrator_regenerate_before_run_routes_back_to_generate_code() -> No
         "messages": [SimpleNamespace(type="human", content="please regenerate with smoking and TB terms")],
         "output": {"generated_code": "print('old')"},
         "observations": [],
-        "last_action": "human_review_before_run",
+        "last_action": "execute_code",
         "orchestrator": {"next_action": "execute_code"},
         "agents": {
             "executor": {"run_status": "idle"},
@@ -409,3 +425,79 @@ def test_orchestrator_resets_workflow_trace_on_new_user_turn() -> None:
 
     assert updated["next_action"] == "generate_code"
     assert updated["meta"]["workflow_trace"] == ["orchestrator"]
+
+def test_planner_two_stage_selection_uses_ranked_ready_candidate() -> None:
+    _install_langchain_and_langgraph_stubs()
+    planner = importlib.import_module("graph.nodes.orchestrator.planner")
+
+    state = {
+        "messages": [SimpleNamespace(type="human", content="continue")],
+        "output": {"generated_code": "print('x')"},
+        "agents": {
+            "executor": {"run_status": "ok"},
+            "human_review": {
+                "before_run_decision": "approve",
+                "approved_code_hash": "h1",
+                "final_decision": None,
+            },
+        },
+        "meta": {"workflow_trace": ["orchestrator"], "error_iterations": 0, "current_code_hash": "h1"},
+        "last_action": "execute_code",
+    }
+
+    llm = _SeqLLM([
+        json.dumps({
+            "action": "execute_code",
+            "ranked_actions": ["execute_code", "human_review_final"],
+            "thought": "ranking"
+        }),
+        json.dumps({"verdict": "accept", "reason": "ok"}),
+    ])
+
+    action, thought = planner.llm_select_next_action(
+        state, llm, ["generate_code", "execute_code", "human_review_final", "end"]
+    )
+
+    assert action == "human_review_final"
+    assert "ranked=" in thought
+
+
+def test_planner_lightweight_action_critic_can_correct_action() -> None:
+    _install_langchain_and_langgraph_stubs()
+    planner = importlib.import_module("graph.nodes.orchestrator.planner")
+
+    state = {
+        "messages": [SimpleNamespace(type="human", content="continue")],
+        "output": {"generated_code": "print('x')"},
+        "agents": {
+            "executor": {"run_status": "ok"},
+            "human_review": {
+                "before_run_decision": "approve",
+                "approved_code_hash": "h1",
+                "final_decision": None,
+            },
+        },
+        "meta": {"workflow_trace": ["orchestrator"], "error_iterations": 0, "current_code_hash": "h1"},
+        "last_action": "execute_code",
+    }
+
+    llm = _SeqLLM([
+        json.dumps({
+            "action": "execute_code",
+            "ranked_actions": ["execute_code"],
+            "thought": "execute"
+        }),
+        json.dumps({
+            "verdict": "reject",
+            "corrected_action": "human_review_final",
+            "reason": "needs final approval"
+        }),
+    ])
+
+    action, thought = planner.llm_select_next_action(
+        state, llm, ["generate_code", "execute_code", "human_review_final", "end"]
+    )
+
+    assert action == "human_review_final"
+    assert "critic_reason=needs final approval" in thought
+
