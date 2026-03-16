@@ -81,3 +81,24 @@ def test_route_by_next_action_allows_execute_with_matching_approval_hash() -> No
     }
 
     assert routing.route_by_next_action(state) == "execute_code"
+
+
+def test_route_by_next_action_allows_execute_after_success_when_approved() -> None:
+    _install_dependency_stubs()
+    sys.modules.pop("graph.routing", None)
+    routing = importlib.import_module("graph.routing")
+
+    state = {
+        "next_action": "execute_code",
+        "meta": {"current_code_hash": "same-hash"},
+        "agents": {
+            "executor": {"run_status": "ok"},
+            "human_review": {
+                "before_run_decision": "approve",
+                "approved_code_hash": "same-hash",
+                "final_decision": None,
+            },
+        },
+    }
+
+    assert routing.route_by_next_action(state) == "execute_code"

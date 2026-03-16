@@ -8,6 +8,7 @@ from .loop_guards import _apply_loop_guards
 from .planner import llm_select_next_action
 from .policy import _next_tool_requester, _tool_request_queue, choose_next_action
 from .state_logic import (
+    _consume_final_review_regenerate,
     _consume_regenerate_before_run,
     _reset_for_new_turn,
     _should_end_now,
@@ -52,6 +53,16 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
         orchestrator_state.pop("next_action", None)
         observations = list(state.get("observations", []))
         observations.append("orchestrator: received regenerate request; routing back to generate_code")
+        state = {**state, "observations": observations}
+
+    output, agents, meta, regenerated_final = _consume_final_review_regenerate(output, agents, meta)
+    if regenerated_final:
+        next_action = None
+        orchestrator_state.pop("next_action", None)
+        observations = list(state.get("observations", []))
+        observations.append(
+            "orchestrator: received final-review regenerate request; routing back to generate_code"
+        )
         state = {**state, "observations": observations}
 
     routing_state = {
