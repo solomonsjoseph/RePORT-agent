@@ -83,7 +83,7 @@ def test_route_by_next_action_allows_execute_with_matching_approval_hash() -> No
     assert routing.route_by_next_action(state) == "execute_code"
 
 
-def test_route_by_next_action_redirects_execute_to_final_review_after_success() -> None:
+def test_route_by_next_action_allows_execute_after_success_when_approved() -> None:
     _install_dependency_stubs()
     sys.modules.pop("graph.routing", None)
     routing = importlib.import_module("graph.routing")
@@ -101,4 +101,4 @@ def test_route_by_next_action_redirects_execute_to_final_review_after_success() 
         },
     }
 
-    assert routing.route_by_next_action(state) == "human_review_final"
+    assert routing.route_by_next_action(state) == "execute_code"
