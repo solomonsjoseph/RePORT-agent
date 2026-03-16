@@ -7,6 +7,7 @@ import io
 import requests
 # from pathlib import Path
 import uuid
+import time
 from langchain_core.messages import HumanMessage, AIMessage
 from graph.builder import build_graph
 from llm_vllm import build_llm, detect_vllm_model
@@ -14,6 +15,7 @@ from UI.ui_before_run_review import ui_before_run_review
 from UI.ui_after_error_review import ui_after_error_review
 from UI.ui_final_review import ui_final_review
 from UI.load_openai import load_openai
+from utils.run_manager import GraphRunManager
 # --------------------------
 # Streamlit Config
 # --------------------------
@@ -46,6 +48,33 @@ provider = st.sidebar.selectbox(
     index=0,
     help="Choose the model provider to use."
 )
+
+fast_mode = st.sidebar.toggle(
+    "⚡ Fast mode",
+    value=True,
+    help="Lower latency by reducing critic checks and batching workflow steps per refresh.",
+)
+show_debug_state = st.sidebar.toggle(
+    "🐛 Show debug state",
+    value=False,
+)
+max_auto_steps = st.sidebar.slider(
+    "Auto-run steps per refresh",
+    min_value=1,
+    max_value=8,
+    value=4 if fast_mode else 2,
+    help="How many graph nodes to auto-advance before repainting the UI.",
+)
+execution_timeout = st.sidebar.slider(
+    "Execution timeout (seconds)",
+    min_value=5,
+    max_value=120,
+    value=20,
+    step=5,
+)
+
+os.environ["EXECUTION_TIMEOUT_SEC"] = str(execution_timeout)
+os.environ["ORCH_CRITIC_MODE"] = "off" if fast_mode else "conditional"
 
 api_key = ""
 model_name = ""
@@ -167,6 +196,12 @@ def load_app(llm, df, schema, dataset_signature):
 llm = load_llm(model_name, temperature, top_p, base_url, api_key, provider)
 app = load_app(llm, df, schema, dataset_signature)
 
+@st.cache_resource
+def load_run_manager():
+    return GraphRunManager()
+
+run_manager = load_run_manager()
+
 with st.sidebar.expander("🐛 Debug: LLM instance", expanded=False):
     info = {"llm_type": type(llm).__name__}
 
@@ -253,12 +288,19 @@ if user_text:
     st.session_state.chat_history.append(user_message)
 
     if has_graph_state:
-        # Existing thread: submit only the new user message delta so checkpointed
-        # graph state (intent, clarifications, tool queue, trace) is preserved.
-        app.invoke({"messages": [user_message]}, config=config)
+        initial_payload = {"messages": [user_message]}
     else:
-        # New thread: seed the graph with required top-level keys once.
-        app.invoke(initial_graph_state(user_message), config=config)
+        initial_payload = initial_graph_state(user_message)
+
+    submitted = run_manager.submit(
+        thread_id=st.session_state.thread_id,
+        app=app,
+        config=config,
+        max_steps=max_auto_steps,
+        initial_payload=initial_payload,
+    )
+    if not submitted:
+        st.warning("A run is already in progress. Please wait...")
 
     st.rerun()
 
@@ -307,14 +349,12 @@ for msg in st.session_state.chat_history:
                 )
 interrupt_event = snapshot.interrupts[0] if snapshot and snapshot.interrupts else None
 
-# For DEBUGGING purpose, DO NOT delete, comment out in demo
-####
-st.write("current state values from langraph are:", state)
-st.write("Next nodes:", snapshot.next)
-st.write("interrupts:", snapshot.interrupts)
-if interrupt_event:
-    st.write("Interrupt event is:", interrupt_event)
-####
+if show_debug_state:
+    st.write("current state values from langraph are:", state)
+    st.write("Next nodes:", snapshot.next)
+    st.write("interrupts:", snapshot.interrupts)
+    if interrupt_event:
+        st.write("Interrupt event is:", interrupt_event)
 
 if interrupt_event:
     interrupt_id = interrupt_event.id
@@ -332,9 +372,21 @@ if interrupt_event:
         ui_final_review(app, config, payload, interrupt_id)
     st.stop()
 
-if snapshot and snapshot.next:
-    print("Invoking next nodes:", snapshot.next)
-    app.invoke({}, config=config)
+run_status = run_manager.status(st.session_state.thread_id)
+if run_status.get("state") == "running":
+    st.info("⏳ Working in background...")
+    time.sleep(0.25)
+    st.rerun()
+
+if snapshot and snapshot.next and not snapshot.interrupts and not run_manager.is_running(st.session_state.thread_id):
+    run_manager.submit(
+        thread_id=st.session_state.thread_id,
+        app=app,
+        config=config,
+        max_steps=max_auto_steps,
+        initial_payload=None,
+    )
+    time.sleep(0.1)
     st.rerun()
 
 # ============================================================

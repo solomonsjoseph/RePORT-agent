@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import os
 import sys
 from types import ModuleType, SimpleNamespace
 
@@ -501,3 +502,45 @@ def test_planner_lightweight_action_critic_can_correct_action() -> None:
     assert action == "human_review_final"
     assert "critic_reason=needs final approval" in thought
 
+
+def test_planner_can_skip_critic_in_fast_mode() -> None:
+    _install_langchain_and_langgraph_stubs()
+    planner = importlib.import_module("graph.nodes.orchestrator.planner")
+
+    state = {
+        "messages": [SimpleNamespace(type="human", content="continue")],
+        "output": {"generated_code": "print('x')"},
+        "agents": {
+            "executor": {"run_status": "ok"},
+            "human_review": {
+                "before_run_decision": "approve",
+                "approved_code_hash": "h1",
+                "final_decision": None,
+            },
+        },
+        "meta": {"workflow_trace": ["orchestrator"], "error_iterations": 0, "current_code_hash": "h1"},
+        "last_action": "execute_code",
+    }
+
+    llm = _SeqLLM([
+        json.dumps({
+            "action": "execute_code",
+            "ranked_actions": ["execute_code", "human_review_final"],
+            "thought": "ranking"
+        }),
+    ])
+
+    prev = os.environ.get("ORCH_CRITIC_MODE")
+    os.environ["ORCH_CRITIC_MODE"] = "off"
+    try:
+        action, thought = planner.llm_select_next_action(
+            state, llm, ["generate_code", "execute_code", "human_review_final", "end"]
+        )
+    finally:
+        if prev is None:
+            os.environ.pop("ORCH_CRITIC_MODE", None)
+        else:
+            os.environ["ORCH_CRITIC_MODE"] = prev
+
+    assert action == "human_review_final"
+    assert len(llm.calls) == 1
