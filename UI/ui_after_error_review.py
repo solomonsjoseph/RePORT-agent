@@ -1,4 +1,3 @@
-from langgraph.types import Command
 import streamlit as st
 
 
@@ -6,7 +5,7 @@ def _dismiss_interrupt(interrupt_id):
     st.session_state["dismissed_interrupt_id"] = str(interrupt_id)
 
 
-def ui_after_error_review(app, config, payload, interrupt_id):
+def ui_after_error_review(app, config, payload, interrupt_id, queue_resume):
     ui_type = "after_error_review"
     st.subheader("⚠️ Error Resolution Needed")
     st.warning("The assistant hit repeated errors while executing the code.")
@@ -35,8 +34,5 @@ def ui_after_error_review(app, config, payload, interrupt_id):
             st.error("Please enter feedback before continuing.")
             st.stop()
         _dismiss_interrupt(interrupt_id)
-        app.invoke(
-            Command(resume={interrupt_id: {"action": "feedback", "suggestion": suggestion}}),
-            config=config,
-        )
+        queue_resume(interrupt_id, {"action": "feedback", "suggestion": suggestion})
         st.rerun()

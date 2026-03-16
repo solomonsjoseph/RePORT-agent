@@ -9,6 +9,7 @@ import requests
 import uuid
 import time
 from langchain_core.messages import HumanMessage, AIMessage
+from langgraph.types import Command
 from graph.builder import build_graph
 from llm_vllm import build_llm, detect_vllm_model
 from UI.ui_before_run_review import ui_before_run_review
@@ -52,7 +53,7 @@ provider = st.sidebar.selectbox(
 fast_mode = st.sidebar.toggle(
     "⚡ Fast mode",
     value=True,
-    help="Lower latency by reducing critic checks and batching workflow steps per refresh.",
+    help="Prioritizes responsiveness: critic checks are disabled and the graph advances more steps each refresh, which can make results less conservative.",
 )
 show_debug_state = st.sidebar.toggle(
     "🐛 Show debug state",
@@ -63,7 +64,7 @@ max_auto_steps = st.sidebar.slider(
     min_value=1,
     max_value=8,
     value=4 if fast_mode else 2,
-    help="How many graph nodes to auto-advance before repainting the UI.",
+    help="Number of workflow nodes the app runs in the background before the next UI refresh. Higher values feel faster but intermediate steps may be less visible.",
 )
 execution_timeout = st.sidebar.slider(
     "Execution timeout (seconds)",
@@ -275,6 +276,12 @@ def initial_graph_state(user_message: HumanMessage) -> dict:
 snapshot = app.get_state(config)
 has_graph_state = bool(snapshot and snapshot.values)
 
+def queue_interrupt_resume(interrupt_id, payload):
+    st.session_state["pending_interrupt_resume"] = {
+        "interrupt_id": str(interrupt_id),
+        "payload": payload,
+    }
+
 st.subheader("💬 Conversation")
 
 # for msg in st.session_state.chat_history:
@@ -310,6 +317,15 @@ if user_text:
 # --------------------------------------------------
 snapshot = app.get_state(config)
 state = snapshot.values if snapshot else {}
+
+pending_resume = st.session_state.pop("pending_interrupt_resume", None)
+if pending_resume:
+    app.invoke(
+        Command(resume={pending_resume["interrupt_id"]: pending_resume["payload"]}),
+        config=config,
+    )
+    snapshot = app.get_state(config)
+    state = snapshot.values if snapshot else {}
 
 # For check workflow state, DEBUG ONLY
 with st.expander("🧭 Current workflow state", expanded=False):
@@ -371,11 +387,11 @@ if interrupt_event and str(interrupt_event.id) != dismissed_interrupt_id:
     # Review BEFORE execution
     # --------------------------------------------------------
     if ui_type == "before_run_review":
-        ui_before_run_review(app, config, payload, interrupt_id)
+        ui_before_run_review(app, config, payload, interrupt_id, queue_interrupt_resume)
     elif ui_type == "after_error_review":
-        ui_after_error_review(app, config, payload, interrupt_id)
+        ui_after_error_review(app, config, payload, interrupt_id, queue_interrupt_resume)
     elif ui_type == "final_review":
-        ui_final_review(app, config, payload, interrupt_id)
+        ui_final_review(app, config, payload, interrupt_id, queue_interrupt_resume)
     st.stop()
 
 run_status = run_manager.status(st.session_state.thread_id)
