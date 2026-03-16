@@ -1,11 +1,10 @@
-from langgraph.types import Command
 import streamlit as st
 
 
 def _dismiss_interrupt(interrupt_id):
     st.session_state["dismissed_interrupt_id"] = str(interrupt_id)
 
-def ui_before_run_review(app, config, payload, interrupt_id):
+def ui_before_run_review(app, config, payload, interrupt_id, queue_resume):
     ui_type = "before_run_review"
     st.subheader("🔍 Review Code Before Execution")
     st.code(payload["generated_code"], language="python")
@@ -29,13 +28,13 @@ def ui_before_run_review(app, config, payload, interrupt_id):
         if proceed:
             st.session_state[confirm_key] = False
             _dismiss_interrupt(interrupt_id)
-            app.invoke(Command(resume={interrupt_id: {"action": "approve"}}), config=config)
+            queue_resume(interrupt_id, {"action": "approve"})
             st.rerun()
 
         if go_regen:
             st.session_state[confirm_key] = False
             _dismiss_interrupt(interrupt_id)
-            app.invoke(Command(resume={interrupt_id: {"action": "regenerate", "suggestion": suggestion}}), config=config)
+            queue_resume(interrupt_id, {"action": "regenerate", "suggestion": suggestion})
             st.rerun()
 
         st.stop()
@@ -50,10 +49,7 @@ def ui_before_run_review(app, config, payload, interrupt_id):
             st.rerun()
         else:
             _dismiss_interrupt(interrupt_id)
-            app.invoke(
-                Command(resume={interrupt_id: {"action": "approve"}}),
-                config=config,
-            )
+            queue_resume(interrupt_id, {"action": "approve"})
             st.rerun()
     # ----------------------------
     # Regenerate: force suggestion
@@ -63,13 +59,5 @@ def ui_before_run_review(app, config, payload, interrupt_id):
             st.error("Please enter an edit instruction before regenerating.")
             st.stop()
         _dismiss_interrupt(interrupt_id)
-        app.invoke(
-            Command(resume={
-                interrupt_id: {
-                    "action": "regenerate",
-                    "suggestion": suggestion
-                }
-            }),
-            config=config
-        )
+        queue_resume(interrupt_id, {"action": "regenerate", "suggestion": suggestion})
         st.rerun()
