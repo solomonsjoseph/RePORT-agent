@@ -16,7 +16,10 @@ from UI.ui_before_run_review import ui_before_run_review
 from UI.ui_after_error_review import ui_after_error_review
 from UI.ui_final_review import ui_final_review
 from UI.load_openai import load_openai
+from UI.load_anthropic import load_anthropic
+from UI.load_gemini import load_gemini
 from utils.run_manager import GraphRunManager
+from utils.export_thread import build_thread_export
 # --------------------------
 # Streamlit Config
 # --------------------------
@@ -40,12 +43,15 @@ default_temp = 0.1
 default_api_key = ""
 default_openai_model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 default_anthropic_model = os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20240620")
+default_gemini_model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 openai_env_key = os.getenv("OPENAI_API_KEY", "")
 anthropic_env_key = os.getenv("ANTHROPIC_API_KEY", "")
+gemini_env_key = os.getenv("GOOGLE_API_KEY", os.getenv("GEMINI_API_KEY", ""))
+ANTHROPIC_API_VERSION = "2023-06-01"
 
 provider = st.sidebar.selectbox(
     "Provider",
-    ["openai", "vllm"],
+    ["openai", "anthropic", "gemini", "vllm"],
     index=0,
     help="Choose the model provider to use."
 )
@@ -93,12 +99,28 @@ def load_openai_models(effective_api_key):
 def load_anthropic_models(effective_api_key):
     headers = {
         "x-api-key": effective_api_key,
-        "anthropic-version": "2023-06-01",
+        "anthropic-version": ANTHROPIC_API_VERSION,
     }
     resp = requests.get("https://api.anthropic.com/v1/models", headers=headers, timeout=10)
     resp.raise_for_status()
     data = resp.json().get("data", [])
     model_ids = sorted({item.get("id") for item in data if item.get("id")})
+    return model_ids
+
+@st.cache_data(show_spinner=False)
+def load_gemini_models(effective_api_key):
+    resp = requests.get(
+        "https://generativelanguage.googleapis.com/v1beta/models",
+        params={"key": effective_api_key},
+        timeout=10,
+    )
+    resp.raise_for_status()
+    data = resp.json().get("models", [])
+    model_ids = sorted({
+        item.get("name", "").split("/")[-1]
+        for item in data
+        if item.get("name") and "generateContent" in item.get("supportedGenerationMethods", [])
+    })
     return model_ids
 
 if provider == "vllm":
@@ -117,6 +139,20 @@ elif provider == "openai":
         openai_env_key=openai_env_key,
         default_openai_model=default_openai_model,
         load_openai_models_fn=load_openai_models,
+    )
+elif provider == "anthropic":
+    api_key, model_name = load_anthropic(
+        default_api_key=default_api_key,
+        anthropic_env_key=anthropic_env_key,
+        default_anthropic_model=default_anthropic_model,
+        load_anthropic_models_fn=load_anthropic_models,
+    )
+elif provider == "gemini":
+    api_key, model_name = load_gemini(
+        default_api_key=default_api_key,
+        gemini_env_key=gemini_env_key,
+        default_gemini_model=default_gemini_model,
+        load_gemini_models_fn=load_gemini_models,
     )
 
 temperature = st.sidebar.slider(
@@ -346,6 +382,22 @@ with st.expander("🧭 Current workflow state", expanded=False):
 
 if state and state.get("messages"):
     st.session_state.chat_history = state["messages"]
+
+output = state.get("output", {}) if state else {}
+export_bytes = build_thread_export(
+    thread_id=st.session_state.thread_id,
+    provider=provider,
+    model_name=model_name,
+    messages=st.session_state.chat_history,
+    output=output,
+)
+st.sidebar.download_button(
+    label="💾 Save Current Thread",
+    data=export_bytes,
+    file_name=f"thread_{st.session_state.thread_id}.zip",
+    mime="application/zip",
+    help="Download this thread's conversation, generated code, output text, and figure as a ZIP archive.",
+)
 
 # Render all previous chat history
 for msg in st.session_state.chat_history:
