@@ -12,6 +12,7 @@ from .tool_routing import (
     should_route_tools,
 )
 from utils.message_window import window_messages
+from utils.llm_response import coerce_text_content
 
 
 def qa_node(state: AgentState, llm, context: str = "") -> AgentState:
@@ -119,8 +120,9 @@ def qa_node(state: AgentState, llm, context: str = "") -> AgentState:
             tool_results=format_tool_results(tool_results),
         ).to_messages()
     )
+    response_text = coerce_text_content(response.content)
     messages = list(state.get("messages", []))
-    messages.append(AIMessage(content=response.content))
+    messages.append(AIMessage(content=response_text))
 
     observations = list(state.get("observations", []))
     meta = dict(state.get("meta", {}))
@@ -130,7 +132,7 @@ def qa_node(state: AgentState, llm, context: str = "") -> AgentState:
     # This handles the case where tool routing fell through (returned neither tools
     # nor a structured clarification_question) but the LLM naturally asked for a
     # missing required field (e.g. "Which city would you like weather for?").
-    if should_attempt_tool_routing and response.content.strip().endswith("?"):
+    if should_attempt_tool_routing and response_text.strip().endswith("?"):
         meta[MetaKeys.AWAITING_USER_CLARIFICATION] = True
         meta[MetaKeys.PENDING_QUESTION] = question
         meta[MetaKeys.CLARIFICATION_RETURN_NODE] = "qa"
@@ -146,19 +148,19 @@ def qa_node(state: AgentState, llm, context: str = "") -> AgentState:
     updated_state = {
         **state,
         "messages": messages,
-        "qa_response": response.content,
+        "qa_response": response_text,
         "meta": meta,
         "observations": observations,
     }
     output = dict(updated_state.get("output") or {})
-    output["qa_response"] = response.content
+    output["qa_response"] = response_text
     updated_state["output"] = output
     return update_agent_state(
         updated_state,
         "qa",
         {
             "status": "done",
-            "response": response.content,
+            "response": response_text,
             "awaiting_tool_clarification": awaiting_tool_clarification_for_agent,
         },
     )
