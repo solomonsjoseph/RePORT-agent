@@ -15,6 +15,7 @@ from .constants import LOOP_GUARD_LOOKBACK
 from .intent import infer_intent_from_latest_user
 from .loop_guards import _count_action_in_recent_trace, _detect_two_node_cycle
 from .state_logic import _latest_user_message
+from utils.llm_response import coerce_text_content
 
 
 def _format_tool_results(state: AgentState) -> str:
@@ -199,7 +200,7 @@ def _critic_review_action(
         blocked_actions="\n".join(f"- {a}" for a in blocked_actions) if blocked_actions else "none",
     )
     response = llm.invoke(prompt.to_messages())
-    content = str(getattr(response, "content", "") or "").strip()
+    content = coerce_text_content(getattr(response, "content", "")).strip()
 
     try:
         payload = json.loads(content)
@@ -249,7 +250,7 @@ def llm_select_next_action(
     )
     planner_response = llm.invoke(planner_prompt.to_messages())
     parsed_action, thought, ranked_actions = _parse_planner_response(
-        str(getattr(planner_response, "content", "") or ""),
+        coerce_text_content(getattr(planner_response, "content", "")),
         available_actions,
     )
 
