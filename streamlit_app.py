@@ -268,12 +268,17 @@ elif st.session_state.dataset_signature != dataset_signature:
     st.session_state.dataset_signature = dataset_signature
     st.info("Detected new dataset/schema. Previous conversation is preserved. Use 'Reset Conversation' to clear history.")
     st.rerun()
-        
-# Reset conversation (keeps uploaded files)
-if st.sidebar.button("🔄 Reset Conversation"):
-    st.session_state.chat_history = []
+
+backend_signature = f"{provider}:{model_name}"
+if "backend_signature" not in st.session_state:
+    st.session_state.backend_signature = backend_signature
+elif st.session_state.backend_signature != backend_signature:
+    st.session_state.backend_signature = backend_signature
+    st.session_state.chat_history = [AIMessage(content="Hello! Ask me anything ...")]
     st.session_state.thread_id = uuid.uuid4().hex
+    st.info("Model backend changed. Started a fresh conversation thread to avoid stale orchestrator state.")
     st.rerun()
+
 # ============================================================
 # 4. Chat Input
 # ============================================================
@@ -319,6 +324,12 @@ def queue_interrupt_resume(interrupt_id, payload):
     }
 
 st.subheader("💬 Conversation")
+action_col, save_col = st.columns([1, 1])
+with action_col:
+    if st.button("🔄 Reset Conversation"):
+        st.session_state.chat_history = [AIMessage(content="Hello! Ask me anything ...")]
+        st.session_state.thread_id = uuid.uuid4().hex
+        st.rerun()
 
 # for msg in st.session_state.chat_history:
 #     with st.chat_message(
@@ -391,13 +402,14 @@ export_bytes = build_thread_export(
     messages=st.session_state.chat_history,
     output=output,
 )
-st.sidebar.download_button(
-    label="💾 Save Current Thread",
-    data=export_bytes,
-    file_name=f"thread_{st.session_state.thread_id}.zip",
-    mime="application/zip",
-    help="Download this thread's conversation, generated code, output text, and figure as a ZIP archive.",
-)
+with save_col:
+    st.download_button(
+        label="💾 Save Current Thread",
+        data=export_bytes,
+        file_name=f"thread_{st.session_state.thread_id}.zip",
+        mime="application/zip",
+        help="Download this thread's conversation, generated code, output text, and figure as a ZIP archive.",
+    )
 
 # Render all previous chat history
 for msg in st.session_state.chat_history:

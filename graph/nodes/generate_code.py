@@ -6,6 +6,7 @@ from prompts.generate_prompt import make_generate_code_prompt
 from .state_helpers import get_agent_state, update_agent_state
 from .tool_routing import format_tool_results
 from .code_guardrails import code_fingerprint, is_executable_python
+from utils.llm_response import coerce_text_content
 
 def generate_code_node(state, llm, context):
     generate_state = get_agent_state(state, "generate_code")
@@ -29,16 +30,17 @@ def generate_code_node(state, llm, context):
         }
     )
     response = llm.invoke(prompt)
-    code = extract_python_code(response.content)
+    response_text = coerce_text_content(response.content)
+    code = extract_python_code(response_text)
 
     # If the model returned guidance text (not executable Python), return that
     # guidance to the user and stop the turn rather than attempting execution.
     if not is_executable_python(code):
         msgs = list(state.get("messages", []))
-        msgs.append(AIMessage(content=response.content))
+        msgs.append(AIMessage(content=response_text))
         output = dict(state.get("output") or {})
         output["generated_code"] = ""
-        output["qa_response"] = response.content
+        output["qa_response"] = response_text
         meta = dict(state.get("meta", {}))
         # Not an interrupt: this flag marks model-driven clarification needed
         # before a new generation attempt can proceed.

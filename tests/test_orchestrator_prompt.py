@@ -235,6 +235,33 @@ def test_orchestrator_does_not_force_qa_for_non_qa_clarification_followup() -> N
     assert "awaiting_user_clarification" not in updated["meta"]
 
 
+
+
+def test_orchestrator_accepts_provider_block_content_for_planner_json() -> None:
+    _install_langchain_and_langgraph_stubs()
+    orchestrator = importlib.import_module("graph.nodes.orchestrator")
+
+    class _BlockLLM:
+        def invoke(self, messages):
+            return SimpleNamespace(content=[{"type": "text", "text": json.dumps({"action": "qa", "thought": "provider block"})}])
+
+    state = {
+        "messages": [SimpleNamespace(type="human", content="Explain regularization")],
+        "output": {},
+        "observations": [],
+        "last_action": None,
+        "orchestrator": {},
+        "agents": {
+            "executor": {"run_status": "idle"},
+            "human_review": {"before_run_decision": None, "final_decision": None},
+        },
+        "meta": {"error_iterations": 0, "workflow_trace": []},
+    }
+
+    updated = orchestrator.orchestrator_node(state, _BlockLLM(), ["qa", "generate_code", "end"])
+
+    assert updated["next_action"] == "qa"
+    assert updated["orchestrator"]["thought"] == "provider block"
 def test_orchestrator_routes_attached_data_analysis_to_generate_code() -> None:
     _install_langchain_and_langgraph_stubs()
     orchestrator = importlib.import_module("graph.nodes.orchestrator")
