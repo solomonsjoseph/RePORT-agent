@@ -3,6 +3,8 @@ import requests
 
 # Info for vllm
 
+DEFAULT_LLM_REQUEST_TIMEOUT_SEC = float(os.getenv("LLM_REQUEST_TIMEOUT_SEC", "30"))
+
 def detect_vllm_model(base_url: str) -> str:
     url = base_url.rstrip("/") + "/models"
     r = requests.get(url, timeout=5)
@@ -32,6 +34,8 @@ def build_llm(model_name, temperature, top_p, base_url, api_key, provider):
             temperature=temperature,
             top_p=top_p,
             max_tokens=4096,
+            timeout=DEFAULT_LLM_REQUEST_TIMEOUT_SEC,
+            max_retries=0,
         )
 
     if provider == "anthropic":
@@ -42,8 +46,9 @@ def build_llm(model_name, temperature, top_p, base_url, api_key, provider):
         return ChatAnthropic(
             model=model_name,
             temperature=temperature,
-            top_p=top_p,
             max_tokens=4096,
+            timeout=DEFAULT_LLM_REQUEST_TIMEOUT_SEC,
+            max_retries=0,
         )
 
     if provider == "gemini":
@@ -56,6 +61,8 @@ def build_llm(model_name, temperature, top_p, base_url, api_key, provider):
             temperature=temperature,
             top_p=top_p,
             max_output_tokens=4096,
+            timeout=DEFAULT_LLM_REQUEST_TIMEOUT_SEC,
+            max_retries=0,
         )
 
     raise ValueError(f"Unsupported provider: {provider}")
