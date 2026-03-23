@@ -81,6 +81,27 @@ def test_run_manager_prevents_duplicate_running_job() -> None:
     assert started2 is False
 
 
+def test_run_manager_reports_running_while_initial_invoke_is_blocked() -> None:
+    mgr = GraphRunManager()
+    app = _FakeApp(steps_until_done=1, invoke_delay=0.15)
+
+    started = mgr.submit(
+        thread_id="t_blocked",
+        app=app,
+        config={"configurable": {"thread_id": "t_blocked"}},
+        max_steps=1,
+        initial_payload={"messages": ["hi"]},
+    )
+
+    assert started is True
+    time.sleep(0.02)
+    assert mgr.status("t_blocked")["state"] == "running"
+
+    st = _wait_done(mgr, "t_blocked")
+    assert st["state"] == "done"
+    assert st["steps"] == 1
+
+
 def test_run_manager_stops_on_interrupt() -> None:
     mgr = GraphRunManager()
     app = _FakeApp(steps_until_done=10, interrupt_after=1)
