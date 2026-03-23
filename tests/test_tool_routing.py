@@ -160,6 +160,26 @@ def test_request_tools_returns_empty_on_invalid_json() -> None:
     assert result.clarification_question is None
 
 
+def test_request_tools_handles_anthropic_style_content_blocks() -> None:
+    tool_routing = _fresh_tool_routing()
+
+    class _AnthropicLLM:
+        def invoke(self, _messages):
+            return SimpleNamespace(
+                content=[
+                    {
+                        "type": "text",
+                        "text": '{"clarification_question": "Which city would you like weather for?"}',
+                    }
+                ]
+            )
+
+    result = tool_routing.request_tools_for_question(_AnthropicLLM(), "what's the weather today")
+
+    assert result.tool_requests == []
+    assert result.clarification_question == "Which city would you like weather for?"
+
+
 def test_format_tool_catalog_renders_required_and_optional_fields() -> None:
     tool_routing = _fresh_tool_routing()
 
