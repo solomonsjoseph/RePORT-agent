@@ -172,6 +172,8 @@ top_p = st.sidebar.number_input(
     step=0.05,
     help="Set the top-p value, lowering it increases creativity."
 )
+if provider == "anthropic":
+    st.sidebar.caption("Anthropic models in this app use temperature only; top-p is ignored.")
 
 # ============================================================
 # 1. File Upload UI
@@ -376,10 +378,14 @@ if pending_resume:
 
 # For check workflow state, DEBUG ONLY
 with st.expander("🧭 Current workflow state", expanded=False):
+    run_status = run_manager.status(st.session_state.thread_id)
     executor_state = state.get("agents", {}).get("executor", {})
     review_state = state.get("agents", {}).get("human_review", {})
     st.write(
         {
+            "background_run_state": run_status.get("state"),
+            "background_run_steps": run_status.get("steps"),
+            "background_run_error": run_status.get("error"),
             "last_action": state.get("last_action"),
             "next_action": state.get("next_action"),
             "next_nodes": list(snapshot.next or []) if snapshot else [],
@@ -463,6 +469,8 @@ if run_status.get("state") == "running":
     st.info("⏳ Working in background...")
     time.sleep(0.25)
     st.rerun()
+elif run_status.get("state") == "error":
+    st.error(f"Background workflow failed: {run_status.get('error') or 'unknown error'}")
 
 if snapshot and snapshot.next and not snapshot.interrupts and not run_manager.is_running(st.session_state.thread_id):
     run_manager.submit(
