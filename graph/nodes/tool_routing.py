@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from ..state import AgentState
+from utils.llm_response import coerce_text_content
 
 
 TOOLS_CATALOG: list[dict[str, object]] = [
@@ -213,10 +214,11 @@ def request_tools_for_question(
             recent_messages=recent_messages or [],
         ).to_messages()
     )
+    response_text = coerce_text_content(getattr(tool_response, "content", ""))
 
     try:
-        data = json.loads(tool_response.content)
-    except json.JSONDecodeError:
+        data = json.loads(response_text)
+    except (TypeError, json.JSONDecodeError):
         return ToolRoutingResult(tool_requests=[], clarification_question=None)
 
     clarification = data.get("clarification_question")
@@ -226,5 +228,5 @@ def request_tools_for_question(
             clarification_question=clarification.strip(),
         )
 
-    tool_requests = parse_tool_requests(tool_response.content, tools_catalog=tools_catalog)
+    tool_requests = parse_tool_requests(response_text, tools_catalog=tools_catalog)
     return ToolRoutingResult(tool_requests=tool_requests, clarification_question=None)
