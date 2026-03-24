@@ -23,13 +23,14 @@ from utils.export_thread import build_thread_export
 # --------------------------
 # Streamlit Config
 # --------------------------
+title = "Multi Agent for RePORT"
 st.set_page_config(
-    page_title="Multi Agent",
+    page_title=title,
     layout="wide",
 )
 
 
-st.title("Multi Agent (LangGraph)")
+st.title(title)
 
 # ============================================================
 # Sidebar UI — Model Configuration
@@ -188,6 +189,7 @@ uploaded_schema = st.file_uploader("Upload your schema (.json)", type=["json"])
 # ============================================================
 dataset_signature = "no-data"
 if uploaded_csv and uploaded_schema:
+    
     try:
         
         csv_bytes = uploaded_csv.getvalue()
