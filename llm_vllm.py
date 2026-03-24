@@ -46,7 +46,6 @@ def build_llm(model_name, temperature, top_p, base_url, api_key, provider):
         return ChatAnthropic(
             model=model_name,
             temperature=temperature,
-            top_p=top_p,
             max_tokens=4096,
             timeout=DEFAULT_LLM_REQUEST_TIMEOUT_SEC,
             max_retries=0,
