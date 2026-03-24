@@ -1,8 +1,9 @@
 import io
 import os
+import pickle
+import subprocess
 import sys
-import multiprocessing
-from multiprocessing.connection import Connection
+import tempfile
 import pandas as pd
 import numpy as np
 from lifelines import KaplanMeierFitter, CoxPHFitter
@@ -64,19 +65,6 @@ def _execute_user_code(code: str, df: pd.DataFrame):
 
     return result, stdout, figure_png, error
 
-
-def _subprocess_worker(code: str, df: pd.DataFrame, conn: Connection):
-    result, stdout, figure_png, error = _execute_user_code(code, df)
-    conn.send(
-        {
-            "result": result,
-            "stdout": stdout,
-            "figure_png": figure_png,
-            "error": error,
-        }
-    )
-    conn.close()
-
 def run_python_user(code: str, df: pd.DataFrame):
     """Execute user code quietly and return structured errors."""
 
@@ -85,30 +73,44 @@ def run_python_user(code: str, df: pd.DataFrame):
         return _execute_user_code(code, df)
 
     timeout_seconds = float(os.getenv("EXECUTION_TIMEOUT_SEC", "20"))
-    parent_conn, child_conn = multiprocessing.Pipe(duplex=False)
-    process = multiprocessing.Process(
-        target=_subprocess_worker,
-        args=(code, df, child_conn),
-        daemon=True,
-    )
-    process.start()
-    process.join(timeout=timeout_seconds)
+    with tempfile.TemporaryDirectory(prefix="report-agent-exec-") as tmpdir:
+        input_path = os.path.join(tmpdir, "input.pkl")
+        output_path = os.path.join(tmpdir, "output.pkl")
 
-    if process.is_alive():
-        process.terminate()
-        process.join()
-        return None, "", b"", {
-            "type": "TimeoutError",
-            "message": f"Execution exceeded {timeout_seconds:.0f}s sandbox timeout.",
-        }
+        with open(input_path, "wb") as f:
+            pickle.dump({"code": code, "df": df}, f)
 
-    if not parent_conn.poll():
-        return None, "", b"", {
-            "type": "ExecutionError",
-            "message": "Sandboxed execution failed to return a result.",
-        }
+        command = [sys.executable, "-m", "tools.execution_worker", input_path, output_path]
+        try:
+            completed = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=timeout_seconds,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            return None, "", b"", {
+                "type": "TimeoutError",
+                "message": f"Execution exceeded {timeout_seconds:.0f}s sandbox timeout.",
+            }
 
-    payload = parent_conn.recv()
+        if completed.returncode != 0:
+            stderr = (completed.stderr or "").strip()
+            return None, "", b"", {
+                "type": "ExecutionError",
+                "message": stderr or "Sandboxed execution failed to return a result.",
+            }
+
+        if not os.path.exists(output_path):
+            return None, "", b"", {
+                "type": "ExecutionError",
+                "message": "Sandboxed execution failed to return a result.",
+            }
+
+        with open(output_path, "rb") as f:
+            payload = pickle.load(f)
+
     return (
         payload.get("result"),
         payload.get("stdout", ""),

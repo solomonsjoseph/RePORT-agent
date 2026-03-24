@@ -4,6 +4,7 @@ import json
 import os
 import hashlib
 import io
+import tempfile
 import requests
 # from pathlib import Path
 import uuid
@@ -229,9 +230,10 @@ def load_llm(model_name, temperature, top_p, base_url, api_key, provider):
                      provider = provider)
 
 @st.cache_resource
+# db_path = '/projects/f_wj183_1/reflib/report-agent_db/agent_memory.db'
 def load_app(llm, df, schema, dataset_signature):
-    return build_graph(llm, df, schema, 
-                       db_path='/projects/f_wj183_1/reflib/report-agent_db/agent_memory.db')
+    db_path = os.path.join(tempfile.gettempdir(), "report-agent", "agent_memory.db")
+    return build_graph(llm, df, schema, db_path=db_path)
 
 
 llm = load_llm(model_name, temperature, top_p, base_url, api_key, provider)
@@ -318,6 +320,29 @@ def initial_graph_state(user_message: HumanMessage) -> dict:
         "meta": {"error_iterations": 0, "workflow_trace": []},
     }
 
+
+def next_turn_payload(user_message: HumanMessage) -> dict:
+    """Clear transient execution artifacts before processing a fresh user turn."""
+    return {
+        "messages": [user_message],
+        "output": {},
+        "next_action": None,
+        "last_action": None,
+        "observations": [],
+        "orchestrator": {},
+        "agents": {
+            "executor": {"run_status": "idle"},
+            "human_review": {
+                "before_run_decision": None,
+                "after_error_decision": None,
+                "final_decision": None,
+            },
+            "qa": {},
+            "generate_code": {},
+        },
+        "meta": {"error_iterations": 0, "workflow_trace": []},
+    }
+
 snapshot = app.get_state(config)
 has_graph_state = bool(snapshot and snapshot.values)
 
@@ -328,39 +353,11 @@ def queue_interrupt_resume(interrupt_id, payload):
     }
 
 st.subheader("💬 Conversation")
-action_col, save_col = st.columns([1, 1])
-with action_col:
-    if st.button("🔄 Reset Conversation"):
-        st.session_state.chat_history = [AIMessage(content="Hello! Ask me anything ...")]
-        st.session_state.thread_id = uuid.uuid4().hex
-        st.rerun()
-
 # for msg in st.session_state.chat_history:
 #     with st.chat_message(
 #         "user" if isinstance(msg, HumanMessage) else "assistant"
 #     ):
 #         st.markdown(msg.content)
-user_text = st.chat_input("Ask a question about your dataset!")
-if user_text:
-    user_message = HumanMessage(content=user_text)
-    st.session_state.chat_history.append(user_message)
-
-    if has_graph_state:
-        initial_payload = {"messages": [user_message]}
-    else:
-        initial_payload = initial_graph_state(user_message)
-
-    submitted = run_manager.submit(
-        thread_id=st.session_state.thread_id,
-        app=app,
-        config=config,
-        max_steps=max_auto_steps,
-        initial_payload=initial_payload,
-    )
-    if not submitted:
-        st.warning("A run is already in progress. Please wait...")
-
-    st.rerun()
 
 
 # --------------------------------------------------
@@ -402,7 +399,10 @@ with st.expander("🧭 Current workflow state", expanded=False):
 if state and state.get("messages"):
     st.session_state.chat_history = state["messages"]
 
-output = state.get("output", {}) if state else {}
+latest_chat_is_human = bool(st.session_state.chat_history) and isinstance(
+    st.session_state.chat_history[-1], HumanMessage
+)
+output = {} if latest_chat_is_human else (state.get("output", {}) if state else {})
 export_bytes = build_thread_export(
     thread_id=st.session_state.thread_id,
     provider=provider,
@@ -410,14 +410,10 @@ export_bytes = build_thread_export(
     messages=st.session_state.chat_history,
     output=output,
 )
-with save_col:
-    st.download_button(
-        label="💾 Save Current Thread",
-        data=export_bytes,
-        file_name=f"thread_{st.session_state.thread_id}.zip",
-        mime="application/zip",
-        help="Download this thread's conversation, generated code, output text, and figure as a ZIP archive.",
-    )
+executor_ok = state.get("agents", {}).get("executor", {}).get("run_status") == "ok" if state else False
+final_approved = state.get("agents", {}).get("human_review", {}).get("final_decision") == "approve" if state else False
+qa_ready = bool(output.get("qa_response"))
+analysis_ready = executor_ok and final_approved
 
 # Render all previous chat history
 for msg in st.session_state.chat_history:
@@ -435,8 +431,10 @@ for msg in st.session_state.chat_history:
                     mime="image/png",
                     key=f"dl_{id(msg)}",
                 )
+
 interrupt_event = snapshot.interrupts[0] if snapshot and snapshot.interrupts else None
 dismissed_interrupt_id = str(st.session_state.get("dismissed_interrupt_id", "") or "")
+review_state = state.get("agents", {}).get("human_review", {}) if state else {}
 
 # Clear stale dismissal marker once there is no active interrupt.
 if not interrupt_event and dismissed_interrupt_id:
@@ -450,21 +448,30 @@ if show_debug_state:
     if interrupt_event:
         st.write("Interrupt event is:", interrupt_event)
 
+should_render_interrupt = False
 if interrupt_event and str(interrupt_event.id) != dismissed_interrupt_id:
     interrupt_id = interrupt_event.id
     payload = interrupt_event.value
     ui_type = payload["type"]
+    if ui_type == "before_run_review":
+        should_render_interrupt = review_state.get("before_run_decision") is None
+    elif ui_type == "after_error_review":
+        should_render_interrupt = review_state.get("after_error_decision") is None
+    elif ui_type == "final_review":
+        should_render_interrupt = review_state.get("final_decision") is None
+    else:
+        should_render_interrupt = True
 
     # --------------------------------------------------------
     # Review BEFORE execution
     # --------------------------------------------------------
+if should_render_interrupt:
     if ui_type == "before_run_review":
         ui_before_run_review(app, config, payload, interrupt_id, queue_interrupt_resume)
     elif ui_type == "after_error_review":
         ui_after_error_review(app, config, payload, interrupt_id, queue_interrupt_resume)
     elif ui_type == "final_review":
         ui_final_review(app, config, payload, interrupt_id, queue_interrupt_resume)
-    st.stop()
 
 run_status = run_manager.status(st.session_state.thread_id)
 if run_status.get("state") == "running":
@@ -485,39 +492,57 @@ if snapshot and snapshot.next and not snapshot.interrupts and not run_manager.is
     time.sleep(0.1)
     st.rerun()
 
-# ============================================================
-# Final Output
-# ============================================================
-
-output = state.get("output", {}) if state else {}
-executor_ok = state.get("agents", {}).get("executor", {}).get("run_status") == "ok" if state else False
-final_approved = state.get("agents", {}).get("human_review", {}).get("final_decision") == "approve" if state else False
-qa_ready = bool(output.get("qa_response"))
-analysis_ready = executor_ok and final_approved
-
-# QA answers should be surfaced immediately (no final human approval required).
 if qa_ready and not analysis_ready:
     st.success("Response ready")
-    # st.write(output.get("qa_response"))
 
 if analysis_ready:
     st.success("Analysis completed")
 
-    # if output.get("text"):
-    #     st.write("Output")
-    #     st.code(output["text"], language="python")
+with st.container():
+    with st.form("question_form", clear_on_submit=True):
+        user_text = st.text_input(
+            "Ask a question about your dataset!",
+            placeholder="Ask a question about your dataset!",
+            label_visibility="collapsed",
+        )
+        submitted_question = st.form_submit_button("Send")
 
-    # if output.get("generated_code"):
-    #     st.write("Code")
-    #     st.code(output["generated_code"], language="python")
-    # if output.get("figure_png"):
-    #     st.write("Image")
-    #     st.image(output["figure_png"])
-    #     st.download_button(
-    #     label="⬇️ Download plot (PNG)",
-    #     data=output["figure_png"],
-    #     file_name="plot.png",
-    #     mime="image/png",
-    #     )
+    action_col, save_col = st.columns([1, 1])
+    with action_col:
+        if st.button("🔄 Reset Conversation"):
+            st.session_state.chat_history = [AIMessage(content="Hello! Ask me anything ...")]
+            st.session_state.thread_id = uuid.uuid4().hex
+            st.rerun()
+    with save_col:
+        st.download_button(
+            label="💾 Save Current Thread",
+            data=export_bytes,
+            file_name=f"thread_{st.session_state.thread_id}.zip",
+            mime="application/zip",
+            key="save_current_thread_bottom",
+            help="Download this thread's conversation, generated code, output text, and figure as a ZIP archive.",
+        )
 
-# st.write("DEBUG chat types:", [type(m) for m in st.session_state.chat_history])
+if submitted_question and user_text:
+    user_message = HumanMessage(content=user_text)
+    st.session_state.chat_history.append(user_message)
+
+    if has_graph_state:
+        initial_payload = next_turn_payload(user_message)
+    else:
+        initial_payload = initial_graph_state(user_message)
+
+    submitted = run_manager.submit(
+        thread_id=st.session_state.thread_id,
+        app=app,
+        config=config,
+        max_steps=max_auto_steps,
+        initial_payload=initial_payload,
+    )
+    if not submitted:
+        st.warning("A run is already in progress. Please wait...")
+
+    st.rerun()
+
+if should_render_interrupt:
+    st.stop()
