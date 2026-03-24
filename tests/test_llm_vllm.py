@@ -34,8 +34,8 @@ def test_build_llm_passes_timeout_and_retries_to_anthropic(monkeypatch) -> None:
 
     assert captured["model"] == "claude-test"
     assert captured["temperature"] == 0.2
-    assert captured["top_p"] == 0.8
     assert captured["max_tokens"] == 4096
     assert captured["timeout"] == 17.0
     assert captured["max_retries"] == 0
+    assert "top_p" not in captured
     assert os.environ["ANTHROPIC_API_KEY"] == "secret"

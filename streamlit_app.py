@@ -173,6 +173,8 @@ top_p = st.sidebar.number_input(
     step=0.05,
     help="Set the top-p value, lowering it increases creativity."
 )
+if provider == "anthropic":
+    st.sidebar.caption("Anthropic models in this app use temperature only; top-p is ignored.")
 
 # ============================================================
 # 1. File Upload UI
