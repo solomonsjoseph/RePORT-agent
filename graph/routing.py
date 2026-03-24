@@ -34,3 +34,11 @@ def route_by_next_action(state: AgentState):
 
 
     return next_action
+
+
+def route_after_final_review(state: AgentState):
+    agents = state.get("agents", {})
+    review = agents.get("human_review", {}) if isinstance(agents, dict) else {}
+    if review.get("final_decision") == "approve":
+        return END
+    return "orchestrator"

@@ -6,6 +6,19 @@ from datetime import datetime, timezone
 from langchain_core.messages import AIMessage, HumanMessage
 
 
+def _json_safe(value):
+    if isinstance(value, bytes):
+        return {
+            "type": "bytes",
+            "size": len(value),
+        }
+    if isinstance(value, dict):
+        return {key: _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    return value
+
+
 def _message_role(message):
     if isinstance(message, HumanMessage):
         return "human"
@@ -22,7 +35,9 @@ def serialize_messages(messages):
                 "index": index,
                 "role": _message_role(message),
                 "content": message.content,
-                "additional_kwargs": dict(getattr(message, "additional_kwargs", {}) or {}),
+                "additional_kwargs": _json_safe(
+                    dict(getattr(message, "additional_kwargs", {}) or {})
+                ),
             }
         )
     return serialized
