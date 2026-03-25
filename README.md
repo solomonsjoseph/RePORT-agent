@@ -25,3 +25,29 @@ usable.
 Tool integrations are under active development and may change frequently. The
 documentation intentionally omits tool-specific setup details until the
 interface stabilizes.
+
+## Setup
+
+### Clone the repository
+```bash
+git clone -b dev-test-macOS --single-branch https://github.com/xutao-wang/RePORT-agent.git
+```
+
+### Create and activate a Python virtual environment
+```bash
+python -m venv .venv
+source .venv/bin/activate
+```
+
+### Install required packages
+```bash
+cd RePORT-agent
+pip install -r requirements.txt
+```
+
+### Run the app
+```bash
+python -m streamlit run streamlit_app.py
+```
+
+Demo data are included in `demo.zip`.
