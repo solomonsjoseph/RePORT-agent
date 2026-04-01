@@ -24,7 +24,7 @@ from utils.export_thread import build_thread_export
 # --------------------------
 # Streamlit Config
 # --------------------------
-title = "Multi Agent for RePORT"
+title = "Multi-Agent for RePORT"
 st.set_page_config(
     page_title=title,
     layout="wide",
@@ -376,25 +376,25 @@ if pending_resume:
     state = snapshot.values if snapshot else {}
 
 # For check workflow state, DEBUG ONLY
-with st.expander("🧭 Current workflow state", expanded=False):
-    run_status = run_manager.status(st.session_state.thread_id)
-    executor_state = state.get("agents", {}).get("executor", {})
-    review_state = state.get("agents", {}).get("human_review", {})
-    st.write(
-        {
-            "background_run_state": run_status.get("state"),
-            "background_run_steps": run_status.get("steps"),
-            "background_run_error": run_status.get("error"),
-            "last_action": state.get("last_action"),
-            "next_action": state.get("next_action"),
-            "next_nodes": list(snapshot.next or []) if snapshot else [],
-            "executor_run_status": executor_state.get("run_status"),
-            "before_run_decision": review_state.get("before_run_decision"),
-            "after_error_decision": review_state.get("after_error_decision"),
-            "final_decision": review_state.get("final_decision"),
-            "workflow_trace_tail": list(state.get("meta", {}).get("workflow_trace", []))[-12:],
-        }
-    )
+# with st.expander("🧭 Current workflow state", expanded=False):
+#     run_status = run_manager.status(st.session_state.thread_id)
+#     executor_state = state.get("agents", {}).get("executor", {})
+#     review_state = state.get("agents", {}).get("human_review", {})
+#     st.write(
+#         {
+#             "background_run_state": run_status.get("state"),
+#             "background_run_steps": run_status.get("steps"),
+#             "background_run_error": run_status.get("error"),
+#             "last_action": state.get("last_action"),
+#             "next_action": state.get("next_action"),
+#             "next_nodes": list(snapshot.next or []) if snapshot else [],
+#             "executor_run_status": executor_state.get("run_status"),
+#             "before_run_decision": review_state.get("before_run_decision"),
+#             "after_error_decision": review_state.get("after_error_decision"),
+#             "final_decision": review_state.get("final_decision"),
+#             "workflow_trace_tail": list(state.get("meta", {}).get("workflow_trace", []))[-12:],
+#         }
+#     )
 
 if state and state.get("messages"):
     st.session_state.chat_history = state["messages"]
