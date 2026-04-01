@@ -31,6 +31,7 @@ interface stabilizes.
 ### Clone the repository
 ```bash
 git clone -b dev-test-macOS --single-branch https://github.com/xutao-wang/RePORT-agent.git
+cd RePORT-agent
 ```
 
 ### Create and activate a Python virtual environment
@@ -41,7 +42,6 @@ source .venv/bin/activate
 
 ### Install required packages
 ```bash
-cd RePORT-agent
 pip install -r requirements.txt
 ```
 
@@ -50,4 +50,4 @@ pip install -r requirements.txt
 python -m streamlit run streamlit_app.py
 ```
 
-Demo data are included in `demo.zip`.
+Synthetic demo data are included under `data` folder.

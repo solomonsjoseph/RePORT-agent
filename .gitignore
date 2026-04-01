@@ -8,3 +8,5 @@ __pycache__/
 .streamlit/secrets.toml
 report-env/
 .venv/
+.DS_Store
+data/.DS_Store

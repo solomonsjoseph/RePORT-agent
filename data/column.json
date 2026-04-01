@@ -1,0 +1,67 @@
+{
+    "subject_id": {
+        "description": "A unique numerical identifier assigned to each individual subject in the study.",
+        "dataType": "Integer",
+        "notes": "Primary identifier."
+    },
+    "sex": {
+        "description": "The biological sex of the subject.",
+        "dataType": "Categorical String",
+        "notes": "Values: 'Male', 'Female'."
+    },
+    "age": {
+        "description": "The age of the subject in years.",
+        "dataType": "Integer",
+        "notes": "Age at the time of the study/diagnosis."
+    },
+    "is_smoke": {
+        "description": "Indicates if the subject is a current smoker.",
+        "dataType": "Boolean String",
+        "notes": "Values: 'Yes', 'No'."
+    },
+    "ever_had_active_tb": {
+        "description": "Indicates if the subject has a prior history of active tuberculosis before the current observation period.",
+        "dataType": "Boolean String",
+        "notes": "Values: 'Yes', 'No'."
+    },
+    "is_hiv_positive": {
+        "description": "Indicates if the subject is positive for the Human Immunodeficiency Virus (HIV).",
+        "dataType": "Boolean String",
+        "notes": "Values: 'Yes', 'No'."
+    },
+    "has_diabetes": {
+        "description": "Indicates if the subject has a diagnosis of diabetes.",
+        "dataType": "Boolean String",
+        "notes": "Values: 'Yes', 'No'."
+    },
+    "tb_status": {
+        "description": "The current tuberculosis diagnosis status of the subject.",
+        "dataType": "Categorical String",
+        "notes": "Values: 'Active TB', 'LTBI' (Latent TB Infection), or 'TB Negative'."
+    },
+    "tb_site": {
+        "description": "The anatomical location of the TB infection.",
+        "dataType": "Categorical String",
+        "notes": "Values: 'Pulmonary', 'Extrapulmonary', or 'N/A' if tb_status is not 'Active TB'."
+    },
+    "treatment_adherence": {
+        "description": "The subject's adherence level to the prescribed TB treatment regimen.",
+        "dataType": "Categorical String",
+        "notes": "Values may include 'Good', 'Moderate', 'Poor', or 'N/A' if no treatment was administered."
+    },
+    "relapsed": {
+        "description": "Binary outcome indicating if the subject experienced a TB relapse after treatment completion.",
+        "dataType": "Boolean String",
+        "notes": "Values: 'Yes', 'No', or 'N/A' if the subject was not treated for Active TB."
+    },
+    "event_relapse": {
+        "description": "The event indicator for survival analysis. $1.0$ indicates a relapse event, $0.0$ indicates the subject was censored (no relapse observed) at the time of follow-up.",
+        "dataType": "Float",
+        "notes": "Relevant primarily for subjects who completed treatment for Active TB."
+    },
+    "time_to_relapse": {
+        "description": "The duration, in months, from treatment completion to either the date of relapse or the end of the follow-up period (censoring).",
+        "dataType": "Float",
+        "notes": "Time variable for survival analysis. Relevant primarily for subjects who completed treatment for Active TB."
+    }
+}
