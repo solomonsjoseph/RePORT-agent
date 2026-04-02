@@ -169,12 +169,26 @@ def _select_ranked_candidate(
         if candidate not in available:
             continue
         if candidate == "end" and not ready_actions:
-            return candidate, False
+            continue
         if candidate in ready:
             return candidate, False
 
+    # If the planner supplied ranked semantic candidates but no action is
+    # currently "ready" under deterministic heuristics, prefer the best
+    # available non-end ranked action instead of collapsing to END. This keeps
+    # the planner useful in ambiguous QA/code cases when intent inference is
+    # underspecified, while invariant/safety transitions are still enforced
+    # elsewhere in the orchestrator.
+    if not ready_actions:
+        for candidate in ordered:
+            if candidate in available and candidate != "end":
+                return candidate, False
+
     if ready_actions:
         return ready_actions[0], True
+
+    if "end" in ordered:
+        return "end", False
 
     if parsed_action in available:
         return parsed_action, False

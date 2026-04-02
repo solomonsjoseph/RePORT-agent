@@ -39,6 +39,9 @@ class MetaKeys:
     PENDING_QUESTION = "pending_question"
     # Which node should receive control when the user answers the clarification.
     CLARIFICATION_RETURN_NODE = "clarification_return_node"
+    # The clarification workflow kind, used by the clarification node to resume
+    # the correct subworkflow.
+    CLARIFICATION_KIND = "clarification_kind"
     # One-shot list of actions allowed to bypass loop guards after explicit
     # human instruction (e.g., regenerate code in review).
     LOOP_GUARD_BYPASS_ACTIONS = "loop_guard_bypass_actions"

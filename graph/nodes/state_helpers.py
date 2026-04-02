@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+from ..state import MetaKeys
 
 
 def get_agent_state(state: dict, agent_name: str) -> dict[str, Any]:
@@ -37,3 +38,28 @@ def enqueue_tool_requester(state: dict, agent_name: str) -> dict[str, Any]:
         **state,
         "meta": meta,
     }
+
+
+def clear_clarification_meta(meta: dict[str, Any] | None) -> dict[str, Any]:
+    updated = dict(meta or {})
+    updated.pop(MetaKeys.AWAITING_USER_CLARIFICATION, None)
+    updated.pop(MetaKeys.PENDING_QUESTION, None)
+    updated.pop(MetaKeys.CLARIFICATION_RETURN_NODE, None)
+    updated.pop(MetaKeys.CLARIFICATION_KIND, None)
+    return updated
+
+
+def set_clarification_meta(
+    meta: dict[str, Any] | None,
+    *,
+    return_node: str,
+    kind: str,
+    pending_question: str | None = None,
+) -> dict[str, Any]:
+    updated = dict(meta or {})
+    updated[MetaKeys.AWAITING_USER_CLARIFICATION] = True
+    updated[MetaKeys.CLARIFICATION_RETURN_NODE] = return_node
+    updated[MetaKeys.CLARIFICATION_KIND] = kind
+    if pending_question is not None:
+        updated[MetaKeys.PENDING_QUESTION] = pending_question
+    return updated

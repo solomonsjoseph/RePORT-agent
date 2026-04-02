@@ -4,7 +4,13 @@ from langchain_core.messages import AIMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 from ..state import AgentState, MetaKeys
-from .state_helpers import enqueue_tool_requester, get_agent_state, update_agent_state
+from .state_helpers import (
+    clear_clarification_meta,
+    enqueue_tool_requester,
+    get_agent_state,
+    set_clarification_meta,
+    update_agent_state,
+)
 from .tool_routing import (
     format_tool_results,
     latest_user_message,
@@ -15,39 +21,50 @@ from utils.message_window import window_messages
 from utils.llm_response import coerce_text_content
 
 
-def qa_node(state: AgentState, llm, context: str = "") -> AgentState:
+def _replace_latest_human_message(messages: list, content: str) -> list:
+    updated_messages = list(messages)
+    for idx in range(len(updated_messages) - 1, -1, -1):
+        message = updated_messages[idx]
+        if getattr(message, "type", None) != "human":
+            continue
+        updated_messages[idx] = message.__class__(content=content)
+        return updated_messages
+    return updated_messages
+
+
+def qa_node(
+    state: AgentState,
+    llm,
+    context: str = "",
+    question_override: str | None = None,
+) -> AgentState:
     qa_state = get_agent_state(state, "qa")
-    question = latest_user_message(state)
+    question = question_override if question_override is not None else latest_user_message(state)
     tool_requests = list(qa_state.get("tool_requests", []))
     tool_results = list(qa_state.get("tool_results", []))
-    awaiting_tool_clarification = bool(qa_state.get("awaiting_tool_clarification"))
+    prompt_messages = (
+        _replace_latest_human_message(list(state.get("messages", [])), question)
+        if question_override is not None
+        else list(state.get("messages", []))
+    )
 
-    should_attempt_tool_routing = should_route_tools(question) or awaiting_tool_clarification
+    should_attempt_tool_routing = should_route_tools(question)
 
     if question and not tool_results and not tool_requests and should_attempt_tool_routing:
-          # If there is a stored pending question (original request before a
-        # clarification round), merge it with the user's follow-up so the tool
-        # routing LLM receives unambiguous context instead of a bare answer.
-        pending_question = (state.get("meta") or {}).get(MetaKeys.PENDING_QUESTION)
-        if pending_question:
-            effective_question = f"{pending_question}\n\nUser clarification: {question}"
-            recent_msgs = window_messages(state.get("messages", []), max_turns=5)
-        else:
-            effective_question = question
-            recent_msgs = window_messages(state.get("messages", []), max_turns=3)
- 
+        effective_question = question
+        recent_msgs = window_messages(prompt_messages, max_turns=3)
+
         routing_result = request_tools_for_question(llm, effective_question, recent_messages=recent_msgs)
         # Clarification needed — required tool field is missing and can't be inferred.
         if routing_result.clarification_question:
             messages = list(state.get("messages", []))
             messages.append(AIMessage(content=routing_result.clarification_question))
-            meta = dict(state.get("meta", {}))
-
-            meta[MetaKeys.AWAITING_USER_CLARIFICATION] = True
-            # Store the original request and who handles the answer so the
-            # orchestrator can route back without a full new-turn reset.
-            meta[MetaKeys.PENDING_QUESTION] = effective_question
-            meta[MetaKeys.CLARIFICATION_RETURN_NODE] = "qa"
+            meta = set_clarification_meta(
+                state.get("meta", {}),
+                return_node="qa",
+                kind="qa_tool",
+                pending_question=effective_question,
+            )
             output = dict(state.get("output") or {})
             output["qa_response"] = routing_result.clarification_question
             observations = list(state.get("observations", []))
@@ -70,9 +87,7 @@ def qa_node(state: AgentState, llm, context: str = "") -> AgentState:
 
         # Tool(s) identified — clear pending clarification state and enqueue.
         if routing_result.tool_requests:
-            meta = dict(state.get("meta") or {})
-            meta.pop(MetaKeys.PENDING_QUESTION, None)
-            meta.pop(MetaKeys.CLARIFICATION_RETURN_NODE, None)
+            meta = clear_clarification_meta(state.get("meta") or {})
             observations = list(state.get("observations", []))
             observations.append("qa: requested tools")
             updated_state = enqueue_tool_requester(
@@ -93,7 +108,7 @@ def qa_node(state: AgentState, llm, context: str = "") -> AgentState:
                 },
             )
 
-    windowed = window_messages(state.get("messages", []), max_turns=10)
+    windowed = window_messages(prompt_messages, max_turns=10)
     prompt = ChatPromptTemplate.from_messages(
         [
             (
@@ -132,16 +147,19 @@ def qa_node(state: AgentState, llm, context: str = "") -> AgentState:
     # This handles the case where tool routing fell through (returned neither tools
     # nor a structured clarification_question) but the LLM naturally asked for a
     # missing required field (e.g. "Which city would you like weather for?").
-    if should_attempt_tool_routing and response_text.strip().endswith("?"):
-        meta[MetaKeys.AWAITING_USER_CLARIFICATION] = True
-        meta[MetaKeys.PENDING_QUESTION] = question
-        meta[MetaKeys.CLARIFICATION_RETURN_NODE] = "qa"
+    if response_text.strip().endswith("?"):
+        clarification_kind = "qa_tool" if should_attempt_tool_routing else "qa_followup"
+        meta = set_clarification_meta(
+            meta,
+            return_node="qa",
+            kind=clarification_kind,
+            pending_question=question,
+        )
         awaiting_tool_clarification_for_agent = True
         observations.append("qa: asked clarification (llm path)")
     else:
+        meta = clear_clarification_meta(meta)
         meta.pop(MetaKeys.INTENT, None)
-        meta.pop(MetaKeys.PENDING_QUESTION, None)
-        meta.pop(MetaKeys.CLARIFICATION_RETURN_NODE, None)
         awaiting_tool_clarification_for_agent = False
         observations.append("qa: responded to user question")
 

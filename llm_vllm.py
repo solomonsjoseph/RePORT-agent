@@ -1,9 +1,33 @@
 import os
 import requests
+from utils.openai_models import is_openai_gpt5_family
 
 # Info for vllm
 
-DEFAULT_LLM_REQUEST_TIMEOUT_SEC = float(os.getenv("LLM_REQUEST_TIMEOUT_SEC", "30"))
+DEFAULT_LLM_REQUEST_TIMEOUT_SEC = float(os.getenv("LLM_REQUEST_TIMEOUT_SEC", "60"))
+
+def _openai_chat_kwargs(model_name, temperature, top_p):
+    kwargs = {
+        "model": model_name,
+        "timeout": DEFAULT_LLM_REQUEST_TIMEOUT_SEC,
+        "max_retries": 0,
+    }
+
+    # GPT-5 family models do not share the same sampling parameter support as
+    # GPT-4o-style chat models. Keep the request conservative to avoid 400s
+    # from unsupported parameters such as top_p.
+    if is_openai_gpt5_family(model_name):
+        kwargs["max_completion_tokens"] = 4096
+        return kwargs
+
+    kwargs.update(
+        {
+            "temperature": temperature,
+            "top_p": top_p,
+            "max_tokens": 4096,
+        }
+    )
+    return kwargs
 
 def detect_vllm_model(base_url: str) -> str:
     url = base_url.rstrip("/") + "/models"
@@ -29,14 +53,7 @@ def build_llm(model_name, temperature, top_p, base_url, api_key, provider):
 
         if api_key:
             os.environ["OPENAI_API_KEY"] = api_key
-        return ChatOpenAI(
-            model=model_name,
-            temperature=temperature,
-            top_p=top_p,
-            max_tokens=4096,
-            timeout=DEFAULT_LLM_REQUEST_TIMEOUT_SEC,
-            max_retries=0,
-        )
+        return ChatOpenAI(**_openai_chat_kwargs(model_name, temperature, top_p))
 
     if provider == "anthropic":
         from langchain_anthropic import ChatAnthropic

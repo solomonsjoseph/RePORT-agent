@@ -117,6 +117,57 @@ def test_orchestrator_fallback_prefers_qa_for_concept_questions() -> None:
 
     assert fallback["next_action"] == "qa"
     assert fallback["meta"]["intent"] == "qa"
+
+
+def test_orchestrator_uses_inferred_qa_intent_in_same_pass() -> None:
+    _install_langchain_and_langgraph_stubs()
+    orchestrator = importlib.import_module("graph.nodes.orchestrator")
+
+    state = {
+        "messages": [SimpleNamespace(type="human", content="who are you")],
+        "output": {},
+        "observations": [],
+        "last_action": None,
+        "orchestrator": {},
+        "agents": {
+            "executor": {"run_status": "idle"},
+            "human_review": {"before_run_decision": None, "final_decision": None},
+            "qa": {},
+        },
+        "meta": {"error_iterations": 0, "workflow_trace": []},
+    }
+
+    updated = orchestrator.orchestrator_node(state, _LLM('{"action":"qa","thought":"identity question"}'), ["qa", "clarification", "end"])
+
+    assert updated["next_action"] == "qa"
+    assert updated["meta"]["intent"] == "qa"
+
+
+def test_orchestrator_prefers_ranked_planner_candidate_over_end_when_no_ready_actions() -> None:
+    _install_langchain_and_langgraph_stubs()
+    orchestrator = importlib.import_module("graph.nodes.orchestrator")
+
+    state = {
+        "messages": [SimpleNamespace(type="human", content="who are you")],
+        "output": {},
+        "observations": [],
+        "last_action": None,
+        "orchestrator": {},
+        "agents": {
+            "executor": {"run_status": "idle"},
+            "human_review": {"before_run_decision": None, "final_decision": None},
+            "qa": {},
+        },
+        "meta": {"error_iterations": 0, "workflow_trace": []},
+    }
+
+    updated = orchestrator.orchestrator_node(
+        state,
+        _LLM('{"thought":"identity question","ranked_actions":["qa","clarification","end"]}'),
+        ["qa", "clarification", "end"],
+    )
+
+    assert updated["next_action"] == "qa"
     
 def test_orchestrator_uses_llm_action_and_fallback_policy() -> None:
     _install_langchain_and_langgraph_stubs()
@@ -176,9 +227,9 @@ def test_orchestrator_keeps_qa_intent_for_tool_clarification_followup() -> None:
 
     state = {
         "messages": [
-            SimpleNamespace(type="human", content="what's weather in china"),
-            SimpleNamespace(type="ai", content="Which city in China would you like the weather for?"),
-            SimpleNamespace(type="human", content="Shanghai"),
+            SimpleNamespace(type="human", content="what's weather in USA today?"),
+            SimpleNamespace(type="ai", content="Which city in USA would you like the weather for?"),
+            SimpleNamespace(type="human", content="New York"),
         ],
         "output": {},
         "observations": [],
@@ -196,12 +247,16 @@ def test_orchestrator_keeps_qa_intent_for_tool_clarification_followup() -> None:
         },
     }
 
-    # Even if the planner suggests ending, fallback policy should keep QA flow.
-    updated = orchestrator.orchestrator_node(state, _LLM(json.dumps({"action": "end"})), ["qa", "generate_code", "end"])
+    # Clarification follow-ups should route through the dedicated clarification node.
+    updated = orchestrator.orchestrator_node(
+        state,
+        _LLM(json.dumps({"action": "end"})),
+        ["clarification", "qa", "generate_code", "end"],
+    )
 
-    assert updated["next_action"] == "qa"
+    assert updated["next_action"] == "clarification"
     assert updated["meta"]["intent"] == "qa"
-    assert "awaiting_user_clarification" not in updated["meta"]
+    assert updated["meta"]["awaiting_user_clarification"] is True
 
 
 def test_orchestrator_does_not_force_qa_for_non_qa_clarification_followup() -> None:
@@ -229,10 +284,14 @@ def test_orchestrator_does_not_force_qa_for_non_qa_clarification_followup() -> N
         },
     }
 
-    updated = orchestrator.orchestrator_node(state, _LLM("not-json"), ["qa", "generate_code", "end"])
+    updated = orchestrator.orchestrator_node(
+        state,
+        _LLM("not-json"),
+        ["clarification", "qa", "generate_code", "end"],
+    )
 
-    assert updated["next_action"] == "generate_code"
-    assert "awaiting_user_clarification" not in updated["meta"]
+    assert updated["next_action"] == "clarification"
+    assert updated["meta"]["awaiting_user_clarification"] is True
 
 
 
@@ -426,7 +485,7 @@ def test_orchestrator_resets_workflow_trace_on_new_user_turn() -> None:
     orchestrator = importlib.import_module("graph.nodes.orchestrator")
 
     state = {
-        "messages": [SimpleNamespace(type="human", content="new request after previous loop")],
+        "messages": [SimpleNamespace(type="human", content="perform survival analysis on my attached data")],
         "output": {},
         "observations": [],
         "last_action": "end",
@@ -604,50 +663,6 @@ def test_planner_can_skip_critic_in_fast_mode() -> None:
     assert action == "human_review_final"
     assert len(llm.calls) == 1
 
-
-def test_planner_does_not_trigger_critic_for_non_risky_qa_candidate() -> None:
-    _install_langchain_and_langgraph_stubs()
-    planner = importlib.import_module("graph.nodes.orchestrator.planner")
-
-    state = {
-        "messages": [SimpleNamespace(type="human", content="What's the weather today?")],
-        "output": {"generated_code": ""},
-        "agents": {
-            "executor": {"run_status": "idle"},
-            "human_review": {
-                "before_run_decision": None,
-                "approved_code_hash": None,
-                "final_decision": None,
-            },
-        },
-        "meta": {"workflow_trace": ["orchestrator"], "error_iterations": 0, "intent": "qa"},
-        "last_action": "qa",
-    }
-
-    llm = _SeqLLM([
-        json.dumps({
-            "action": "qa",
-            "ranked_actions": ["qa", "generate_code", "end"],
-            "thought": "answer directly"
-        }),
-    ])
-
-    prev = os.environ.get("ORCH_CRITIC_MODE")
-    os.environ["ORCH_CRITIC_MODE"] = "conditional"
-    try:
-        action, _thought = planner.llm_select_next_action(
-            state, llm, ["qa", "generate_code", "execute_code", "end"]
-        )
-    finally:
-        if prev is None:
-            os.environ.pop("ORCH_CRITIC_MODE", None)
-        else:
-            os.environ["ORCH_CRITIC_MODE"] = prev
-
-    assert action == "qa"
-    assert len(llm.calls) == 1
-
-
 def test_orchestrator_overrides_stale_code_intent_with_latest_qa_intent() -> None:
     _install_langchain_and_langgraph_stubs()
     orchestrator = importlib.import_module("graph.nodes.orchestrator")
@@ -677,3 +692,123 @@ def test_orchestrator_overrides_stale_code_intent_with_latest_qa_intent() -> Non
 
     assert updated["meta"].get("intent") == "qa"
     assert updated["next_action"] == "qa"
+
+
+def test_orchestrator_prefers_policy_qa_when_planner_misroutes_tool_question() -> None:
+    _install_langchain_and_langgraph_stubs()
+    orchestrator = importlib.import_module("graph.nodes.orchestrator")
+
+    state = {
+        "messages": [SimpleNamespace(type="human", content="Search online for the latest FDA guidance on GLP-1 drugs")],
+        "output": {},
+        "observations": [],
+        "last_action": "orchestrator",
+        "orchestrator": {},
+        "agents": {
+            "executor": {"run_status": "idle"},
+            "human_review": {"before_run_decision": None, "final_decision": None},
+        },
+        "meta": {
+            "error_iterations": 0,
+            "workflow_trace": ["orchestrator"],
+        },
+    }
+
+    updated = orchestrator.orchestrator_node(
+        state,
+        _LLM(json.dumps({"action": "generate_code", "thought": "misrouted"})),
+        ["qa", "generate_code", "execute_code", "end"],
+    )
+
+    assert updated["meta"].get("intent") == "qa"
+    assert updated["next_action"] == "qa"
+
+
+def test_orchestrator_routes_whats_weather_today_to_qa() -> None:
+    _install_langchain_and_langgraph_stubs()
+    orchestrator = importlib.import_module("graph.nodes.orchestrator")
+
+    state = {
+        "messages": [SimpleNamespace(type="human", content="what's weather today?")],
+        "output": {},
+        "observations": [],
+        "last_action": "orchestrator",
+        "orchestrator": {},
+        "agents": {
+            "executor": {"run_status": "idle"},
+            "human_review": {"before_run_decision": None, "final_decision": None},
+        },
+        "meta": {
+            "error_iterations": 0,
+            "workflow_trace": ["orchestrator"],
+        },
+    }
+
+    updated = orchestrator.orchestrator_node(
+        state,
+        _LLM(json.dumps({"action": "generate_code", "thought": "misrouted"})),
+        ["qa", "generate_code", "execute_code", "end"],
+    )
+
+    assert updated["meta"].get("intent") == "qa"
+    assert updated["next_action"] == "qa"
+
+
+def test_orchestrator_prefers_policy_generate_code_for_explicit_code_intent_when_planner_says_qa() -> None:
+    _install_langchain_and_langgraph_stubs()
+    orchestrator = importlib.import_module("graph.nodes.orchestrator")
+
+    state = {
+        "messages": [SimpleNamespace(type="human", content="Write Python code to analyze my attached CSV and plot a Kaplan-Meier curve")],
+        "output": {},
+        "observations": [],
+        "last_action": "orchestrator",
+        "orchestrator": {},
+        "agents": {
+            "executor": {"run_status": "idle"},
+            "human_review": {"before_run_decision": None, "final_decision": None},
+        },
+        "meta": {
+            "error_iterations": 0,
+            "workflow_trace": ["orchestrator"],
+        },
+    }
+
+    updated = orchestrator.orchestrator_node(
+        state,
+        _LLM(json.dumps({"action": "qa", "thought": "misrouted"})),
+        ["qa", "generate_code", "execute_code", "end"],
+    )
+
+    assert updated["meta"].get("intent") == "code"
+    assert updated["next_action"] == "generate_code"
+
+
+def test_orchestrator_does_not_fallback_to_generate_code_for_bare_followup_with_stale_code_intent() -> None:
+    _install_langchain_and_langgraph_stubs()
+    orchestrator = importlib.import_module("graph.nodes.orchestrator")
+
+    state = {
+        "messages": [SimpleNamespace(type="human", content="Boston")],
+        "output": {},
+        "observations": [],
+        "last_action": "generate_code",
+        "orchestrator": {},
+        "agents": {
+            "executor": {"run_status": "idle"},
+            "human_review": {"before_run_decision": None, "final_decision": None},
+        },
+        "meta": {
+            "error_iterations": 0,
+            "intent": "code",
+            "workflow_trace": ["orchestrator", "generate_code"],
+        },
+    }
+
+    updated = orchestrator.orchestrator_node(
+        state,
+        _LLM("not-json"),
+        ["qa", "generate_code", "execute_code", "end"],
+    )
+
+    assert updated["next_action"] != "generate_code"

@@ -36,7 +36,7 @@ def _install_stubs() -> None:
     sys.modules["prompts.fix_prompt"] = fix_mod
 
 
-def test_error_handler_non_code_response_sets_clarification_wait() -> None:
+def test_error_handler_non_code_response_does_not_start_clarification_loop() -> None:
     _install_stubs()
     for _mod in ("utils.message_window", "graph.nodes.error_handler"):
         sys.modules.pop(_mod, None)
@@ -52,7 +52,7 @@ def test_error_handler_non_code_response_sets_clarification_wait() -> None:
     updated = mod.error_handler_node(state, _LLM("Please provide schema columns first."), context="ctx")
 
     assert updated["output"]["generated_code"] == ""
-    assert updated["meta"]["awaiting_user_clarification"] is True
+    assert "awaiting_user_clarification" not in updated["meta"]
     assert updated["agents"]["executor"]["run_status"] == "idle"
 
 

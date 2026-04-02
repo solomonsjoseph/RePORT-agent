@@ -21,7 +21,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable
 
-from ..state import AgentState
+from ..state import AgentState, MetaKeys
 from .state_helpers import get_agent_state
 from .tool_routing import is_tool_requested
 
@@ -44,6 +44,30 @@ def _has_fresh_run_approval(state: AgentState) -> bool:
     approved = review.get("approved_code_hash")
     current = (state.get("meta") or {}).get("current_code_hash")
     return bool(approved and current and approved == current)
+
+
+def _is_code_clarification_continuation(state: AgentState) -> bool:
+    meta = state.get("meta") or {}
+    if not meta.get(MetaKeys.AWAITING_USER_CLARIFICATION):
+        return False
+
+    return_node = meta.get(MetaKeys.CLARIFICATION_RETURN_NODE)
+    if return_node in ("generate_code", "error_handler"):
+        return True
+
+    # Backward-compatible handling for older threads that set only the generic
+    # clarification flag from generate_code/error_handler without a return node.
+    return state.get("last_action") in ("generate_code", "error_handler")
+
+
+def _has_affirmative_code_readiness(state: AgentState) -> bool:
+    meta = state.get("meta") or {}
+    if "generate_code" in list(meta.get(MetaKeys.LOOP_GUARD_BYPASS_ACTIONS, [])):
+        return True
+    if _is_code_clarification_continuation(state):
+        return True
+    from .orchestrator.intent import infer_intent_from_latest_user
+    return infer_intent_from_latest_user(state) == "code"
 
 
 # ---------------------------------------------------------------------------
@@ -82,7 +106,7 @@ NODE_REGISTRY: list[NodeDefinition] = [
     NodeDefinition(
         name="error_handler",
         capability=(
-            "Revise broken code after execution failures and increment retry state."
+            "Revise previously generated code after execution failures and increment retry state."
         ),
         priority=10,
         is_ready=lambda s: (
@@ -93,7 +117,7 @@ NODE_REGISTRY: list[NodeDefinition] = [
     ),
     NodeDefinition(
         name="human_review_after_error",
-        capability="Ask human for guidance after repeated execution failures.",
+        capability="Ask human for guidance after repeated code-execution failures once retry budget is exhausted.",
         priority=20,
         is_ready=lambda s: (
             get_agent_state(s, "executor").get("run_status") == "error"
@@ -105,21 +129,34 @@ NODE_REGISTRY: list[NodeDefinition] = [
     NodeDefinition(
         name="tool_handler",
         capability=(
-            "Execute requested external tools and store tool results back to requesting agents."
+            "Execute already-requested external tools and store results back to the requesting agent. "
+            "Do not use for routing decisions or direct user replies."
         ),
         priority=30,
         is_ready=is_tool_requested,
         reset_agent_keys=[],
     ),
     NodeDefinition(
+        name="clarification",
+        capability=(
+            "Resume an active clarification loop by interpreting the user's follow-up and handing "
+            "control back to the relevant subworkflow such as QA tool routing or code generation."
+        ),
+        priority=35,
+        is_ready=lambda s: bool((s.get("meta") or {}).get(MetaKeys.AWAITING_USER_CLARIFICATION)),
+        reset_agent_keys=[],
+    ),
+    NodeDefinition(
         name="qa",
         capability=(
-            "Answer user questions directly in natural language (optionally using tool "
-            "results), without code unless requested."
+            "Handle direct user-facing Q&A in natural language, including factual and explanatory "
+            "requests, conversation, and tool-assisted information tasks such as search, weather, "
+            "and calculator queries. Prefer this over code generation unless the user explicitly "
+            "wants code or dataset/programmatic work."
         ),
         priority=40,
         is_ready=lambda s: (
-            (s.get("meta") or {}).get("intent") == "qa"
+            not _has_affirmative_code_readiness(s)
             and not is_tool_requested(s)
         ),
         reset_agent_keys=[],
@@ -127,19 +164,22 @@ NODE_REGISTRY: list[NodeDefinition] = [
     NodeDefinition(
         name="generate_code",
         capability=(
-            "Generate Python analysis code from the user's analytical request and "
-            "available context.  Usually when dataset and schema are not null."
+            "Generate Python code only for explicit code-writing requests or dataset/programmatic "
+            "tasks such as analysis on the user's data, plotting, transformation, or computation "
+            "that should be performed in code. Do not use for general Q&A, web search, weather, "
+            "or factual lookup."
         ),
         priority=50,
         is_ready=lambda s: (
             not (s.get("output") or {}).get("generated_code")
             and not is_tool_requested(s)
+            and _has_affirmative_code_readiness(s)
         ),
         reset_agent_keys=["generate_code"],
     ),
     NodeDefinition(
         name="human_review_before_run",
-        capability="Ask human approval before running generated code.",
+        capability="Ask human approval before running newly generated code.",
         priority=60,
         is_ready=lambda s: (
             bool((s.get("output") or {}).get("generated_code"))
@@ -151,8 +191,7 @@ NODE_REGISTRY: list[NodeDefinition] = [
     NodeDefinition(
         name="execute_code",
         capability=(
-            "Execute previously generated Python code against the loaded dataframe "
-            "and collect outputs/errors."
+            "Execute previously generated Python code after approval and collect outputs or errors."
         ),
         priority=70,
         is_ready=lambda s: (
@@ -164,7 +203,7 @@ NODE_REGISTRY: list[NodeDefinition] = [
     ),
     NodeDefinition(
         name="human_review_final",
-        capability="Ask human approval of final successful output.",
+        capability="Ask human approval of the final successful code-execution output before ending the task.",
         priority=80,
         is_ready=lambda s: (
             get_agent_state(s, "executor").get("run_status") == "ok"

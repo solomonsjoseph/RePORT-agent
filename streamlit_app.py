@@ -9,6 +9,7 @@ import requests
 # from pathlib import Path
 import uuid
 import time
+from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, AIMessage
 from langgraph.types import Command
 from graph.builder import build_graph
@@ -18,7 +19,7 @@ from UI.ui_after_error_review import ui_after_error_review
 from UI.ui_final_review import ui_final_review
 from UI.load_openai import load_openai
 from UI.load_anthropic import load_anthropic
-from UI.load_gemini import load_gemini
+from utils.openai_models import list_supported_openai_chat_models
 from utils.run_manager import GraphRunManager
 from utils.export_thread import build_thread_export
 # --------------------------
@@ -30,6 +31,7 @@ st.set_page_config(
     layout="wide",
 )
 
+load_dotenv()
 
 st.title(title)
 
@@ -45,15 +47,13 @@ default_temp = 0.1
 default_api_key = ""
 default_openai_model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 default_anthropic_model = os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20240620")
-default_gemini_model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 openai_env_key = os.getenv("OPENAI_API_KEY", "")
 anthropic_env_key = os.getenv("ANTHROPIC_API_KEY", "")
-gemini_env_key = os.getenv("GOOGLE_API_KEY", os.getenv("GEMINI_API_KEY", ""))
 ANTHROPIC_API_VERSION = "2023-06-01"
 
 provider = st.sidebar.selectbox(
     "Provider",
-    ["openai", "anthropic", "gemini", "vllm"],
+    ["openai", "anthropic", "vllm"],
     index=0,
     help="Choose the model provider to use."
 )
@@ -90,12 +90,7 @@ model_name = ""
 
 @st.cache_data(show_spinner=False)
 def load_openai_models(effective_api_key):
-    headers = {"Authorization": f"Bearer {effective_api_key}"}
-    resp = requests.get("https://api.openai.com/v1/models", headers=headers, timeout=10)
-    resp.raise_for_status()
-    data = resp.json().get("data", [])
-    model_ids = sorted({item.get("id") for item in data if item.get("id")})
-    return model_ids
+    return list_supported_openai_chat_models(effective_api_key)
 
 @st.cache_data(show_spinner=False)
 def load_anthropic_models(effective_api_key):
@@ -107,22 +102,6 @@ def load_anthropic_models(effective_api_key):
     resp.raise_for_status()
     data = resp.json().get("data", [])
     model_ids = sorted({item.get("id") for item in data if item.get("id")})
-    return model_ids
-
-@st.cache_data(show_spinner=False)
-def load_gemini_models(effective_api_key):
-    resp = requests.get(
-        "https://generativelanguage.googleapis.com/v1beta/models",
-        params={"key": effective_api_key},
-        timeout=10,
-    )
-    resp.raise_for_status()
-    data = resp.json().get("models", [])
-    model_ids = sorted({
-        item.get("name", "").split("/")[-1]
-        for item in data
-        if item.get("name") and "generateContent" in item.get("supportedGenerationMethods", [])
-    })
     return model_ids
 
 if provider == "vllm":
@@ -149,13 +128,6 @@ elif provider == "anthropic":
         default_anthropic_model=default_anthropic_model,
         load_anthropic_models_fn=load_anthropic_models,
     )
-elif provider == "gemini":
-    api_key, model_name = load_gemini(
-        default_api_key=default_api_key,
-        gemini_env_key=gemini_env_key,
-        default_gemini_model=default_gemini_model,
-        load_gemini_models_fn=load_gemini_models,
-    )
 
 temperature = st.sidebar.slider(
     "Temperature",
@@ -166,11 +138,11 @@ temperature = st.sidebar.slider(
     help="Higher temperature = more creative code."
 )
 
-top_p = st.sidebar.number_input(
-    "Top probablity",
-    value=0.9,
+top_p = st.sidebar.slider(
+    "Top probability",
     min_value=0.5,
     max_value=1.0,
+    value=0.9,
     step=0.05,
     help="Set the top-p value, lowering it increases creativity."
 )
@@ -322,25 +294,14 @@ def initial_graph_state(user_message: HumanMessage) -> dict:
 
 
 def next_turn_payload(user_message: HumanMessage) -> dict:
-    """Clear transient execution artifacts before processing a fresh user turn."""
+    """Send only the new user message so checkpointed graph state is preserved.
+
+    The orchestrator itself is responsible for resetting transient turn state on
+    genuine new turns. Passing a full replacement payload here destroys
+    clarification context such as pending_question and clarification_return_node.
+    """
     return {
         "messages": [user_message],
-        "output": {},
-        "next_action": None,
-        "last_action": None,
-        "observations": [],
-        "orchestrator": {},
-        "agents": {
-            "executor": {"run_status": "idle"},
-            "human_review": {
-                "before_run_decision": None,
-                "after_error_decision": None,
-                "final_decision": None,
-            },
-            "qa": {},
-            "generate_code": {},
-        },
-        "meta": {"error_iterations": 0, "workflow_trace": []},
     }
 
 snapshot = app.get_state(config)

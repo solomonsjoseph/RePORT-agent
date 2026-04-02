@@ -12,6 +12,7 @@ from .nodes.generate_code import generate_code_node
 from .nodes.execute_code import execute_code_node
 from .nodes.error_handler import error_handler_node
 from .nodes.qa import qa_node
+from .nodes.clarification import clarification_node
 from .nodes.tool_handler import tool_handler_node
 from .nodes.human_review_before_run import human_review_before_run_node
 from .nodes.human_review_after_error import human_review_after_error_node
@@ -63,6 +64,7 @@ def build_graph(llm, df, schema, db_path):
         "generate_code": _run_and_mark("generate_code", lambda s: generate_code_node(s, llm, context)),
         "execute_code": _run_and_mark("execute_code", lambda s: execute_code_node(s, df)),
         "error_handler": _run_and_mark("error_handler", lambda s: error_handler_node(s, llm, context)),
+        "clarification": _run_and_mark("clarification", lambda s: clarification_node(s, llm, context)),
         "human_review_after_error": _run_and_mark("human_review_after_error", human_review_after_error_node),
         "human_review_before_run": _run_and_mark("human_review_before_run", human_review_before_run_node),
         "human_review_final": _run_and_mark("human_review_final", human_review_final_node),

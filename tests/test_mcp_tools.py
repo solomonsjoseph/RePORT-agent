@@ -21,7 +21,13 @@ def test_load_servers_config_reads_file(tmp_path: Path) -> None:
 
     result = mcp_tools.load_servers_config(str(config_path))
 
-    assert result == config
+    assert result == {
+        "mcpServers": {
+            "demo": {
+                "command": mcp_tools.sys.executable,
+            }
+        }
+    }
 
 
 def test_make_mcp_tool_requires_server_name() -> None:

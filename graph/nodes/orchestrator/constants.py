@@ -6,16 +6,6 @@ LOOP_GUARD_LOOKBACK = 8
 ACTION_LOOKBACK_ACTIONS = 8
 
 # Intent-detection cue lists
-QA_LEADING_PHRASES = (
-    "what is",
-    "what's",
-    "who is",
-    "define",
-    "explain",
-    "tell me about",
-    "which",
-)
-
 CODE_REQUEST_CUES = (
     "write code",
     "generate code",
@@ -25,9 +15,8 @@ CODE_REQUEST_CUES = (
     "chart",
     "analyze",
     "analysis",
-    "calculate",
-    "compute",
-    "run",
+    "calculate in python",
+    "compute in python",
 )
 
 DATA_OPERATION_CUES = (
@@ -36,7 +25,6 @@ DATA_OPERATION_CUES = (
     "csv",
     "table",
     "columns",
-    "data",
 )
 
 PROTOTYPE_CUES = (
@@ -45,7 +33,6 @@ PROTOTYPE_CUES = (
     "show me how",
     "how do i",
     "how would i",
-    "for example",
     "prototype",
     "demo",
 )
@@ -91,9 +78,6 @@ ANALYSIS_CUES = (
     "perform",
     "conduct",
     "carry out",
-    "do a",
-    "run a",
-    "apply",
     "analyze",
     "analysis",
 )

@@ -6,7 +6,12 @@ from ...state import AgentState, MetaKeys
 from .intent import infer_intent_from_latest_user
 from .loop_guards import _apply_loop_guards
 from .planner import llm_select_next_action
-from .policy import _next_tool_requester, _tool_request_queue, choose_next_action
+from .policy import (
+    _next_tool_requester,
+    _tool_request_queue,
+    choose_next_action,
+    should_prefer_policy_action,
+)
 from .state_logic import (
     _consume_final_review_regenerate,
     _consume_regenerate_before_run,
@@ -26,20 +31,31 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
     agents = dict(state.get("agents") or {})
     current_hash = _user_message_hash(state)
     was_awaiting_clarification = bool(meta.get(MetaKeys.AWAITING_USER_CLARIFICATION))
+    review_state = dict(agents.get("human_review") or {})
+    has_pending_regenerate = (
+        review_state.get("before_run_decision") == "regenerate"
+        or review_state.get("final_decision") == "regenerate"
+    )
 
-    if current_hash and current_hash != meta.get(MetaKeys.LAST_USER_MESSAGE_HASH):
+    if (
+        current_hash
+        and current_hash != meta.get(MetaKeys.LAST_USER_MESSAGE_HASH)
+        and not has_pending_regenerate
+    ):
         if was_awaiting_clarification:
-            meta.pop(MetaKeys.AWAITING_USER_CLARIFICATION, None)
             meta[MetaKeys.LAST_USER_MESSAGE_HASH] = current_hash
-            clarification_return = (
-                meta.get(MetaKeys.CLARIFICATION_RETURN_NODE)
-                or state.get("last_action")
-                or "qa"
-            )
-            if clarification_return in set(available_actions):
-                next_action = clarification_return
+            if "clarification" in set(available_actions):
+                next_action = "clarification"
             else:
-                next_action = "qa"
+                clarification_return = (
+                    meta.get(MetaKeys.CLARIFICATION_RETURN_NODE)
+                    or state.get("last_action")
+                    or "qa"
+                )
+                if clarification_return in set(available_actions):
+                    next_action = clarification_return
+                else:
+                    next_action = "qa"
             orchestrator_state["next_action"] = next_action
         else:
             output, agents, meta = _reset_for_new_turn(output, agents, meta)
@@ -65,19 +81,19 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
         )
         state = {**state, "observations": observations}
 
-    routing_state = {
-        **state,
-        "output": output,
-        "agents": agents,
-        "meta": meta,
-    }
-
     inferred_intent = infer_intent_from_latest_user(state)
     # Keep intent aligned with latest user message when it is confidently inferred.
     # This prevents stale intent (e.g., previous code turn) from forcing bad routes
     # on subsequent QA-style asks.
     if inferred_intent:
         meta[MetaKeys.INTENT] = inferred_intent
+
+    routing_state = {
+        **state,
+        "output": output,
+        "agents": agents,
+        "meta": meta,
+    }
 
     if not next_action:
         if state.get("last_action") == "tool_handler":
@@ -91,7 +107,11 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
             llm_choice, thought = llm_select_next_action(routing_state, llm, available_actions)
             fallback_action = choose_next_action(routing_state, available_actions)
 
-            if llm_choice != "end" and not _should_end_now(routing_state):
+            if (
+                llm_choice != "end"
+                and not _should_end_now(routing_state)
+                and not should_prefer_policy_action(routing_state, llm_choice, fallback_action)
+            ):
                 next_action = llm_choice
                 if not meta.get(MetaKeys.INTENT):
                     if llm_choice == "qa":

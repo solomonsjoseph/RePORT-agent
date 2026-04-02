@@ -119,7 +119,7 @@ def test_generate_code_handles_non_code_response_without_execution_path() -> Non
 
     assert updated["output"]["generated_code"] == ""
     assert updated["output"]["qa_response"].startswith("I cannot write the code")
-    assert updated["meta"]["awaiting_user_clarification"] is True
+    assert "awaiting_user_clarification" not in updated["meta"]
     assert getattr(updated["messages"][-1], "type", None) == "ai"
 
 

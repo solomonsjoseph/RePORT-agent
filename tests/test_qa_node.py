@@ -137,17 +137,9 @@ def test_qa_node_routes_tools_after_clarification_followup() -> None:
     assert first["agents"]["qa"]["awaiting_tool_clarification"] is True
     assert first["output"]["qa_response"].startswith("Which city")
 
-    followup = {
-        **first,
-        "messages": list(first["messages"]) + [_HumanMessage("Shanghai")],
-    }
-
-    second = qa.qa_node(followup, llm, context="")
-    assert second["agents"]["qa"]["status"] == "pending"
-    assert second["agents"]["qa"]["awaiting_tool_clarification"] is False
-    assert second["agents"]["qa"]["tool_requests"]
-    assert second["agents"]["qa"]["tool_requests"][0]["tool_name"] == "query_weather"
-    assert "pending_question" not in second.get("meta", {})
+    assert first["meta"]["awaiting_user_clarification"] is True
+    assert first["meta"]["clarification_return_node"] == "qa"
+    assert first["meta"]["clarification_kind"] == "qa_tool"
 
 
 def test_qa_node_sets_awaiting_clarification_when_llm_asks_question() -> None:
@@ -188,6 +180,29 @@ def test_qa_node_sets_awaiting_clarification_when_llm_asks_question() -> None:
     assert result["output"]["qa_response"] == "Which city would you like weather for?"
 
 
+def test_qa_node_sets_generic_clarification_meta_for_non_tool_question() -> None:
+    qa = _fresh_qa_module()
+
+    class _LLM:
+        def invoke(self, _messages):
+            return SimpleNamespace(content="Which Boston do you mean?")
+
+    state = {
+        "messages": [_HumanMessage("Tell me about Boston")],
+        "output": {},
+        "meta": {"intent": "qa"},
+        "observations": [],
+        "agents": {"qa": {"tool_requests": [], "tool_results": []}},
+    }
+
+    result = qa.qa_node(state, _LLM(), context="")
+
+    assert result["meta"].get("awaiting_user_clarification") is True
+    assert result["meta"].get("pending_question") == "Tell me about Boston"
+    assert result["meta"].get("clarification_kind") == "qa_followup"
+    assert result["output"]["qa_response"] == "Which Boston do you mean?"
+
+
 def test_qa_node_routes_tools_after_generic_clarification_followup() -> None:
     qa = _fresh_qa_module()
 
@@ -214,13 +229,6 @@ def test_qa_node_routes_tools_after_generic_clarification_followup() -> None:
     assert first["agents"]["qa"]["awaiting_tool_clarification"] is True
     assert first["output"]["qa_response"].startswith("What expression")
 
-    followup = {
-        **first,
-        "messages": list(first["messages"]) + [_HumanMessage("(2 + 3) * 4")],
-    }
-
-    second = qa.qa_node(followup, llm, context="")
-    assert second["agents"]["qa"]["status"] == "pending"
-    assert second["agents"]["qa"]["awaiting_tool_clarification"] is False
-    assert second["agents"]["qa"]["tool_requests"]
-    assert second["agents"]["qa"]["tool_requests"][0]["tool_name"] == "calculate"
+    assert first["meta"]["awaiting_user_clarification"] is True
+    assert first["meta"]["clarification_return_node"] == "qa"
+    assert first["meta"]["clarification_kind"] == "qa_tool"
