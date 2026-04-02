@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from ...state import AgentState
 from ..state_helpers import get_agent_state
+from ..tool_routing import should_route_tools
 from .constants import (
     ANALYSIS_CUES,
     CODE_REQUEST_CUES,
@@ -10,7 +11,6 @@ from .constants import (
     INFO_CODE_CUES,
     OWN_DATA_CUES,
     PROTOTYPE_CUES,
-    QA_LEADING_PHRASES,
 )
 from .state_logic import _latest_user_message
 
@@ -22,6 +22,8 @@ def infer_intent_from_latest_user(state: AgentState) -> str | None:
 
     qa_state = get_agent_state(state, "qa")
     if qa_state.get("awaiting_tool_clarification"):
+        return "qa"
+    if should_route_tools(user_message):
         return "qa"
 
     has_code_request = any(token in user_message for token in CODE_REQUEST_CUES)
@@ -54,14 +56,6 @@ def infer_intent_from_latest_user(state: AgentState) -> str | None:
     if has_data_context:
         code_score += 1
 
-    qa_score = 0
-    if user_message.endswith("?"):
-        qa_score += 1
-    if user_message.startswith(QA_LEADING_PHRASES):
-        qa_score += 1
-
-    if code_score >= 1 and (qa_score == 0 or code_score > qa_score):
+    if code_score >= 1:
         return "code"
-    if qa_score >= 1:
-        return "qa"
     return None

@@ -10,3 +10,4 @@ report-env/
 .venv/
 .DS_Store
 data/.DS_Store
+AGENTS.md

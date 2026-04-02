@@ -3,7 +3,11 @@ from langchain_core.messages import HumanMessage
 from utils.code_parser import extract_python_code
 from utils.message_window import window_messages
 from prompts.generate_prompt import make_generate_code_prompt
-from .state_helpers import get_agent_state, update_agent_state
+from .state_helpers import (
+    clear_clarification_meta,
+    get_agent_state,
+    update_agent_state,
+)
 from .tool_routing import format_tool_results
 from .code_guardrails import code_fingerprint, is_executable_python
 from utils.llm_response import coerce_text_content
@@ -41,10 +45,7 @@ def generate_code_node(state, llm, context):
         output = dict(state.get("output") or {})
         output["generated_code"] = ""
         output["qa_response"] = response_text
-        meta = dict(state.get("meta", {}))
-        # Not an interrupt: this flag marks model-driven clarification needed
-        # before a new generation attempt can proceed.
-        meta["awaiting_user_clarification"] = True
+        meta = clear_clarification_meta(state.get("meta", {}))
         updated_state = {
             **state,
             "messages": msgs,
@@ -57,7 +58,7 @@ def generate_code_node(state, llm, context):
             {
                 "status": "done",
                 "generated_code": "",
-                "notes": ["Model returned non-code guidance; awaiting user clarification."],
+                "notes": ["Model returned non-code guidance."],
             },
         )
 
@@ -68,9 +69,8 @@ def generate_code_node(state, llm, context):
     human_review_state["approved_code_hash"] = None
     agents = dict(state.get("agents", {}))
     agents["human_review"] = human_review_state
-    meta = dict(state.get("meta", {}))
+    meta = clear_clarification_meta(state.get("meta", {}))
     meta["current_code_hash"] = code_fingerprint(code)
-    meta.pop("awaiting_user_clarification", None)
     updated_state = {
         **state,
         "output": output,

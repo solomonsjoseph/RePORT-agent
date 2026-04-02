@@ -1,7 +1,7 @@
 from utils.code_parser import extract_python_code
 from utils.message_window import window_messages
 from prompts.fix_prompt import make_fix_code_prompt
-from .state_helpers import update_agent_state
+from .state_helpers import clear_clarification_meta, update_agent_state
 from .code_guardrails import code_fingerprint, is_executable_python
 
 def error_handler_node(state, llm, context):
@@ -34,7 +34,7 @@ def error_handler_node(state, llm, context):
     if not is_executable_python(new_code):
         output["generated_code"] = ""
         output["qa_response"] = response.content
-        meta["awaiting_user_clarification"] = True
+        meta = clear_clarification_meta(meta)
         updated_state = {
             **state,
             "output": output,
@@ -46,7 +46,7 @@ def error_handler_node(state, llm, context):
             {
                 "status": "done",
                 "generated_code": "",
-                "notes": ["Fix model returned non-code guidance; awaiting user clarification."],
+                "notes": ["Fix model returned non-code guidance."],
             },
         )
         return update_agent_state(
@@ -70,8 +70,8 @@ def error_handler_node(state, llm, context):
         review_state["approved_code_hash"] = None
     agents = dict(state.get("agents", {}))
     agents["human_review"] = review_state
+    meta = clear_clarification_meta(meta)
     meta["current_code_hash"] = new_hash
-    meta.pop("awaiting_user_clarification", None)
     updated_state = {
         **state,
         "output": output,

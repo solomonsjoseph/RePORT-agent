@@ -17,8 +17,10 @@ def load_provider(
     load_models_fn,
     model_help,
 ):
+    fallback_key = (env_api_key or "").strip()
+
     if session_state_key not in st.session_state:
-        st.session_state[session_state_key] = None
+        st.session_state[session_state_key] = fallback_key or None
 
     form_key = f"{session_state_key}_form"
     with st.sidebar.form(form_key, clear_on_submit=False):
@@ -31,13 +33,20 @@ def load_provider(
         submitted = st.form_submit_button("🔑 Submit")
 
     if submitted:
-        st.session_state[session_state_key] = (api_key or env_api_key or "").strip()
+        submitted_key = (api_key or "").strip()
+        if not submitted_key and not fallback_key:
+            st.sidebar.warning(f"Please enter a {provider_label} API key before continuing.")
+            _stop_or_raise(f"{provider_label} API key is required.")
+        st.session_state[session_state_key] = submitted_key or fallback_key
 
     if not st.session_state[session_state_key]:
-        st.sidebar.info("Enter API key and press Enter or click Submit to continue.")
-        _stop_or_raise(
-            "Streamlit input is required here. Run the app with `streamlit run streamlit_app.py`."
-        )
+        if fallback_key:
+            st.session_state[session_state_key] = fallback_key
+        else:
+            st.sidebar.info("Enter API key and press Enter or click Submit to continue.")
+            _stop_or_raise(
+                "Streamlit input is required here. Run the app with `streamlit run streamlit_app.py`."
+            )
 
     effective_api_key = st.session_state[session_state_key]
     if not effective_api_key:

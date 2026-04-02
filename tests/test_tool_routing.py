@@ -212,3 +212,9 @@ def test_should_route_tools_true_for_weather_question() -> None:
     tool_routing = _fresh_tool_routing()
 
     assert tool_routing.should_route_tools("What is the weather in Boston?") is True
+
+
+def test_should_route_tools_true_for_imperative_search_request() -> None:
+    tool_routing = _fresh_tool_routing()
+
+    assert tool_routing.should_route_tools("Go search online for new CDC flu guidance") is True

@@ -28,6 +28,8 @@ interface stabilizes.
 
 ## Setup
 
+This project is tested to work with Python `3.12.7`.
+
 ### Clone the repository
 ```bash
 git clone -b dev-test-macOS --single-branch https://github.com/xutao-wang/RePORT-agent.git
@@ -50,4 +52,4 @@ pip install -r requirements.txt
 python -m streamlit run streamlit_app.py
 ```
 
-Synthetic demo data are included under `data` folder.
+Synthetic demo data are included under `data/` folder.
