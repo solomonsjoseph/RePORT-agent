@@ -11,3 +11,4 @@ report-env/
 .DS_Store
 data/.DS_Store
 AGENTS.md
+.worktrees/
