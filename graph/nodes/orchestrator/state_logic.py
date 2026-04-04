@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 
 from ...state import AgentState, MetaKeys
-from ..node_registry import NODE_REGISTRY
 
 
 def _latest_user_message_obj(state: AgentState):
@@ -41,6 +40,8 @@ def _should_end_now(state: AgentState) -> bool:
         return True
     if state.get("last_action") == "qa" and not _has_unanswered_human_message(state):
         return True
+    if state.get("last_action") == "terminal_execution_error" and not _has_unanswered_human_message(state):
+        return True
     return False
 
 
@@ -56,34 +57,6 @@ def _user_message_hash(state: AgentState) -> str | None:
     if not hash_basis:
         return None
     return hashlib.sha256(hash_basis.encode()).hexdigest()[:16]
-
-
-def _reset_for_new_turn(output: dict, agents: dict, meta: dict) -> tuple[dict, dict, dict]:
-    output = dict(output)
-    output.pop("generated_code", None)
-    output.pop("error", None)
-    output.pop("tool_results", None)
-
-    agents = dict(agents)
-    keys_to_reset: set[str] = set()
-    for nd in NODE_REGISTRY:
-        keys_to_reset.update(nd.reset_agent_keys)
-
-    for key in keys_to_reset:
-        if key in agents:
-            agents[key] = {}
-
-    meta = dict(meta)
-    meta.pop(MetaKeys.INTENT, None)
-    meta.pop(MetaKeys.CURRENT_CODE_HASH, None)
-    meta.pop(MetaKeys.AWAITING_USER_CLARIFICATION, None)
-    meta.pop(MetaKeys.TOOL_REQUEST_QUEUE, None)
-    meta.pop(MetaKeys.LOOP_GUARD_BYPASS_ACTIONS, None)
-    # Prevent loop-guard history from bleeding into a new user turn.
-    meta.pop(MetaKeys.WORKFLOW_TRACE, None)
-    meta[MetaKeys.ERROR_ITERATIONS] = 0
-
-    return output, agents, meta
 
 
 def _consume_regenerate_before_run(output: dict, agents: dict, meta: dict) -> tuple[dict, dict, dict, bool]:

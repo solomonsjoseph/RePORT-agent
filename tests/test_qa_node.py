@@ -142,12 +142,7 @@ def test_qa_node_routes_tools_after_clarification_followup() -> None:
     assert first["meta"]["clarification_kind"] == "qa_tool"
 
 
-def test_qa_node_sets_awaiting_clarification_when_llm_asks_question() -> None:
-    """When tool routing returns nothing (falls through) but the QA LLM naturally
-    asks a clarifying question, the node must set AWAITING_USER_CLARIFICATION so
-    the orchestrator routes back to qa on the user's follow-up answer (Case A)
-    rather than treating it as a new independent turn (Case B / full reset).
-    """
+def test_qa_node_sets_awaiting_clarification_when_llm_returns_structured_signal() -> None:
     qa = _fresh_qa_module()
 
     class _LLM:
@@ -159,8 +154,12 @@ def test_qa_node_sets_awaiting_clarification_when_llm_asks_question() -> None:
             if self.calls == 1:
                 # Tool-routing LLM returns no tool and no clarification — falls through.
                 return SimpleNamespace(content='{"tool_requests": []}')
-            # QA LLM naturally asks a clarifying question.
-            return SimpleNamespace(content="Which city would you like weather for?")
+            return SimpleNamespace(
+                content=(
+                    '{"answer":"","needs_clarification":true,'
+                    '"clarification_question":"Which city would you like weather for?"}'
+                )
+            )
 
     llm = _LLM()
     state = {
@@ -185,7 +184,12 @@ def test_qa_node_sets_generic_clarification_meta_for_non_tool_question() -> None
 
     class _LLM:
         def invoke(self, _messages):
-            return SimpleNamespace(content="Which Boston do you mean?")
+            return SimpleNamespace(
+                content=(
+                    '{"answer":"","needs_clarification":true,'
+                    '"clarification_question":"Which Boston do you mean?"}'
+                )
+            )
 
     state = {
         "messages": [_HumanMessage("Tell me about Boston")],
@@ -201,6 +205,28 @@ def test_qa_node_sets_generic_clarification_meta_for_non_tool_question() -> None
     assert result["meta"].get("pending_question") == "Tell me about Boston"
     assert result["meta"].get("clarification_kind") == "qa_followup"
     assert result["output"]["qa_response"] == "Which Boston do you mean?"
+
+
+def test_qa_node_does_not_set_clarification_for_plaintext_followup_question() -> None:
+    qa = _fresh_qa_module()
+
+    class _LLM:
+        def invoke(self, _messages):
+            return SimpleNamespace(content="Would you like sample code?")
+
+    state = {
+        "messages": [_HumanMessage("Explain survival analysis")],
+        "output": {},
+        "meta": {"intent": "qa"},
+        "observations": [],
+        "agents": {"qa": {"tool_requests": [], "tool_results": []}},
+    }
+
+    result = qa.qa_node(state, _LLM(), context="")
+
+    assert result["meta"].get("awaiting_user_clarification") is None
+    assert result["agents"]["qa"]["awaiting_tool_clarification"] is False
+    assert result["output"]["qa_response"] == "Would you like sample code?"
 
 
 def test_qa_node_routes_tools_after_generic_clarification_followup() -> None:
@@ -232,3 +258,32 @@ def test_qa_node_routes_tools_after_generic_clarification_followup() -> None:
     assert first["meta"]["awaiting_user_clarification"] is True
     assert first["meta"]["clarification_return_node"] == "qa"
     assert first["meta"]["clarification_kind"] == "qa_tool"
+
+
+def test_qa_node_persists_executable_python_from_answer_for_later_run() -> None:
+    qa = _fresh_qa_module()
+
+    class _CodeLLM:
+        def invoke(self, _messages):
+            return SimpleNamespace(
+                content=(
+                    "Use this:\n"
+                    "```python\n"
+                    "print('ready to run')\n"
+                    "```\n"
+                )
+            )
+
+    state = {
+        "messages": [_HumanMessage("Give me example Python code")],
+        "output": {},
+        "meta": {"intent": "qa"},
+        "observations": [],
+        "agents": {"qa": {"tool_requests": [], "tool_results": []}},
+    }
+
+    result = qa.qa_node(state, _CodeLLM(), context="")
+
+    assert result["output"]["qa_response"].startswith("Use this:")
+    assert result["output"]["generated_code"] == "print('ready to run')"
+    assert result["meta"].get("current_code_hash")

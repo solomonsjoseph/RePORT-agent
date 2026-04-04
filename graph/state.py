@@ -24,10 +24,8 @@ class MetaKeys:
     is visible in one place.
 
     Usage:
-        meta[MetaKeys.INTENT] = "code"
         meta.pop(MetaKeys.AWAITING_USER_CLARIFICATION, None)
     """
-    INTENT = "intent"
     ERROR_ITERATIONS = "error_iterations"
     CURRENT_CODE_HASH = "current_code_hash"
     AWAITING_USER_CLARIFICATION = "awaiting_user_clarification"

@@ -47,6 +47,39 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+### Build the sandbox image
+Python analysis now runs inside a short-lived Docker sandbox by default. Build the
+runner image once before starting the app:
+
+```bash
+docker build -t report-agent-sandbox:latest -f tools/sandbox/Dockerfile .
+```
+
+Optional execution settings:
+
+```bash
+export EXECUTION_MODE=docker
+export SANDBOX_IMAGE=report-agent-sandbox:latest
+export EXECUTION_TIMEOUT_SEC=20
+export SANDBOX_MEMORY_MB=512
+export SANDBOX_CPU_LIMIT=1.0
+```
+
+Local trusted mode:
+
+```bash
+# Explicit trusted local execution (no Docker isolation)
+export EXECUTION_MODE=trusted_local
+```
+
+Use `trusted_local` only for trusted operators or local development. It keeps
+the app workflow but runs approved Python directly on the host process without
+container isolation.
+
+If you need additional analysis packages, add them to
+`tools/sandbox/requirements.txt` and rebuild the image. Runtime package
+installation inside the sandbox is intentionally unsupported.
+
 ### Run the app
 ```bash
 python -m streamlit run streamlit_app.py

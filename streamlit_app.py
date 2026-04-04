@@ -20,6 +20,11 @@ from UI.ui_final_review import ui_final_review
 from UI.load_openai import load_openai
 from UI.load_anthropic import load_anthropic
 from utils.openai_models import list_supported_openai_chat_models
+from utils.execution_mode import (
+    apply_execution_mode,
+    current_execution_mode,
+    docker_available,
+)
 from utils.run_manager import GraphRunManager
 from utils.export_thread import build_thread_export
 # --------------------------
@@ -58,11 +63,6 @@ provider = st.sidebar.selectbox(
     help="Choose the model provider to use."
 )
 
-fast_mode = st.sidebar.toggle(
-    "⚡ Fast mode",
-    value=True,
-    help="Prioritizes responsiveness: critic checks are disabled and the graph advances more steps each refresh, which can make results less conservative.",
-)
 show_debug_state = st.sidebar.toggle(
     "🐛 Show debug state",
     value=False,
@@ -71,7 +71,7 @@ max_auto_steps = st.sidebar.slider(
     "Auto-run steps per refresh",
     min_value=1,
     max_value=8,
-    value=4 if fast_mode else 2,
+    value=4,
     help="Number of workflow nodes the app runs in the background before the next UI refresh. Higher values feel faster but intermediate steps may be less visible.",
 )
 execution_timeout = st.sidebar.slider(
@@ -82,8 +82,23 @@ execution_timeout = st.sidebar.slider(
     step=5,
 )
 
+execution_mode = st.sidebar.selectbox(
+    "Execution mode",
+    ["docker", "trusted_local"],
+    index=["docker", "trusted_local"].index(current_execution_mode()),
+    help="Choose how approved Python code is executed.",
+)
+
+apply_execution_mode(execution_mode)
+
+if docker_available():
+    st.sidebar.caption("Docker detected on PATH.")
+else:
+    st.sidebar.warning("Docker is not available on PATH.")
+    if execution_mode == "docker":
+        st.sidebar.info("Switch to `trusted_local` to run code without Docker.")
+
 os.environ["EXECUTION_TIMEOUT_SEC"] = str(execution_timeout)
-os.environ["ORCH_CRITIC_MODE"] = "off" if fast_mode else "conditional"
 
 api_key = ""
 model_name = ""

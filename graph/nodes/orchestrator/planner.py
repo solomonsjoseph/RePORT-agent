@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import json
-import os
 from typing import Iterable
 
-from prompts.action_critic_prompt import make_action_critic_prompt
 from prompts.planner_prompt import make_planner_prompt
 
 from ...state import AgentState, MetaKeys
@@ -12,7 +10,6 @@ from ..node_registry import NODE_CAPABILITIES, NODE_REGISTRY
 from ..state_helpers import get_agent_state
 from ..tool_routing import is_tool_requested
 from .constants import LOOP_GUARD_LOOKBACK
-from .intent import infer_intent_from_latest_user
 from .loop_guards import _count_action_in_recent_trace, _detect_two_node_cycle
 from .state_logic import _latest_user_message
 from utils.llm_response import coerce_text_content
@@ -37,8 +34,6 @@ def _format_state_summary(state: AgentState) -> str:
     review_state = get_agent_state(state, "human_review")
 
     latest_user = _latest_user_message(state)
-    inferred_intent = infer_intent_from_latest_user(state)
-
     trace = list((state.get("meta") or {}).get(MetaKeys.WORKFLOW_TRACE, []))
     trace_tail = trace[-LOOP_GUARD_LOOKBACK:]
     cycle_detected = _detect_two_node_cycle(trace)
@@ -49,7 +44,6 @@ def _format_state_summary(state: AgentState) -> str:
 
     parts = [
         f"latest_user_message={latest_user}",
-        f"inferred_intent={inferred_intent}",
         f"generated_code_present={bool((state.get('output') or {}).get('generated_code'))}",
         f"executor_run_status={executor_state.get('run_status')}",
         f"before_run_decision={review_state.get('before_run_decision')}",
@@ -149,95 +143,6 @@ def _parse_planner_response(
     return parsed_action, thought, ranked_actions
 
 
-def _select_ranked_candidate(
-    parsed_action: str,
-    ranked_actions: list[str],
-    ready_actions: list[str],
-    available_actions: Iterable[str],
-) -> tuple[str, bool]:
-    """Stage-2 deterministic selector over planner candidates.
-
-    Returns (candidate_action, used_fallback).
-    """
-    available = set(available_actions)
-    ordered = [*ranked_actions]
-    if parsed_action and parsed_action not in ordered:
-        ordered.insert(0, parsed_action)
-
-    ready = set(ready_actions)
-    for candidate in ordered:
-        if candidate not in available:
-            continue
-        if candidate == "end" and not ready_actions:
-            continue
-        if candidate in ready:
-            return candidate, False
-
-    # If the planner supplied ranked semantic candidates but no action is
-    # currently "ready" under deterministic heuristics, prefer the best
-    # available non-end ranked action instead of collapsing to END. This keeps
-    # the planner useful in ambiguous QA/code cases when intent inference is
-    # underspecified, while invariant/safety transitions are still enforced
-    # elsewhere in the orchestrator.
-    if not ready_actions:
-        for candidate in ordered:
-            if candidate in available and candidate != "end":
-                return candidate, False
-
-    if ready_actions:
-        return ready_actions[0], True
-
-    if "end" in ordered:
-        return "end", False
-
-    if parsed_action in available:
-        return parsed_action, False
-
-    return "end", True
-
-
-def _critic_review_action(
-    state: AgentState,
-    llm,
-    candidate_action: str,
-    ready_actions: list[str],
-    blocked_actions: list[str],
-    available_actions: Iterable[str],
-) -> tuple[str, str, bool]:
-    """Lightweight critic pass. Returns (action, reason, changed)."""
-    actions = ", ".join(sorted(set(available_actions)))
-    prompt = make_action_critic_prompt().format_prompt(
-        actions=actions,
-        summary=_format_state_summary(state),
-        candidate_action=candidate_action,
-        ready_actions=", ".join(ready_actions) if ready_actions else "none",
-        blocked_actions="\n".join(f"- {a}" for a in blocked_actions) if blocked_actions else "none",
-    )
-    response = llm.invoke(prompt.to_messages())
-    content = coerce_text_content(getattr(response, "content", "")).strip()
-
-    try:
-        payload = json.loads(content)
-    except json.JSONDecodeError:
-        return candidate_action, "critic_unavailable", False
-
-    if not isinstance(payload, dict):
-        return candidate_action, "critic_unavailable", False
-
-    verdict = str(payload.get("verdict", "accept") or "accept").strip().lower()
-    reason = str(payload.get("reason", "") or "").strip()
-    corrected_action = str(payload.get("corrected_action", "") or "").strip()
-
-    if verdict != "reject":
-        return candidate_action, reason, False
-
-    available = set(available_actions)
-    if corrected_action and corrected_action in available:
-        return corrected_action, reason or "critic_reject", corrected_action != candidate_action
-
-    return candidate_action, reason or "critic_reject_invalid_correction", False
-
-
 def _format_node_capabilities(available_actions: Iterable[str]) -> str:
     lines: list[str] = []
     for action in sorted(set(available_actions)):
@@ -267,68 +172,12 @@ def llm_select_next_action(
         coerce_text_content(getattr(planner_response, "content", "")),
         available_actions,
     )
+    final_action = parsed_action
+    if final_action == "end" and ranked_actions:
+        final_action = ranked_actions[0]
 
-    candidate_action, used_fallback = _select_ranked_candidate(
-        parsed_action,
-        ranked_actions,
-        ready_actions,
-        available_actions,
-    )
-
-    critic_mode = os.getenv("ORCH_CRITIC_MODE", "conditional").strip().lower()
-    risky_actions = {
-        "execute_code",
-        "error_handler",
-        "human_review_before_run",
-        "human_review_after_error",
-        "human_review_final",
-    }
-    critic_execute_risk_hints = (
-        "execute_code (already succeeded; move to human_review_final)",
-        "execute_code (requires fresh human approval)",
-    )
-
-    should_use_critic = critic_mode == "always" or (
-        critic_mode != "off"
-        and (
-            candidate_action in risky_actions
-            or any(hint in blocked_actions for hint in critic_execute_risk_hints)
-        )
-    )
-
-    if should_use_critic:
-        critic_action, critic_reason, critic_changed = _critic_review_action(
-            state,
-            llm,
-            candidate_action,
-            ready_actions,
-            blocked_actions,
-            available_actions,
-        )
-    else:
-        critic_action, critic_reason, critic_changed = candidate_action, "critic_skipped", False
-
-    final_action, critic_fallback = _select_ranked_candidate(
-        critic_action,
-        [],
-        ready_actions,
-        available_actions,
-    )
-
-    notes: list[str] = []
     if ranked_actions:
-        notes.append(f"ranked={ranked_actions}")
-    if used_fallback:
-        notes.append(f"validator_selected={candidate_action}")
-    if critic_changed:
-        notes.append(f"critic_selected={critic_action}")
-    if critic_reason and critic_reason not in ("critic_unavailable", "critic_skipped"):
-        notes.append(f"critic_reason={critic_reason}")
-    if critic_fallback and final_action != critic_action:
-        notes.append(f"validator_rechecked={final_action}")
-
-    if notes:
-        suffix = " | ".join(notes)
+        suffix = f"ranked={ranked_actions}"
         thought = f"{thought} {suffix}".strip() if thought else suffix
 
     return final_action, thought

@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Iterable
 
 from ...state import AgentState, MetaKeys
-from .intent import infer_intent_from_latest_user
 from .loop_guards import _apply_loop_guards
 from .planner import llm_select_next_action
 from .policy import (
@@ -15,7 +14,6 @@ from .policy import (
 from .state_logic import (
     _consume_final_review_regenerate,
     _consume_regenerate_before_run,
-    _reset_for_new_turn,
     _should_end_now,
     _user_message_hash,
 )
@@ -58,7 +56,6 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
                     next_action = "qa"
             orchestrator_state["next_action"] = next_action
         else:
-            output, agents, meta = _reset_for_new_turn(output, agents, meta)
             meta[MetaKeys.LAST_USER_MESSAGE_HASH] = current_hash
             next_action = None
             orchestrator_state.pop("next_action", None)
@@ -80,13 +77,6 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
             "orchestrator: received final-review regenerate request; routing back to generate_code"
         )
         state = {**state, "observations": observations}
-
-    inferred_intent = infer_intent_from_latest_user(state)
-    # Keep intent aligned with latest user message when it is confidently inferred.
-    # This prevents stale intent (e.g., previous code turn) from forcing bad routes
-    # on subsequent QA-style asks.
-    if inferred_intent:
-        meta[MetaKeys.INTENT] = inferred_intent
 
     routing_state = {
         **state,
@@ -113,11 +103,6 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
                 and not should_prefer_policy_action(routing_state, llm_choice, fallback_action)
             ):
                 next_action = llm_choice
-                if not meta.get(MetaKeys.INTENT):
-                    if llm_choice == "qa":
-                        meta[MetaKeys.INTENT] = "qa"
-                    elif llm_choice in ("generate_code", "execute_code", "error_handler"):
-                        meta[MetaKeys.INTENT] = "code"
             else:
                 next_action = fallback_action
 

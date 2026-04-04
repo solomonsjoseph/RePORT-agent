@@ -1,4 +1,4 @@
-"""Constants for orchestrator routing and intent detection."""
+"""Constants for orchestrator routing."""
 
 # Loop-guard constants
 MAX_ACTION_REPEATS = 4

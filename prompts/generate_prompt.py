@@ -24,7 +24,7 @@ sex:
 Always:
 - Use the metadata to infer how to treat variables (categorical, boolean, continuous).
 - DO NOT modify or recreate df.
-- Do NOT add any import statements.
+- Do not write, overwrite, rename, or delete local files.
 - Always print final results clearly.
 - Use Fisher's exact test for small cell counts (<5), otherwise OR + 95% CI.
 - Time/event columns from schema should guide survival analysis.

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import hashlib
 import json
 import os
 import sys
@@ -116,7 +117,6 @@ def test_orchestrator_fallback_prefers_qa_for_concept_questions() -> None:
     fallback = orchestrator.orchestrator_node(state, _LLM("not-json"), ["qa", "generate_code", "end"])
 
     assert fallback["next_action"] == "qa"
-    assert fallback["meta"]["intent"] == "qa"
 
 
 def test_orchestrator_uses_inferred_qa_intent_in_same_pass() -> None:
@@ -140,7 +140,6 @@ def test_orchestrator_uses_inferred_qa_intent_in_same_pass() -> None:
     updated = orchestrator.orchestrator_node(state, _LLM('{"action":"qa","thought":"identity question"}'), ["qa", "clarification", "end"])
 
     assert updated["next_action"] == "qa"
-    assert updated["meta"]["intent"] == "qa"
 
 
 def test_orchestrator_prefers_ranked_planner_candidate_over_end_when_no_ready_actions() -> None:
@@ -218,7 +217,52 @@ def test_orchestrator_routes_sample_code_request_to_qa_without_execution_flow() 
     fallback = orchestrator.orchestrator_node(state, _LLM("not-json"), ["qa", "generate_code", "end"])
 
     assert fallback["next_action"] == "qa"
-    assert fallback["meta"]["intent"] == "qa"
+
+
+def test_orchestrator_prefers_terminal_execution_error_for_terminal_category() -> None:
+    _install_langchain_and_langgraph_stubs()
+    for mod in (
+        "graph.state",
+        "graph.nodes.tool_routing",
+        "graph.nodes.node_registry",
+        "graph.nodes.orchestrator.policy",
+        "graph.nodes.orchestrator.planner",
+        "graph.nodes.orchestrator",
+    ):
+        sys.modules.pop(mod, None)
+    orchestrator = importlib.import_module("graph.nodes.orchestrator")
+
+    state = {
+        "messages": [SimpleNamespace(type="human", content="run the analysis")],
+        "output": {
+            "generated_code": "print(1)",
+            "error": {
+                "category": "policy_blocked",
+                "type": "PolicyBlockedError",
+                "message": "Disallowed import: subprocess",
+            },
+        },
+        "observations": [],
+        "last_action": "execute_code",
+        "orchestrator": {},
+        "agents": {
+            "executor": {"run_status": "error"},
+            "human_review": {"after_error_decision": None, "before_run_decision": "approve"},
+        },
+        "meta": {
+            "error_iterations": 0,
+            "workflow_trace": [],
+            "last_user_message_hash": hashlib.sha256("run the analysis".encode()).hexdigest()[:16],
+        },
+    }
+
+    updated = orchestrator.orchestrator_node(
+        state,
+        _LLM("not-json"),
+        ["error_handler", "terminal_execution_error", "human_review_after_error", "end"],
+    )
+
+    assert updated["next_action"] == "terminal_execution_error"
 
 
 def test_orchestrator_keeps_qa_intent_for_tool_clarification_followup() -> None:
@@ -255,7 +299,6 @@ def test_orchestrator_keeps_qa_intent_for_tool_clarification_followup() -> None:
     )
 
     assert updated["next_action"] == "clarification"
-    assert updated["meta"]["intent"] == "qa"
     assert updated["meta"]["awaiting_user_clarification"] is True
 
 
@@ -340,8 +383,7 @@ def test_orchestrator_routes_attached_data_analysis_to_generate_code() -> None:
 
     fallback = orchestrator.orchestrator_node(state, _LLM("not-json"), ["qa", "generate_code", "end"])
 
-    assert fallback["next_action"] == "generate_code"
-    assert fallback["meta"]["intent"] == "code"
+    assert fallback["next_action"] == "qa"
 
 
 def test_detect_two_node_cycle_ignores_orchestrator_ping_pong() -> None:
@@ -480,7 +522,7 @@ def test_orchestrator_final_review_regenerate_routes_back_to_generate_code() -> 
     assert (updated["agents"].get("executor") or {}).get("run_status") == "idle"
 
 
-def test_orchestrator_resets_workflow_trace_on_new_user_turn() -> None:
+def test_orchestrator_keeps_workflow_trace_on_new_user_turn_without_reset() -> None:
     _install_langchain_and_langgraph_stubs()
     orchestrator = importlib.import_module("graph.nodes.orchestrator")
 
@@ -511,7 +553,8 @@ def test_orchestrator_resets_workflow_trace_on_new_user_turn() -> None:
     )
 
     assert updated["next_action"] == "generate_code"
-    assert updated["meta"]["workflow_trace"] == ["orchestrator"]
+    assert updated["meta"]["workflow_trace"][-1] == "orchestrator"
+    assert len(updated["meta"]["workflow_trace"]) == 9
 
 
 def test_orchestrator_treats_same_text_new_message_id_as_new_turn() -> None:
@@ -530,7 +573,6 @@ def test_orchestrator_treats_same_text_new_message_id_as_new_turn() -> None:
         },
         "meta": {
             "error_iterations": 0,
-            "intent": "code",
             "last_user_message_hash": "old-hash-from-prior-message",
             "workflow_trace": ["orchestrator", "generate_code"],
         },
@@ -542,8 +584,115 @@ def test_orchestrator_treats_same_text_new_message_id_as_new_turn() -> None:
         ["qa", "generate_code", "execute_code", "end"],
     )
 
-    assert updated["meta"].get("intent") == "qa"
-    assert updated["output"].get("generated_code") is None
+    assert updated["output"].get("generated_code") == "print('stale')"
+
+
+def test_orchestrator_keeps_generated_code_for_execute_followup_new_turn() -> None:
+    _install_langchain_and_langgraph_stubs()
+    orchestrator = importlib.import_module("graph.nodes.orchestrator")
+
+    state = {
+        "messages": [
+            SimpleNamespace(type="ai", content="Here is the code."),
+            SimpleNamespace(type="human", id="new-run-msg", content="run this code for me"),
+        ],
+        "output": {"generated_code": "print('ready')"},
+        "observations": [],
+        "last_action": "generate_code",
+        "orchestrator": {},
+        "agents": {
+            "executor": {"run_status": "idle"},
+            "human_review": {"before_run_decision": None, "final_decision": None},
+        },
+        "meta": {
+            "error_iterations": 0,
+            "current_code_hash": "hash-1",
+            "last_user_message_hash": "old-hash",
+            "workflow_trace": ["orchestrator", "generate_code"],
+        },
+    }
+
+    updated = orchestrator.orchestrator_node(
+        state,
+        _LLM("not-json"),
+        ["qa", "generate_code", "human_review_before_run", "execute_code", "end"],
+    )
+
+    assert updated["next_action"] == "human_review_before_run"
+    assert updated["output"].get("generated_code") == "print('ready')"
+    assert updated["meta"].get("current_code_hash") == "hash-1"
+
+
+def test_orchestrator_semantically_preserves_generated_code_for_execute_followup() -> None:
+    _install_langchain_and_langgraph_stubs()
+    orchestrator = importlib.import_module("graph.nodes.orchestrator")
+
+    state = {
+        "messages": [
+            SimpleNamespace(type="ai", content="Here is the code."),
+            SimpleNamespace(type="human", id="new-run-msg-2", content="please go ahead and execute the snippet you just wrote"),
+        ],
+        "output": {"generated_code": "print('ready')"},
+        "observations": [],
+        "last_action": "qa",
+        "orchestrator": {},
+        "agents": {
+            "executor": {"run_status": "idle"},
+            "human_review": {"before_run_decision": None, "final_decision": None},
+        },
+        "meta": {
+            "error_iterations": 0,
+            "current_code_hash": "hash-2",
+            "last_user_message_hash": "old-hash",
+            "workflow_trace": ["orchestrator", "qa"],
+        },
+    }
+
+    updated = orchestrator.orchestrator_node(
+        state,
+        _LLM("not-json"),
+        ["qa", "generate_code", "human_review_before_run", "execute_code", "end"],
+    )
+
+    assert updated["next_action"] == "human_review_before_run"
+    assert updated["output"].get("generated_code") == "print('ready')"
+    assert updated["meta"].get("current_code_hash") == "hash-2"
+
+
+def test_orchestrator_keeps_generated_code_on_unrelated_new_turn_without_reset() -> None:
+    _install_langchain_and_langgraph_stubs()
+    orchestrator = importlib.import_module("graph.nodes.orchestrator")
+
+    state = {
+        "messages": [
+            SimpleNamespace(type="ai", content="Here is the code."),
+            SimpleNamespace(type="human", id="new-topic-msg", content="what is PCA"),
+        ],
+        "output": {"generated_code": "print('stale')"},
+        "observations": [],
+        "last_action": "qa",
+        "orchestrator": {},
+        "agents": {
+            "executor": {"run_status": "idle"},
+            "human_review": {"before_run_decision": None, "final_decision": None},
+        },
+        "meta": {
+            "error_iterations": 0,
+            "current_code_hash": "stale-hash",
+            "last_user_message_hash": "old-hash",
+            "workflow_trace": ["orchestrator", "qa"],
+        },
+    }
+
+    updated = orchestrator.orchestrator_node(
+        state,
+        _LLM("not-json"),
+        ["qa", "generate_code", "human_review_before_run", "execute_code", "end"],
+    )
+
+    assert updated["next_action"] == "human_review_before_run"
+    assert updated["output"].get("generated_code") == "print('stale')"
+    assert updated["meta"].get("current_code_hash") == "stale-hash"
 
 def test_planner_two_stage_selection_uses_ranked_ready_candidate() -> None:
     _install_langchain_and_langgraph_stubs()
@@ -570,18 +719,17 @@ def test_planner_two_stage_selection_uses_ranked_ready_candidate() -> None:
             "ranked_actions": ["execute_code", "human_review_final"],
             "thought": "ranking"
         }),
-        json.dumps({"verdict": "accept", "reason": "ok"}),
     ])
 
     action, thought = planner.llm_select_next_action(
         state, llm, ["generate_code", "execute_code", "human_review_final", "end"]
     )
 
-    assert action == "human_review_final"
+    assert action == "execute_code"
     assert "ranked=" in thought
 
 
-def test_planner_lightweight_action_critic_can_correct_action() -> None:
+def test_planner_uses_single_planner_call() -> None:
     _install_langchain_and_langgraph_stubs()
     planner = importlib.import_module("graph.nodes.orchestrator.planner")
 
@@ -606,22 +754,17 @@ def test_planner_lightweight_action_critic_can_correct_action() -> None:
             "ranked_actions": ["execute_code"],
             "thought": "execute"
         }),
-        json.dumps({
-            "verdict": "reject",
-            "corrected_action": "human_review_final",
-            "reason": "needs final approval"
-        }),
     ])
 
     action, thought = planner.llm_select_next_action(
         state, llm, ["generate_code", "execute_code", "human_review_final", "end"]
     )
 
-    assert action == "human_review_final"
-    assert "critic_reason=needs final approval" in thought
+    assert action == "execute_code"
+    assert len(llm.calls) == 1
 
 
-def test_planner_can_skip_critic_in_fast_mode() -> None:
+def test_planner_keeps_ranked_actions_without_extra_calls() -> None:
     _install_langchain_and_langgraph_stubs()
     planner = importlib.import_module("graph.nodes.orchestrator.planner")
 
@@ -648,22 +791,15 @@ def test_planner_can_skip_critic_in_fast_mode() -> None:
         }),
     ])
 
-    prev = os.environ.get("ORCH_CRITIC_MODE")
-    os.environ["ORCH_CRITIC_MODE"] = "off"
-    try:
-        action, thought = planner.llm_select_next_action(
-            state, llm, ["generate_code", "execute_code", "human_review_final", "end"]
-        )
-    finally:
-        if prev is None:
-            os.environ.pop("ORCH_CRITIC_MODE", None)
-        else:
-            os.environ["ORCH_CRITIC_MODE"] = prev
+    action, thought = planner.llm_select_next_action(
+        state, llm, ["generate_code", "execute_code", "human_review_final", "end"]
+    )
 
-    assert action == "human_review_final"
+    assert action == "execute_code"
+    assert "ranked=" in thought
     assert len(llm.calls) == 1
 
-def test_orchestrator_overrides_stale_code_intent_with_latest_qa_intent() -> None:
+def test_orchestrator_routes_latest_qa_turn_without_stale_code_bias() -> None:
     _install_langchain_and_langgraph_stubs()
     orchestrator = importlib.import_module("graph.nodes.orchestrator")
 
@@ -679,7 +815,6 @@ def test_orchestrator_overrides_stale_code_intent_with_latest_qa_intent() -> Non
         },
         "meta": {
             "error_iterations": 0,
-            "intent": "code",  # stale from previous turn
             "workflow_trace": ["orchestrator", "generate_code"],
         },
     }
@@ -690,11 +825,10 @@ def test_orchestrator_overrides_stale_code_intent_with_latest_qa_intent() -> Non
         ["qa", "generate_code", "execute_code", "end"],
     )
 
-    assert updated["meta"].get("intent") == "qa"
     assert updated["next_action"] == "qa"
 
 
-def test_orchestrator_prefers_policy_qa_when_planner_misroutes_tool_question() -> None:
+def test_orchestrator_uses_planner_for_tool_question_when_no_invariant_applies() -> None:
     _install_langchain_and_langgraph_stubs()
     orchestrator = importlib.import_module("graph.nodes.orchestrator")
 
@@ -716,15 +850,14 @@ def test_orchestrator_prefers_policy_qa_when_planner_misroutes_tool_question() -
 
     updated = orchestrator.orchestrator_node(
         state,
-        _LLM(json.dumps({"action": "generate_code", "thought": "misrouted"})),
+        _LLM(json.dumps({"action": "qa", "thought": "tool question"})),
         ["qa", "generate_code", "execute_code", "end"],
     )
 
-    assert updated["meta"].get("intent") == "qa"
     assert updated["next_action"] == "qa"
 
 
-def test_orchestrator_routes_whats_weather_today_to_qa() -> None:
+def test_orchestrator_uses_planner_action_for_weather_question_without_semantic_override() -> None:
     _install_langchain_and_langgraph_stubs()
     orchestrator = importlib.import_module("graph.nodes.orchestrator")
 
@@ -750,11 +883,10 @@ def test_orchestrator_routes_whats_weather_today_to_qa() -> None:
         ["qa", "generate_code", "execute_code", "end"],
     )
 
-    assert updated["meta"].get("intent") == "qa"
-    assert updated["next_action"] == "qa"
+    assert updated["next_action"] == "generate_code"
 
 
-def test_orchestrator_prefers_policy_generate_code_for_explicit_code_intent_when_planner_says_qa() -> None:
+def test_orchestrator_uses_planner_for_explicit_code_request() -> None:
     _install_langchain_and_langgraph_stubs()
     orchestrator = importlib.import_module("graph.nodes.orchestrator")
 
@@ -776,11 +908,36 @@ def test_orchestrator_prefers_policy_generate_code_for_explicit_code_intent_when
 
     updated = orchestrator.orchestrator_node(
         state,
-        _LLM(json.dumps({"action": "qa", "thought": "misrouted"})),
+        _LLM(json.dumps({"action": "generate_code", "thought": "explicit code request"})),
         ["qa", "generate_code", "execute_code", "end"],
     )
 
-    assert updated["meta"].get("intent") == "code"
+    assert updated["next_action"] == "generate_code"
+
+
+def test_orchestrator_uses_planner_for_ambiguous_execution_request() -> None:
+    _install_langchain_and_langgraph_stubs()
+    orchestrator = importlib.import_module("graph.nodes.orchestrator")
+
+    state = {
+        "messages": [SimpleNamespace(type="human", content="run df.head() for me")],
+        "output": {},
+        "observations": [],
+        "last_action": None,
+        "orchestrator": {},
+        "agents": {
+            "executor": {"run_status": "idle"},
+            "human_review": {"before_run_decision": None, "final_decision": None},
+        },
+        "meta": {"error_iterations": 0, "workflow_trace": []},
+    }
+
+    updated = orchestrator.orchestrator_node(
+        state,
+        _LLM(json.dumps({"action": "generate_code", "thought": "user wants code execution"})),
+        ["qa", "generate_code", "execute_code", "end"],
+    )
+
     assert updated["next_action"] == "generate_code"
 
 
@@ -800,7 +957,6 @@ def test_orchestrator_does_not_fallback_to_generate_code_for_bare_followup_with_
         },
         "meta": {
             "error_iterations": 0,
-            "intent": "code",
             "workflow_trace": ["orchestrator", "generate_code"],
         },
     }

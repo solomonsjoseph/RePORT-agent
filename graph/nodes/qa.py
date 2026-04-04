@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import json
+
 from langchain_core.messages import AIMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 from ..state import AgentState, MetaKeys
+from utils.code_parser import extract_python_code
+from .code_guardrails import code_fingerprint, is_executable_python
 from .state_helpers import (
     clear_clarification_meta,
     enqueue_tool_requester,
@@ -19,6 +23,27 @@ from .tool_routing import (
 )
 from utils.message_window import window_messages
 from utils.llm_response import coerce_text_content
+
+
+def _parse_structured_qa_response(text: str) -> tuple[str | None, bool, str | None]:
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return None, False, None
+
+    if not isinstance(data, dict):
+        return None, False, None
+
+    answer = data.get("answer")
+    needs_clarification = data.get("needs_clarification")
+    clarification_question = data.get("clarification_question")
+
+    normalized_answer = answer.strip() if isinstance(answer, str) else None
+    normalized_question = (
+        clarification_question.strip() if isinstance(clarification_question, str) else None
+    )
+    explicit_clarification = needs_clarification is True and bool(normalized_question)
+    return normalized_answer, explicit_clarification, normalized_question
 
 
 def _replace_latest_human_message(messages: list, content: str) -> list:
@@ -115,7 +140,16 @@ def qa_node(
                 "system",
                 "You are a helpful data scientist. Answer the user's question "
                 "directly and clearly. If the question requires analysis, explain the "
-                "recommended steps without writing code unless requested.",
+                "recommended steps without writing code unless requested.\n"
+                "Return valid JSON with exactly these keys: "
+                '{"answer": string, "needs_clarification": boolean, "clarification_question": string|null}.\n'
+                'Set "needs_clarification" to true only when the request is blocked by one '
+                "specific missing piece of required information. Do not use clarification for "
+                "optional next steps or offers like asking whether the user wants code.\n"
+                'When "needs_clarification" is true, put the single follow-up question in '
+                '"clarification_question" and set "answer" to an empty string.\n'
+                'When "needs_clarification" is false, put the full response in "answer" and set '
+                '"clarification_question" to null.',
             ),
             (
                 "system",
@@ -135,19 +169,18 @@ def qa_node(
             tool_results=format_tool_results(tool_results),
         ).to_messages()
     )
-    response_text = coerce_text_content(response.content)
+    raw_response_text = coerce_text_content(response.content)
+    parsed_answer, explicit_clarification, clarification_question = _parse_structured_qa_response(
+        raw_response_text
+    )
+    response_text = clarification_question if explicit_clarification else (parsed_answer or raw_response_text)
     messages = list(state.get("messages", []))
     messages.append(AIMessage(content=response_text))
 
     observations = list(state.get("observations", []))
     meta = dict(state.get("meta", {}))
 
-    # If the QA LLM produced a question on a tool-related query, treat it as a
-    # clarification request so the orchestrator preserves context on the next turn.
-    # This handles the case where tool routing fell through (returned neither tools
-    # nor a structured clarification_question) but the LLM naturally asked for a
-    # missing required field (e.g. "Which city would you like weather for?").
-    if response_text.strip().endswith("?"):
+    if explicit_clarification:
         clarification_kind = "qa_tool" if should_attempt_tool_routing else "qa_followup"
         meta = set_clarification_meta(
             meta,
@@ -156,10 +189,9 @@ def qa_node(
             pending_question=question,
         )
         awaiting_tool_clarification_for_agent = True
-        observations.append("qa: asked clarification (llm path)")
+        observations.append("qa: asked clarification (structured qa response)")
     else:
         meta = clear_clarification_meta(meta)
-        meta.pop(MetaKeys.INTENT, None)
         awaiting_tool_clarification_for_agent = False
         observations.append("qa: responded to user question")
 
@@ -172,7 +204,18 @@ def qa_node(
     }
     output = dict(updated_state.get("output") or {})
     output["qa_response"] = response_text
+    code = extract_python_code(response_text)
+    if is_executable_python(code):
+        output["generated_code"] = code
+        meta[MetaKeys.CURRENT_CODE_HASH] = code_fingerprint(code)
+        agents = dict(updated_state.get("agents", {}))
+        review_state = dict(agents.get("human_review", {}))
+        review_state["before_run_decision"] = None
+        review_state["approved_code_hash"] = None
+        agents["human_review"] = review_state
+        updated_state["agents"] = agents
     updated_state["output"] = output
+    updated_state["meta"] = meta
     return update_agent_state(
         updated_state,
         "qa",

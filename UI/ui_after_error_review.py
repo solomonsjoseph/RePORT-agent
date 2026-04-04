@@ -5,12 +5,24 @@ def _dismiss_interrupt(interrupt_id):
     st.session_state["dismissed_interrupt_id"] = str(interrupt_id)
 
 
+def _error_review_message(error_payload: dict | None) -> str:
+    category = (error_payload or {}).get("category")
+    if category == "policy_blocked":
+        return "Sandbox policy blocked this code. The app will not auto-retry."
+    if category == "unsupported_runtime":
+        return "The requested package/runtime capability is not available in the sandbox image."
+    if category == "timeout":
+        return "The analysis exceeded the sandbox time limit and was not retried automatically."
+    if category == "infrastructure":
+        return "The sandbox runner failed due to an environment/runtime issue."
+    return "The assistant hit repeated errors while executing the code."
+
+
 def ui_after_error_review(app, config, payload, interrupt_id, queue_resume):
     ui_type = "after_error_review"
     st.subheader("⚠️ Error Resolution Needed")
-    st.warning("The assistant hit repeated errors while executing the code.")
-
     error_payload = payload.get("error") or {}
+    st.warning(_error_review_message(error_payload))
     if error_payload:
         st.markdown("Error details:")
         st.code(

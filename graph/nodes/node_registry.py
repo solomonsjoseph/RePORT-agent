@@ -4,7 +4,7 @@ Every node is described by a single NodeDefinition.  When you add a new node:
 
   1. Add a NodeDefinition entry to NODE_REGISTRY below.
   2. Register the callable in builder.py's ``action_nodes`` dict.
-  3. That is all — capability text, routing policy, reset behaviour, and LLM
+  3. That is all — capability text, routing policy, and LLM
      state-summary context are all derived automatically from the registry.
 
 Risk-1 fix: knowledge that was previously scattered across three locations
@@ -13,12 +13,10 @@ Risk-1 fix: knowledge that was previously scattered across three locations
 
 Risk-2 fix: ``validate_registry()`` asserts structural invariants at startup.
 
-Risk-3 fix: ``reset_agent_keys`` on each NodeDefinition drives _reset_for_new_turn
-  so new nodes self-register their cleanup needs.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Callable
 
 from ..state import AgentState, MetaKeys
@@ -35,6 +33,40 @@ MAX_ERROR_ITERATIONS = 5
 
 def _error_iterations(state: AgentState) -> int:
     return int((state.get("meta") or {}).get("error_iterations", 0))
+
+
+def _execution_error(state: AgentState) -> dict:
+    return dict((state.get("output") or {}).get("error") or {})
+
+
+def _execution_error_category(state: AgentState) -> str | None:
+    return _execution_error(state).get("category")
+
+
+def _has_retryable_execution_error(state: AgentState) -> bool:
+    return (
+        get_agent_state(state, "executor").get("run_status") == "error"
+        and _execution_error_category(state) == "retryable_code"
+    )
+
+
+def _has_terminal_execution_error(state: AgentState) -> bool:
+    return (
+        get_agent_state(state, "executor").get("run_status") == "error"
+        and _execution_error_category(state) in {
+            "policy_blocked",
+            "unsupported_runtime",
+            "infrastructure",
+            "timeout",
+        }
+    )
+
+
+def _has_exhausted_retryable_execution_error(state: AgentState) -> bool:
+    return (
+        _has_retryable_execution_error(state)
+        and _error_iterations(state) >= MAX_ERROR_ITERATIONS
+    )
 
 
 def _has_fresh_run_approval(state: AgentState) -> bool:
@@ -66,8 +98,7 @@ def _has_affirmative_code_readiness(state: AgentState) -> bool:
         return True
     if _is_code_clarification_continuation(state):
         return True
-    from .orchestrator.intent import infer_intent_from_latest_user
-    return infer_intent_from_latest_user(state) == "code"
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -86,15 +117,11 @@ class NodeDefinition:
                           registry so ordering is unambiguous.
         is_ready:         Predicate called by the orchestrator to decide whether
                           this node should run given the current state.
-        reset_agent_keys: Keys under state["agents"] that should be cleared when
-                          a new user turn is detected.  Add any agent-level state
-                          your node writes here so it does not bleed across turns.
     """
     name: str
     capability: str
     priority: int
     is_ready: Callable[[AgentState], bool]
-    reset_agent_keys: list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -110,21 +137,28 @@ NODE_REGISTRY: list[NodeDefinition] = [
         ),
         priority=10,
         is_ready=lambda s: (
-            get_agent_state(s, "executor").get("run_status") == "error"
+            _has_retryable_execution_error(s)
             and _error_iterations(s) < MAX_ERROR_ITERATIONS
         ),
-        reset_agent_keys=[],  # meta["error_iterations"] is reset via _reset_for_new_turn
+    ),
+    NodeDefinition(
+        name="terminal_execution_error",
+        capability="Explain terminal execution failures directly to the user and end the turn without retrying.",
+        priority=20,
+        is_ready=lambda s: (
+            _has_terminal_execution_error(s)
+        ),
     ),
     NodeDefinition(
         name="human_review_after_error",
-        capability="Ask human for guidance after repeated code-execution failures once retry budget is exhausted.",
-        priority=20,
+        capability="Ask human for guidance after repeated retryable code-execution failures once retry budget is exhausted.",
+        priority=25,
         is_ready=lambda s: (
-            get_agent_state(s, "executor").get("run_status") == "error"
-            and _error_iterations(s) >= MAX_ERROR_ITERATIONS
+            (
+                _has_exhausted_retryable_execution_error(s)
+            )
             and get_agent_state(s, "human_review").get("after_error_decision") is None
         ),
-        reset_agent_keys=["human_review"],
     ),
     NodeDefinition(
         name="tool_handler",
@@ -134,7 +168,6 @@ NODE_REGISTRY: list[NodeDefinition] = [
         ),
         priority=30,
         is_ready=is_tool_requested,
-        reset_agent_keys=[],
     ),
     NodeDefinition(
         name="clarification",
@@ -144,7 +177,6 @@ NODE_REGISTRY: list[NodeDefinition] = [
         ),
         priority=35,
         is_ready=lambda s: bool((s.get("meta") or {}).get(MetaKeys.AWAITING_USER_CLARIFICATION)),
-        reset_agent_keys=[],
     ),
     NodeDefinition(
         name="qa",
@@ -156,10 +188,9 @@ NODE_REGISTRY: list[NodeDefinition] = [
         ),
         priority=40,
         is_ready=lambda s: (
-            not _has_affirmative_code_readiness(s)
+            not bool((s.get("output") or {}).get("generated_code"))
             and not is_tool_requested(s)
         ),
-        reset_agent_keys=[],
     ),
     NodeDefinition(
         name="generate_code",
@@ -173,9 +204,7 @@ NODE_REGISTRY: list[NodeDefinition] = [
         is_ready=lambda s: (
             not (s.get("output") or {}).get("generated_code")
             and not is_tool_requested(s)
-            and _has_affirmative_code_readiness(s)
         ),
-        reset_agent_keys=["generate_code"],
     ),
     NodeDefinition(
         name="human_review_before_run",
@@ -186,7 +215,6 @@ NODE_REGISTRY: list[NodeDefinition] = [
             and get_agent_state(s, "executor").get("run_status") in ("idle", "pending")
             and get_agent_state(s, "human_review").get("before_run_decision") is None
         ),
-        reset_agent_keys=["human_review"],
     ),
     NodeDefinition(
         name="execute_code",
@@ -199,7 +227,6 @@ NODE_REGISTRY: list[NodeDefinition] = [
             and get_agent_state(s, "executor").get("run_status") in ("idle", "pending")
             and _has_fresh_run_approval(s)
         ),
-        reset_agent_keys=["executor"],
     ),
     NodeDefinition(
         name="human_review_final",
@@ -209,7 +236,6 @@ NODE_REGISTRY: list[NodeDefinition] = [
             get_agent_state(s, "executor").get("run_status") == "ok"
             and get_agent_state(s, "human_review").get("final_decision") is None
         ),
-        reset_agent_keys=["human_review"],
     ),
 ]
 
@@ -257,9 +283,6 @@ def validate_registry(known_action_names: list[str] | None = None) -> None:
     for nd in NODE_REGISTRY:
         assert callable(nd.is_ready), (
             f"NodeDefinition '{nd.name}'.is_ready must be callable, got {type(nd.is_ready)}"
-        )
-        assert isinstance(nd.reset_agent_keys, list), (
-            f"NodeDefinition '{nd.name}'.reset_agent_keys must be a list"
         )
 
     # Cross-check against builder's action_nodes when provided
