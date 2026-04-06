@@ -90,13 +90,15 @@ def test_planner_prompt_formats_with_node_capabilities() -> None:
         recent_observations='["obs"]',
         planner_decision_trace='["thought"]',
         node_capabilities="- qa: answer directly",
-        ready_actions="qa",
         blocked_actions="- generate_code",
     )
     rendered = prompt.to_messages()
 
     assert "Node capabilities:" in rendered[0]["content"]
     assert "- qa: answer directly" in rendered[0]["content"]
+    assert 'Recent observations:\n["obs"]' in rendered[1]["content"]
+    assert 'Planner decision trace:\n["thought"]' in rendered[1]["content"]
+    assert "Blocked actions:\n- generate_code" in rendered[1]["content"]
 
 
 def test_orchestrator_fallback_prefers_qa_for_concept_questions() -> None:
@@ -838,8 +840,7 @@ def test_llm_select_next_action_uses_environment_summary_and_action_mask() -> No
     assert "workflow_trace_tail=['orchestrator', 'generate_code']" in planner_messages[1]["content"]
     assert 'Recent observations:\n["generate_code: code_generated"]' in planner_messages[1]["content"]
     assert "Planner decision trace:\n[]" in planner_messages[1]["content"]
-    assert "READY actions:\nnone" in planner_messages[1]["content"]
-    assert "BLOCKED actions:\n- qa\n- generate_code\n- execute_code\n- execute_code (requires fresh human approval)" in planner_messages[1]["content"]
+    assert "Blocked actions:\nnone" in planner_messages[1]["content"]
 
 
 def test_llm_select_next_action_masks_blocked_actions_with_reasons() -> None:
@@ -868,8 +869,7 @@ def test_llm_select_next_action_masks_blocked_actions_with_reasons() -> None:
 
     planner_messages = llm.calls[0]
     assert "Allowed actions:\nqa" in planner_messages[0]["content"]
-    assert "READY actions:\nqa" in planner_messages[1]["content"]
-    assert "BLOCKED actions:\n- execute_code (requires generated code)" in planner_messages[1]["content"]
+    assert "Blocked actions:\n- execute_code (requires generated code)" in planner_messages[1]["content"]
 
 def test_orchestrator_routes_latest_qa_turn_without_stale_code_bias() -> None:
     _install_langchain_and_langgraph_stubs()

@@ -138,6 +138,5 @@ def test_planner_prompt_uses_rich_context_and_normalized_affordances() -> None:
     assert "recent_observations=['generate_code: code_generated']" in combined
     assert 'Recent observations:\n["generate_code: code_generated"]' in combined
     assert 'Planner decision trace:\n[{"action": "generate_code", "thought": "initial analysis route"}]' in combined
-    assert "READY actions:\nhuman_review_before_run" in combined
-    assert "generate_code" in combined
-    assert "BLOCKED actions:\n- generate_code" in combined
+    assert "Allowed actions:\nend, execute_code, generate_code, human_review_before_run" in combined
+    assert "Blocked actions:\nnone" in combined

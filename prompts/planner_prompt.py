@@ -38,8 +38,7 @@ def make_planner_prompt():
                 "Environment summary:\n{environment_summary}\n\n"
                 "Recent observations:\n{recent_observations}\n\n"
                 "Planner decision trace:\n{planner_decision_trace}\n\n"
-                "READY actions:\n{ready_actions}\n\n"
-                "BLOCKED actions:\n{blocked_actions}",
+                "Blocked actions:\n{blocked_actions}",
             ),
         ]
     )
