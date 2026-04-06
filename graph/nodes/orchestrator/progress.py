@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import hashlib
 
-from ...state import MetaKeys
 from ...state_views import get_artifacts, get_node_data
+
+PROGRESS_SNAPSHOT = "progress_snapshot"
+PROGRESS_MADE_LAST_STEP = "progress_made_last_step"
+STAGNATION_COUNT = "stagnation_count"
+REPEATED_FAILURE_SIGNATURE = "repeated_failure_signature"
 
 
 def _hash_text(value: object) -> str | None:
@@ -64,10 +68,10 @@ def classify_progress(previous: dict | None, current: dict) -> bool:
 def update_progress_tracking(state: dict) -> dict:
     meta = dict(state.get("meta") or {})
     current = build_progress_snapshot(state)
-    previous = dict(meta.get(MetaKeys.PROGRESS_SNAPSHOT) or {})
+    previous = dict(meta.get(PROGRESS_SNAPSHOT) or {})
     progressed = classify_progress(previous or None, current)
-    meta[MetaKeys.PROGRESS_SNAPSHOT] = current
-    meta[MetaKeys.PROGRESS_MADE_LAST_STEP] = progressed
-    meta[MetaKeys.STAGNATION_COUNT] = 0 if progressed else int(meta.get(MetaKeys.STAGNATION_COUNT, 0)) + 1
-    meta[MetaKeys.REPEATED_FAILURE_SIGNATURE] = current.get("error_signature")
+    meta[PROGRESS_SNAPSHOT] = current
+    meta[PROGRESS_MADE_LAST_STEP] = progressed
+    meta[STAGNATION_COUNT] = 0 if progressed else int(meta.get(STAGNATION_COUNT, 0)) + 1
+    meta[REPEATED_FAILURE_SIGNATURE] = current.get("error_signature")
     return {**state, "meta": meta}

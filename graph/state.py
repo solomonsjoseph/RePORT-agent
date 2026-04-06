@@ -1,15 +1,6 @@
-from __future__ import annotations
-
-from typing import TYPE_CHECKING, Annotated, List, TypedDict
-
-try:
-    from langgraph.graph.message import add_messages
-except ModuleNotFoundError:  # pragma: no cover - import safety for test envs without langgraph
-    def add_messages(left, right):
-        return right
-
-if TYPE_CHECKING:
-    from langchain_core.messages import BaseMessage
+from typing import Annotated, List, TypedDict
+from langchain_core.messages import BaseMessage
+from langgraph.graph.message import add_messages
 
 class AgentState(TypedDict):
     messages: Annotated[List[BaseMessage], add_messages]
