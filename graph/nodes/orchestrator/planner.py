@@ -83,8 +83,8 @@ def llm_plan_next_action(
     if final_action == "end" and masked_ranked_actions:
         final_action = masked_ranked_actions[0]
     trace_action = planner_action
-    if planner_action == "end" and masked_ranked_actions:
-        trace_action = masked_ranked_actions[0]
+    if masked_ranked_actions and final_action == masked_ranked_actions[0] and final_action != planner_action:
+        trace_action = final_action
 
     if masked_ranked_actions:
         suffix = f"ranked={masked_ranked_actions}"
