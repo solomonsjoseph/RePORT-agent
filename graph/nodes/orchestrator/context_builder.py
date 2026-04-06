@@ -3,9 +3,25 @@ from __future__ import annotations
 import json
 
 from ...state import MetaKeys
-from ...state_views import get_artifacts, get_node_data, get_planner_state
+from ...state_views import get_artifacts, get_node_data, get_planner_state, merge_state_patch
 from ..node_registry import NODE_CAPABILITIES
 from .state_logic import _latest_user_message
+
+
+def build_planner_runtime_state(state: dict, available_actions: list[str]) -> dict:
+    node_names = set(available_actions)
+    node_names.update({"executor", "human_review"})
+    node_data = {name: get_node_data(state, name) for name in sorted(node_names)}
+    planner_state = get_planner_state(state)
+
+    return merge_state_patch(
+        state,
+        {
+            "artifacts": get_artifacts(state),
+            "node_data": node_data,
+            "planner": planner_state,
+        },
+    )
 
 
 def build_planner_context(state: dict, available_actions: list[str]) -> dict:

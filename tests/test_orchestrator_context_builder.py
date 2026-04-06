@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import importlib
+import json
 import sys
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 
 
 def _install_langchain_and_langgraph_stubs() -> None:
@@ -53,6 +54,16 @@ def _install_langchain_and_langgraph_stubs() -> None:
     sys.modules["langgraph.graph.message"] = graph_message_mod
 
 
+class _LLM:
+    def __init__(self, content: str) -> None:
+        self._content = content
+        self.calls: list[list[dict[str, str]]] = []
+
+    def invoke(self, messages):
+        self.calls.append(messages)
+        return SimpleNamespace(content=self._content)
+
+
 def test_build_planner_context_includes_history_observations_and_progress() -> None:
     _install_langchain_and_langgraph_stubs()
     build_planner_context = importlib.import_module(
@@ -88,3 +99,44 @@ def test_build_planner_context_includes_history_observations_and_progress() -> N
     assert "recent_observations" in context
     assert "stagnation_count=2" in context["environment_summary"]
     assert "generate_code" in context["node_capabilities"]
+
+
+def test_planner_prompt_uses_rich_context_and_normalized_affordances() -> None:
+    _install_langchain_and_langgraph_stubs()
+    llm_select_next_action = importlib.import_module(
+        "graph.nodes.orchestrator.planner"
+    ).llm_select_next_action
+
+    state = {
+        "messages": [],
+        "artifacts": {"generated_code": "print(1)"},
+        "output": {},
+        "planner": {
+            "decision_trace": [
+                {"action": "generate_code", "thought": "initial analysis route"}
+            ]
+        },
+        "observations": ["generate_code: code_generated"],
+        "node_data": {
+            "executor": {"run_status": "idle"},
+            "human_review": {"before_run_decision": None, "final_decision": None},
+        },
+        "meta": {"workflow_trace": ["orchestrator", "generate_code"]},
+        "last_action": "generate_code",
+    }
+
+    llm = _LLM(json.dumps({"action": "human_review_before_run", "thought": "code exists"}))
+    llm_select_next_action(
+        state,
+        llm,
+        ["generate_code", "human_review_before_run", "execute_code", "end"],
+    )
+
+    rendered = llm.calls[0]
+    combined = "\n".join(message["content"] for message in rendered)
+
+    assert "recent_observations=['generate_code: code_generated']" in combined
+    assert "planner_decision_trace=[{" in combined
+    assert "READY actions:\nhuman_review_before_run" in combined
+    assert "generate_code" in combined
+    assert "BLOCKED actions:\n- generate_code" in combined
