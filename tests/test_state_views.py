@@ -33,7 +33,7 @@ def test_get_planner_state_reads_legacy_orchestrator_and_preserves_nested_planne
     state = {
         "orchestrator": {
             "last_decision": {"action": "qa", "reason": "legacy"},
-            "decision_trace": ["legacy"],
+            "thoughts": ["legacy"],
         },
         "planner": {"last_decision": {"action": "qa"}},
     }
@@ -53,14 +53,14 @@ def test_merge_state_patch_updates_new_sections_without_dropping_legacy_keys() -
         "node_data": {"qa": {"status": "idle", "details": {"attempts": 1, "last_error": "old"}}},
         "orchestrator": {
             "last_decision": {"action": "qa", "reason": "legacy"},
-            "decision_trace": ["legacy"],
+            "thoughts": ["legacy"],
         },
         "planner": {"last_decision": {"action": "qa", "reason": "legacy"}},
     }
     patch = {
         "artifacts": {"generated_code": "print(2)"},
         "node_data": {"qa": {"status": "done", "details": {"attempts": 2}, "response": "ok"}},
-        "planner": {"last_decision": {"action": "qa"}},
+        "planner": {"last_decision": {"action": "qa"}, "decision_trace": ["qa selected"]},
     }
 
     updated = merge_state_patch(state, patch)
@@ -77,4 +77,6 @@ def test_merge_state_patch_updates_new_sections_without_dropping_legacy_keys() -
     assert updated["planner"]["last_decision"]["reason"] == "legacy"
     assert updated["orchestrator"]["last_decision"]["action"] == "qa"
     assert updated["orchestrator"]["last_decision"]["reason"] == "legacy"
+    assert updated["orchestrator"]["thoughts"] == ["qa selected"]
     assert get_planner_state(updated)["last_decision"]["reason"] == "legacy"
+    assert get_planner_state(updated)["decision_trace"] == ["qa selected"]

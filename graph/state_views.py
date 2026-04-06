@@ -33,7 +33,10 @@ def get_node_data(state: dict, node_name: str) -> dict:
 def get_planner_state(state: dict) -> dict:
     orchestrator = dict(state.get("orchestrator") or {})
     planner = dict(state.get("planner") or {})
-    return _merge_dicts(orchestrator, planner)
+    planner_view = _merge_dicts(orchestrator, planner)
+    if "decision_trace" not in planner and "thoughts" in orchestrator:
+        planner_view["decision_trace"] = list(orchestrator.get("thoughts") or [])
+    return planner_view
 
 
 def merge_state_patch(state: dict, patch: dict) -> dict:
@@ -67,5 +70,9 @@ def merge_state_patch(state: dict, patch: dict) -> dict:
     planner = dict(updated.get("planner") or {})
     if planner:
         updated["orchestrator"] = _merge_dicts(updated.get("orchestrator"), planner)
+        if "decision_trace" in planner:
+            orchestrator = dict(updated.get("orchestrator") or {})
+            orchestrator["thoughts"] = list(planner.get("decision_trace") or [])
+            updated["orchestrator"] = orchestrator
 
     return updated
