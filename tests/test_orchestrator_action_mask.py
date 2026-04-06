@@ -43,3 +43,20 @@ def test_mask_actions_forces_clarification_resume_when_tool_clarification_is_pen
 
     assert allowed == ["clarification"]
     assert blocked["qa"] == "clarification loop active"
+
+
+def test_mask_actions_blocks_inactive_control_actions_without_preconditions() -> None:
+    state = {
+        "artifacts": {},
+        "agents": {
+            "qa": {},
+            "executor": {"run_status": "idle"},
+        },
+        "meta": {},
+    }
+
+    allowed, blocked = mask_actions(state, ["qa", "tool_handler", "clarification"])
+
+    assert allowed == ["qa"]
+    assert blocked["tool_handler"] == "requires active tool request"
+    assert blocked["clarification"] == "requires active clarification loop"

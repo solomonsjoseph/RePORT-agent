@@ -871,6 +871,62 @@ def test_llm_select_next_action_masks_blocked_actions_with_reasons() -> None:
     assert "Allowed actions:\nqa" in planner_messages[0]["content"]
     assert "Blocked actions:\n- execute_code (requires generated code)" in planner_messages[1]["content"]
 
+
+def test_llm_select_next_action_rejects_inactive_tool_handler_choice() -> None:
+    _install_langchain_and_langgraph_stubs()
+    planner = importlib.import_module("graph.nodes.orchestrator.planner")
+
+    state = {
+        "messages": [SimpleNamespace(type="human", content="what is PCA?")],
+        "artifacts": {},
+        "node_data": {"executor": {"run_status": "idle"}},
+        "observations": [],
+        "planner": {"decision_trace": []},
+        "meta": {"workflow_trace": ["orchestrator"]},
+        "last_action": None,
+    }
+
+    llm = _LLM('{"action":"tool_handler","thought":"use tools"}')
+    action, thought = planner.llm_select_next_action(
+        state,
+        llm,
+        ["qa", "tool_handler"],
+    )
+
+    assert action == "end"
+    assert thought == "use tools"
+    planner_messages = llm.calls[0]
+    assert "Allowed actions:\nqa" in planner_messages[0]["content"]
+    assert "Blocked actions:\n- tool_handler (requires active tool request)" in planner_messages[1]["content"]
+
+
+def test_llm_select_next_action_rejects_inactive_clarification_choice() -> None:
+    _install_langchain_and_langgraph_stubs()
+    planner = importlib.import_module("graph.nodes.orchestrator.planner")
+
+    state = {
+        "messages": [SimpleNamespace(type="human", content="what is PCA?")],
+        "artifacts": {},
+        "node_data": {"executor": {"run_status": "idle"}},
+        "observations": [],
+        "planner": {"decision_trace": []},
+        "meta": {"workflow_trace": ["orchestrator"]},
+        "last_action": None,
+    }
+
+    llm = _LLM('{"action":"clarification","thought":"ask follow-up"}')
+    action, thought = planner.llm_select_next_action(
+        state,
+        llm,
+        ["qa", "clarification"],
+    )
+
+    assert action == "end"
+    assert thought == "ask follow-up"
+    planner_messages = llm.calls[0]
+    assert "Allowed actions:\nqa" in planner_messages[0]["content"]
+    assert "Blocked actions:\n- clarification (requires active clarification loop)" in planner_messages[1]["content"]
+
 def test_orchestrator_routes_latest_qa_turn_without_stale_code_bias() -> None:
     _install_langchain_and_langgraph_stubs()
     orchestrator = importlib.import_module("graph.nodes.orchestrator")
