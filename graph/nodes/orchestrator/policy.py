@@ -62,6 +62,12 @@ def choose_invariant_action(state: AgentState, available_actions: Iterable[str])
 
 
 def choose_next_action(state: AgentState, available_actions: Iterable[str]) -> str:
+    """Return the last-resort fallback action when the planner cannot help.
+
+    Semantic routing should come from the planner. This helper exists to keep
+    deterministic invariants intact and to provide a stable fallback for
+    malformed or empty planner responses.
+    """
     available = set(available_actions)
 
     invariant_action = choose_invariant_action(state, available_actions)

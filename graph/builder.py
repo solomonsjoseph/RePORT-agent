@@ -23,11 +23,12 @@ def _run_and_mark(node_name, fn):
     def _wrapped(state):
         updated_state = fn(state)
         if not isinstance(updated_state, dict):
-            updated_state = dict(state)
+            updated_state = {}
+        merged_state = {**state, **updated_state}
 
-        orchestrator_state = dict(updated_state.get("orchestrator", {}))
+        orchestrator_state = dict(merged_state.get("orchestrator", {}))
         orchestrator_state.pop("next_action", None)
-        meta = dict(updated_state.get("meta", {}))
+        meta = dict(merged_state.get("meta", {}))
         # Keep this function self-contained so it can be unit-tested by loading
         # only the function body via ``ast`` (without module-level imports).
         workflow_trace = list(meta.get("workflow_trace", []))
@@ -45,10 +46,11 @@ def _run_and_mark(node_name, fn):
             meta.pop("loop_guard_bypass_actions", None)
 
         return {
-            **updated_state,
+            **merged_state,
             "next_action": None,
             "last_action": node_name,
             "orchestrator": orchestrator_state,
+            "planner": dict(merged_state.get("planner", {})),
             "meta": meta,
         }
 

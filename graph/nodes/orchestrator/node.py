@@ -3,14 +3,17 @@ from __future__ import annotations
 from typing import Iterable
 
 from ...state import AgentState, MetaKeys
+from ...state_views import get_planner_state, merge_state_patch
+from .action_mask import mask_actions
 from .loop_guards import _apply_loop_guards
 from .planner import llm_select_next_action
 from .policy import (
     _next_tool_requester,
     _tool_request_queue,
+    choose_invariant_action,
     choose_next_action,
-    should_prefer_policy_action,
 )
+from .progress import update_progress_tracking
 from .state_logic import (
     _consume_final_review_regenerate,
     _consume_regenerate_before_run,
@@ -19,7 +22,24 @@ from .state_logic import (
 )
 
 
+def _record_planner_decision(state: AgentState, action: str, thought: str) -> AgentState:
+    planner = get_planner_state(state)
+    trace = list(planner.get("decision_trace") or [])
+    decision = {
+        "action": action,
+        "thought": thought,
+        "after": state.get("last_action"),
+    }
+    trace.append(decision)
+    planner["last_decision"] = decision
+    planner["decision_trace"] = trace[-20:]
+    return merge_state_patch(state, {"planner": planner})
+
+
 def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) -> AgentState:
+    state = update_progress_tracking(state)
+    available_action_list = sorted(set(available_actions))
+    available_action_set = set(available_action_list)
     orchestrator_state = dict(state.get("orchestrator", {}))
     next_action = orchestrator_state.get("next_action")
     thought = orchestrator_state.get("thought", "")
@@ -42,7 +62,7 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
     ):
         if was_awaiting_clarification:
             meta[MetaKeys.LAST_USER_MESSAGE_HASH] = current_hash
-            if "clarification" in set(available_actions):
+            if "clarification" in available_action_set:
                 next_action = "clarification"
             else:
                 clarification_return = (
@@ -50,7 +70,7 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
                     or state.get("last_action")
                     or "qa"
                 )
-                if clarification_return in set(available_actions):
+                if clarification_return in available_action_set:
                     next_action = clarification_return
                 else:
                     next_action = "qa"
@@ -88,23 +108,29 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
     if not next_action:
         if state.get("last_action") == "tool_handler":
             requester = _next_tool_requester(routing_state)
-            if requester and requester in set(available_actions):
+            if requester and requester in available_action_set:
                 next_action = requester
                 queue = _tool_request_queue(routing_state)
                 meta[MetaKeys.TOOL_REQUEST_QUEUE] = [n for n in queue if n != requester]
+                routing_state["meta"] = meta
 
         if not next_action:
-            llm_choice, thought = llm_select_next_action(routing_state, llm, available_actions)
-            fallback_action = choose_next_action(routing_state, available_actions)
-
-            if (
-                llm_choice != "end"
-                and not _should_end_now(routing_state)
-                and not should_prefer_policy_action(routing_state, llm_choice, fallback_action)
-            ):
-                next_action = llm_choice
+            invariant_action = choose_invariant_action(routing_state, available_action_list)
+            if invariant_action:
+                next_action = invariant_action
             else:
-                next_action = fallback_action
+                llm_choice, thought = llm_select_next_action(routing_state, llm, available_action_list)
+                masked_actions, _blocked = mask_actions(routing_state, available_action_list)
+                fallback_action = choose_next_action(routing_state, available_action_list)
+                if llm_choice != "end" and llm_choice in masked_actions and not _should_end_now(routing_state):
+                    next_action = llm_choice
+                else:
+                    next_action = fallback_action
+                routing_state = _record_planner_decision(routing_state, next_action, thought)
+
+    state = routing_state
+    orchestrator_state = dict(state.get("orchestrator", {}))
+    meta = dict(state.get("meta") or {})
 
     observations = list(state.get("observations", []))
     next_action, observations, _guard_fired = _apply_loop_guards(
@@ -114,9 +140,6 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
     orchestrator_state["next_action"] = next_action
     if thought:
         orchestrator_state["thought"] = thought
-        thoughts = list(orchestrator_state.get("thoughts", []))
-        thoughts.append(thought)
-        orchestrator_state["thoughts"] = thoughts
 
     observations.append(f"orchestrator: next_action={next_action}")
 
@@ -129,6 +152,7 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
         "next_action": next_action,
         "last_action": state.get("last_action"),
         "orchestrator": orchestrator_state,
+        "planner": dict(state.get("planner") or {}),
         "observations": observations,
         "output": output,
         "agents": agents,

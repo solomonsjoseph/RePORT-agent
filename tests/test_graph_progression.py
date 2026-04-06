@@ -56,3 +56,29 @@ def test_run_and_mark_consumes_loop_guard_bypass_for_current_node() -> None:
 
     assert result["meta"]["workflow_trace"] == ["orchestrator", "generate_code"]
     assert result["meta"].get("loop_guard_bypass_actions") == ["execute_code"]
+
+
+def test_run_and_mark_preserves_planner_and_meta_on_partial_node_return() -> None:
+    run_and_mark = _load_run_and_mark()
+
+    wrapped = run_and_mark(
+        "qa",
+        lambda _state: {
+            "output": {"text": "PCA projects data into principal components."},
+        },
+    )
+    result = wrapped(
+        {
+            "planner": {"decision_trace": [{"action": "qa", "thought": "concept question"}]},
+            "meta": {
+                "workflow_trace": ["orchestrator"],
+                "progress_made_last_step": True,
+            },
+        }
+    )
+
+    assert result["planner"]["decision_trace"] == [
+        {"action": "qa", "thought": "concept question"}
+    ]
+    assert result["meta"]["progress_made_last_step"] is True
+    assert result["meta"]["workflow_trace"] == ["orchestrator", "qa"]
