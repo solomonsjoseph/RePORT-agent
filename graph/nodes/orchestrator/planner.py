@@ -9,6 +9,7 @@ from ...state import AgentState
 from ..node_registry import NODE_REGISTRY
 from ..state_helpers import get_agent_state
 from ..tool_routing import is_tool_requested
+from .action_mask import mask_actions
 from .context_builder import build_planner_context, build_planner_runtime_state
 from utils.llm_response import coerce_text_content
 
@@ -95,6 +96,9 @@ def llm_select_next_action(
     available_actions: Iterable[str],
 ) -> tuple[str, str]:
     available_action_list = sorted(set(available_actions))
+    # Keep the narrow mask available to the planner layer without changing
+    # selection behavior yet; integration happens in a later task.
+    mask_actions(state, available_action_list)
     actions = ", ".join(available_action_list)
     planner_state = build_planner_runtime_state(state, available_action_list)
     ready_actions, blocked_actions = _action_affordances(planner_state, available_action_list)
