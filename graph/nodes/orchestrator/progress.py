@@ -36,6 +36,27 @@ def _count_tool_results(section: object) -> int:
     return total
 
 
+def _unique_node_names(state: dict) -> set[str]:
+    agents = state.get("agents")
+    node_data = state.get("node_data")
+    names: set[str] = set()
+    if isinstance(agents, dict):
+        names.update(str(name) for name in agents.keys())
+    if isinstance(node_data, dict):
+        names.update(str(name) for name in node_data.keys())
+    return names
+
+
+def _count_canonical_tool_results(state: dict) -> int:
+    total = 0
+    for node_name in _unique_node_names(state):
+        node_state = get_node_data(state, node_name)
+        tool_results = node_state.get("tool_results")
+        if isinstance(tool_results, list):
+            total += len(tool_results)
+    return total
+
+
 def build_progress_snapshot(state: dict) -> dict:
     artifacts = get_artifacts(state)
     executor = get_node_data(state, "executor")
@@ -47,8 +68,7 @@ def build_progress_snapshot(state: dict) -> dict:
         "generated_code_hash": _hash_text(artifacts.get("generated_code")),
         "execution_status": executor.get("run_status"),
         "error_signature": f"{error.get('category')}:{error.get('message')}" if error else None,
-        "tool_result_count": _count_tool_results(state.get("agents"))
-        + _count_tool_results(state.get("node_data")),
+        "tool_result_count": _count_canonical_tool_results(state),
         "clarification_pending": bool(meta.get("awaiting_user_clarification")),
         "review_status": {field: human_review.get(field) for field in REVIEW_STATUS_FIELDS},
         "user_visible_output_hash": _hash_text(artifacts.get("execution_output")),

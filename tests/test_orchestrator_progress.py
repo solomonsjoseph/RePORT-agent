@@ -29,6 +29,22 @@ def test_build_progress_snapshot_counts_structured_tool_results_and_ignores_lega
     assert snapshot["tool_result_count"] == 4
 
 
+def test_build_progress_snapshot_counts_mirrored_node_tool_results_once() -> None:
+    state = {
+        "agents": {
+            "qa": {"tool_results": [{"tool_name": "search"}]},
+        },
+        "node_data": {
+            "qa": {"tool_results": [{"tool_name": "search"}]},
+        },
+        "meta": {},
+    }
+
+    snapshot = build_progress_snapshot(state)
+
+    assert snapshot["tool_result_count"] == 1
+
+
 def test_build_progress_snapshot_preserves_distinct_review_decisions() -> None:
     before = build_progress_snapshot(
         {
