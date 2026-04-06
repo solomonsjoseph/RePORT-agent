@@ -6,11 +6,14 @@ class AgentState(TypedDict):
     messages: Annotated[List[BaseMessage], add_messages]
 
     output: dict
+    artifacts: dict
     next_action: str | None
     last_action: str | None
     observations: List[str]
     orchestrator: dict
+    planner: dict
     agents: dict
+    node_data: dict
 
     # extensibility
     meta: dict  # free-form (retry counts, tool info, etc.)
