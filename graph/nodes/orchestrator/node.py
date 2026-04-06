@@ -6,7 +6,7 @@ from ...state import AgentState, MetaKeys
 from ...state_views import get_planner_state, merge_state_patch
 from .action_mask import mask_actions
 from .loop_guards import _apply_loop_guards
-from .planner import llm_select_next_action
+from .planner import llm_plan_next_action
 from .policy import (
     _next_tool_requester,
     _tool_request_queue,
@@ -22,13 +22,19 @@ from .state_logic import (
 )
 
 
-def _record_planner_decision(state: AgentState, action: str, thought: str) -> AgentState:
+def _record_planner_decision(
+    state: AgentState,
+    planner_action: str,
+    thought: str,
+    routed_action: str,
+) -> AgentState:
     planner = get_planner_state(state)
     trace = list(planner.get("decision_trace") or [])
     decision = {
-        "action": action,
+        "action": planner_action,
         "thought": thought,
         "after": state.get("last_action"),
+        "routed_action": routed_action,
     }
     trace.append(decision)
     planner["last_decision"] = decision
@@ -119,14 +125,21 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
             if invariant_action:
                 next_action = invariant_action
             else:
-                llm_choice, thought = llm_select_next_action(routing_state, llm, available_action_list)
+                llm_choice, thought, planner_action = llm_plan_next_action(
+                    routing_state, llm, available_action_list
+                )
                 masked_actions, _blocked = mask_actions(routing_state, available_action_list)
                 fallback_action = choose_next_action(routing_state, available_action_list)
                 if llm_choice != "end" and llm_choice in masked_actions and not _should_end_now(routing_state):
                     next_action = llm_choice
                 else:
                     next_action = fallback_action
-                routing_state = _record_planner_decision(routing_state, next_action, thought)
+                routing_state = _record_planner_decision(
+                    routing_state,
+                    planner_action,
+                    thought,
+                    next_action,
+                )
 
     state = routing_state
     orchestrator_state = dict(state.get("orchestrator", {}))

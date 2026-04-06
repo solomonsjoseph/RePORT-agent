@@ -45,11 +45,11 @@ def _parse_planner_response(
     return parsed_action, thought, ranked_actions
 
 
-def llm_select_next_action(
+def llm_plan_next_action(
     state: AgentState,
     llm,
     available_actions: Iterable[str],
-) -> tuple[str, str]:
+) -> tuple[str, str, str]:
     available_action_list = sorted(set(available_actions))
     planner_state = build_planner_runtime_state(state, available_action_list)
     masked_actions, mask_reasons = mask_actions(planner_state, available_action_list)
@@ -74,16 +74,26 @@ def llm_select_next_action(
         blocked_actions="\n".join(f"- {a}" for a in blocked_actions) if blocked_actions else "none",
     )
     planner_response = llm.invoke(planner_prompt.to_messages())
-    parsed_action, thought, ranked_actions = _parse_planner_response(
+    planner_action, thought, ranked_actions = _parse_planner_response(
         coerce_text_content(getattr(planner_response, "content", "")),
-        masked_actions,
+        available_action_list,
     )
-    final_action = parsed_action
-    if final_action == "end" and ranked_actions:
-        final_action = ranked_actions[0]
+    final_action = planner_action if planner_action in masked_actions else "end"
+    masked_ranked_actions = [action for action in ranked_actions if action in masked_actions]
+    if final_action == "end" and masked_ranked_actions:
+        final_action = masked_ranked_actions[0]
 
-    if ranked_actions:
-        suffix = f"ranked={ranked_actions}"
+    if masked_ranked_actions:
+        suffix = f"ranked={masked_ranked_actions}"
         thought = f"{thought} {suffix}".strip() if thought else suffix
 
+    return final_action, thought, planner_action
+
+
+def llm_select_next_action(
+    state: AgentState,
+    llm,
+    available_actions: Iterable[str],
+) -> tuple[str, str]:
+    final_action, thought, _planner_action = llm_plan_next_action(state, llm, available_actions)
     return final_action, thought

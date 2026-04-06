@@ -84,23 +84,3 @@ def choose_next_action(state: AgentState, available_actions: Iterable[str]) -> s
         return "generate_code"
 
     return "end"
-
-
-def should_prefer_policy_action(
-    state: AgentState,
-    llm_action: str,
-    policy_action: str,
-) -> bool:
-    """Return True when deterministic routing should override the planner.
-
-    The planner chooses semantic actions, but it should not overrule
-    deterministic system transitions.
-    """
-    if not policy_action or policy_action == llm_action:
-        return False
-
-    invariant_action = choose_invariant_action(state, {llm_action, policy_action})
-    if invariant_action == policy_action:
-        return True
-
-    return False
