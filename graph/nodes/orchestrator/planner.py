@@ -82,12 +82,15 @@ def llm_plan_next_action(
     masked_ranked_actions = [action for action in ranked_actions if action in masked_actions]
     if final_action == "end" and masked_ranked_actions:
         final_action = masked_ranked_actions[0]
+    trace_action = planner_action
+    if planner_action == "end" and masked_ranked_actions:
+        trace_action = masked_ranked_actions[0]
 
     if masked_ranked_actions:
         suffix = f"ranked={masked_ranked_actions}"
         thought = f"{thought} {suffix}".strip() if thought else suffix
 
-    return final_action, thought, planner_action
+    return final_action, thought, trace_action
 
 
 def llm_select_next_action(

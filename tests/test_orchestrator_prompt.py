@@ -241,6 +241,41 @@ def test_orchestrator_records_masked_planner_choice_separately_from_routed_actio
     assert updated["planner"]["decision_trace"][-1]["routed_action"] == "qa"
 
 
+def test_orchestrator_records_effective_ranked_planner_choice_in_trace() -> None:
+    _install_langchain_and_langgraph_stubs()
+    orchestrator = importlib.import_module("graph.nodes.orchestrator")
+
+    state = {
+        "messages": [SimpleNamespace(type="human", content="who are you")],
+        "artifacts": {},
+        "output": {},
+        "observations": [],
+        "last_action": None,
+        "orchestrator": {},
+        "planner": {"decision_trace": []},
+        "node_data": {
+            "executor": {"run_status": "idle"},
+            "human_review": {"before_run_decision": None, "final_decision": None},
+        },
+        "agents": {
+            "executor": {"run_status": "idle"},
+            "human_review": {"before_run_decision": None, "final_decision": None},
+            "qa": {},
+        },
+        "meta": {"workflow_trace": []},
+    }
+
+    updated = orchestrator.orchestrator_node(
+        state,
+        _LLM('{"action":"end","thought":"identity question","ranked_actions":["qa","clarification","end"]}'),
+        ["qa", "clarification", "end"],
+    )
+
+    assert updated["next_action"] == "qa"
+    assert updated["planner"]["decision_trace"][-1]["action"] == "qa"
+    assert updated["planner"]["decision_trace"][-1]["routed_action"] == "qa"
+
+
 def test_orchestrator_uses_llm_action_and_fallback_policy() -> None:
     _install_langchain_and_langgraph_stubs()
     orchestrator = importlib.import_module("graph.nodes.orchestrator")
