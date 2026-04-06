@@ -38,6 +38,8 @@ The target design keeps the planner/orchestrator as the master decision-maker, g
 
 - This design does not replace the planner with a deterministic state machine.
 - This design does not redesign the current tool-clarification behavior.
+- This design does not introduce long-conversation context compaction in the first implementation pass.
+  The first version may continue using the existing raw transcript plus recent-window approach.
 - This design does not fully specify future hard guardrails such as mandatory human review before execution or after successful execution.
   The framework will reserve a place for them, but concrete guardrails are deferred.
 
@@ -144,6 +146,20 @@ The planner context builder should assemble:
 - progress and stagnation signals
 
 The planner context builder is the core abstraction of this redesign. It centralizes environment assembly so node selection is based on coherent semantic context rather than scattered readiness logic.
+
+In the first implementation pass, the planner context builder may continue to use the current conversation model:
+
+- full transcript retained in workflow state
+- recent raw message window sent to the model
+- no rolling summary or pinned-facts layer yet
+
+This is intentionally simple. If long conversations later require compaction, the planner context builder is the extension point for adding:
+
+- rolling summaries
+- pinned facts / durable constraints
+- other memory-compaction logic
+
+That future work should not require redesigning the rest of the framework.
 
 ### 4. Narrow Action Mask
 
@@ -395,6 +411,7 @@ Only after the new planner context and progress controls are in place, simplify:
 
 The following topics are intentionally deferred:
 
+- long-conversation context compaction such as rolling summaries or pinned facts
 - exact hard guardrails for mandatory human review before execution
 - exact hard guardrails for mandatory human review after successful execution
 - whether the thin action mask should later grow into a stronger invariant layer
