@@ -21,9 +21,6 @@ def mask_actions(state: dict, available_actions: list[str]) -> tuple[list[str], 
         if action == "execute_code" and not artifacts.get("generated_code"):
             blocked[action] = "requires generated code"
             continue
-        if action == "tool_handler" and not list(meta.get(MetaKeys.TOOL_REQUEST_QUEUE, [])):
-            blocked[action] = "requires pending tool requests"
-            continue
         allowed.append(action)
 
     return allowed, blocked
