@@ -2,6 +2,11 @@ from langgraph.types import interrupt
 from langchain_core.messages import HumanMessage, AIMessage
 from .state_helpers import update_agent_state
 
+NODE_NAME = "human_review_final"
+NODE_CAPABILITY = (
+    "Ask human approval of the final successful code-execution output before ending the task."
+)
+
 
 def human_review_final_node(state):
     # pause here and send playload to UI

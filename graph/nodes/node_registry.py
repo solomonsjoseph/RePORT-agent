@@ -4,8 +4,8 @@ Every node is described by a single NodeDefinition.  When you add a new node:
 
   1. Add a NodeDefinition entry to NODE_REGISTRY below.
   2. Register the callable in builder.py's ``action_nodes`` dict.
-  3. That is all — capability text, routing policy, and LLM
-     state-summary context are all derived automatically from the registry.
+  3. That is all — routing policy is defined here, while planner-facing
+     capability text is sourced from the node modules via action_metadata.py.
 
 Risk-1 fix: knowledge that was previously scattered across three locations
   (builder.py, orchestrator.NODE_CAPABILITIES, orchestrator.build_default_policies)
@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from ..state import AgentState, MetaKeys
+from .action_metadata import ACTION_CAPABILITIES
 from .state_helpers import get_agent_state
 from .tool_routing import is_tool_requested
 
@@ -132,9 +133,7 @@ class NodeDefinition:
 NODE_REGISTRY: list[NodeDefinition] = [
     NodeDefinition(
         name="error_handler",
-        capability=(
-            "Revise previously generated code after execution failures and increment retry state."
-        ),
+        capability=ACTION_CAPABILITIES["error_handler"],
         priority=10,
         is_ready=lambda s: (
             _has_retryable_execution_error(s)
@@ -143,7 +142,7 @@ NODE_REGISTRY: list[NodeDefinition] = [
     ),
     NodeDefinition(
         name="terminal_execution_error",
-        capability="Explain terminal execution failures directly to the user and end the turn without retrying.",
+        capability=ACTION_CAPABILITIES["terminal_execution_error"],
         priority=20,
         is_ready=lambda s: (
             _has_terminal_execution_error(s)
@@ -151,7 +150,7 @@ NODE_REGISTRY: list[NodeDefinition] = [
     ),
     NodeDefinition(
         name="human_review_after_error",
-        capability="Ask human for guidance after repeated retryable code-execution failures once retry budget is exhausted.",
+        capability=ACTION_CAPABILITIES["human_review_after_error"],
         priority=25,
         is_ready=lambda s: (
             (
@@ -162,30 +161,19 @@ NODE_REGISTRY: list[NodeDefinition] = [
     ),
     NodeDefinition(
         name="tool_handler",
-        capability=(
-            "Execute already-requested external tools and store results back to the requesting agent. "
-            "Do not use for routing decisions or direct user replies."
-        ),
+        capability=ACTION_CAPABILITIES["tool_handler"],
         priority=30,
         is_ready=is_tool_requested,
     ),
     NodeDefinition(
         name="clarification",
-        capability=(
-            "Resume an active clarification loop by interpreting the user's follow-up and handing "
-            "control back to the relevant subworkflow such as QA tool routing or code generation."
-        ),
+        capability=ACTION_CAPABILITIES["clarification"],
         priority=35,
         is_ready=lambda s: bool((s.get("meta") or {}).get(MetaKeys.AWAITING_USER_CLARIFICATION)),
     ),
     NodeDefinition(
         name="qa",
-        capability=(
-            "Handle direct user-facing Q&A in natural language, including factual and explanatory "
-            "requests, conversation, and tool-assisted information tasks such as search, weather, "
-            "and calculator queries. Prefer this over code generation unless the user explicitly "
-            "wants code or dataset/programmatic work."
-        ),
+        capability=ACTION_CAPABILITIES["qa"],
         priority=40,
         is_ready=lambda s: (
             not bool((s.get("output") or {}).get("generated_code"))
@@ -194,12 +182,7 @@ NODE_REGISTRY: list[NodeDefinition] = [
     ),
     NodeDefinition(
         name="generate_code",
-        capability=(
-            "Generate Python code only for explicit code-writing requests or dataset/programmatic "
-            "tasks such as analysis on the user's data, plotting, transformation, or computation "
-            "that should be performed in code. Do not use for general Q&A, web search, weather, "
-            "or factual lookup."
-        ),
+        capability=ACTION_CAPABILITIES["generate_code"],
         priority=50,
         is_ready=lambda s: (
             not (s.get("output") or {}).get("generated_code")
@@ -208,7 +191,7 @@ NODE_REGISTRY: list[NodeDefinition] = [
     ),
     NodeDefinition(
         name="human_review_before_run",
-        capability="Ask human approval before running newly generated code.",
+        capability=ACTION_CAPABILITIES["human_review_before_run"],
         priority=60,
         is_ready=lambda s: (
             bool((s.get("output") or {}).get("generated_code"))
@@ -218,9 +201,7 @@ NODE_REGISTRY: list[NodeDefinition] = [
     ),
     NodeDefinition(
         name="execute_code",
-        capability=(
-            "Execute previously generated Python code after approval and collect outputs or errors."
-        ),
+        capability=ACTION_CAPABILITIES["execute_code"],
         priority=70,
         is_ready=lambda s: (
             bool((s.get("output") or {}).get("generated_code"))
@@ -230,7 +211,7 @@ NODE_REGISTRY: list[NodeDefinition] = [
     ),
     NodeDefinition(
         name="human_review_final",
-        capability="Ask human approval of the final successful code-execution output before ending the task.",
+        capability=ACTION_CAPABILITIES["human_review_final"],
         priority=80,
         is_ready=lambda s: (
             get_agent_state(s, "executor").get("run_status") == "ok"
@@ -243,8 +224,9 @@ NODE_REGISTRY: list[NodeDefinition] = [
 # Derived lookups — built once at import time, used by orchestrator + builder.
 # ---------------------------------------------------------------------------
 
-# Maps node name → one-sentence capability description for the LLM planner prompt.
-NODE_CAPABILITIES: dict[str, str] = {nd.name: nd.capability for nd in NODE_REGISTRY}
+# Backward-compatible alias used by a few tests and callers. The source of truth
+# now lives in graph.nodes.action_metadata.
+NODE_CAPABILITIES: dict[str, str] = dict(ACTION_CAPABILITIES)
 
 # Maps node name → NodeDefinition for O(1) lookup.
 NODE_REGISTRY_MAP: dict[str, NodeDefinition] = {nd.name: nd for nd in NODE_REGISTRY}

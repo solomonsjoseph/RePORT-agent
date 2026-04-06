@@ -4,6 +4,12 @@ from prompts.fix_prompt import make_fix_code_prompt
 from .state_helpers import clear_clarification_meta, update_agent_state
 from .code_guardrails import code_fingerprint, is_executable_python
 
+NODE_NAME = "error_handler"
+NODE_CAPABILITY = (
+    "Revise previously generated code after execution failures and increment retry state."
+)
+
+
 def error_handler_node(state, llm, context):
     output = dict(state.get("output") or {})
     code = output.get("generated_code") or ""

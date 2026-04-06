@@ -8,6 +8,12 @@ from ..state import AgentState
 from tools.mcp_tools import make_mcp_tool
 from .state_helpers import get_agent_state, update_agent_state
 
+NODE_NAME = "tool_handler"
+NODE_CAPABILITY = (
+    "Execute already-requested external tools and store results back to the requesting agent. "
+    "Do not use for routing decisions or direct user replies."
+)
+
 
 def tool_handler_node(state: AgentState) -> AgentState:
     tool_results: list[dict[str, Any]] = []

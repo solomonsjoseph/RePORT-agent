@@ -64,3 +64,10 @@ def test_human_review_after_error_not_ready_for_terminal_error() -> None:
     review = mod.NODE_REGISTRY_MAP["human_review_after_error"]
 
     assert review.is_ready(_state_with_error("policy_blocked")) is False
+
+
+def test_action_capabilities_are_sourced_from_node_modules() -> None:
+    from graph.nodes.action_metadata import ACTION_CAPABILITIES
+
+    assert ACTION_CAPABILITIES["qa"].startswith("Handle direct user-facing Q&A")
+    assert ACTION_CAPABILITIES["clarification"].startswith("Resume an active clarification loop")

@@ -4,7 +4,7 @@ import json
 
 from ...state import MetaKeys
 from ...state_views import get_artifacts, get_node_data, get_planner_state, merge_state_patch
-from ..node_registry import NODE_CAPABILITIES
+from ..action_metadata import ACTION_CAPABILITIES
 from .state_logic import _latest_user_message
 
 
@@ -45,9 +45,9 @@ def build_planner_context(state: dict, available_actions: list[str]) -> dict:
         f"repeated_failure_signature={meta.get(MetaKeys.REPEATED_FAILURE_SIGNATURE)}",
     ]
     node_caps = "\n".join(
-        f"- {name}: {NODE_CAPABILITIES[name]}"
+        f"- {name}: {ACTION_CAPABILITIES[name]}"
         for name in available_actions
-        if name in NODE_CAPABILITIES
+        if name in ACTION_CAPABILITIES
     )
     return {
         "environment_summary": "\n".join(summary_lines),

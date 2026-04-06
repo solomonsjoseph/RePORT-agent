@@ -12,6 +12,15 @@ from .tool_routing import format_tool_results
 from .code_guardrails import code_fingerprint, is_executable_python
 from utils.llm_response import coerce_text_content
 
+NODE_NAME = "generate_code"
+NODE_CAPABILITY = (
+    "Generate Python code only for explicit code-writing requests or dataset/programmatic "
+    "tasks such as analysis on the user's data, plotting, transformation, or computation "
+    "that should be performed in code. Do not use for general Q&A, web search, weather, "
+    "or factual lookup."
+)
+
+
 def generate_code_node(state, llm, context):
     generate_state = get_agent_state(state, "generate_code")
     messages = state.get("messages", [])

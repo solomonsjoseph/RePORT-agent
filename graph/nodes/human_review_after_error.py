@@ -2,6 +2,11 @@ from langgraph.types import interrupt
 from langchain_core.messages import HumanMessage
 from .state_helpers import update_agent_state
 
+NODE_NAME = "human_review_after_error"
+NODE_CAPABILITY = (
+    "Ask human for guidance after repeated retryable code-execution failures once retry budget is exhausted."
+)
+
 
 def human_review_after_error_node(state):
     output = dict(state.get("output") or {})

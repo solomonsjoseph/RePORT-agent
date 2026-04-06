@@ -445,6 +445,39 @@ def test_orchestrator_keeps_qa_intent_for_tool_clarification_followup() -> None:
     assert updated["meta"]["awaiting_user_clarification"] is True
 
 
+def test_orchestrator_keeps_qa_tool_clarification_path_unchanged() -> None:
+    _install_langchain_and_langgraph_stubs()
+    orchestrator = importlib.import_module("graph.nodes.orchestrator")
+
+    state = {
+        "messages": [
+            SimpleNamespace(type="human", content="what's weather in USA today?"),
+            SimpleNamespace(type="ai", content="Which city in USA would you like the weather for?"),
+            SimpleNamespace(type="human", content="New York"),
+        ],
+        "artifacts": {},
+        "output": {},
+        "observations": [],
+        "last_action": "qa",
+        "planner": {"decision_trace": []},
+        "node_data": {"qa": {"awaiting_tool_clarification": True}},
+        "agents": {"qa": {"awaiting_tool_clarification": True}},
+        "meta": {
+            "awaiting_user_clarification": True,
+            "clarification_kind": "qa_tool",
+            "workflow_trace": ["orchestrator", "qa", "orchestrator"],
+        },
+    }
+
+    updated = orchestrator.orchestrator_node(
+        state,
+        _LLM('{"action":"qa","thought":"resume qa"}'),
+        ["clarification", "qa", "end"],
+    )
+
+    assert updated["next_action"] == "clarification"
+
+
 def test_orchestrator_does_not_force_qa_for_non_qa_clarification_followup() -> None:
     _install_langchain_and_langgraph_stubs()
     orchestrator = importlib.import_module("graph.nodes.orchestrator")

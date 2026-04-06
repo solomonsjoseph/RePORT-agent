@@ -1,6 +1,12 @@
 from tools.execution import run_python_user
 from .state_helpers import update_agent_state
 
+NODE_NAME = "execute_code"
+NODE_CAPABILITY = (
+    "Execute previously generated Python code after approval and collect outputs or errors."
+)
+
+
 def execute_code_node(state, df):
     code = (state.get("output") or {}).get("generated_code")
     if not code:

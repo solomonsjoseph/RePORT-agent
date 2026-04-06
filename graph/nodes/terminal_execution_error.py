@@ -4,6 +4,11 @@ from langchain_core.messages import AIMessage
 
 from .state_helpers import update_agent_state
 
+NODE_NAME = "terminal_execution_error"
+NODE_CAPABILITY = (
+    "Explain terminal execution failures directly to the user and end the turn without retrying."
+)
+
 
 def _terminal_error_message(error_payload: dict | None) -> str:
     error = dict(error_payload or {})

@@ -13,6 +13,12 @@ from .state_helpers import (
 from .tool_routing import latest_user_message, request_tools_for_question
 from utils.message_window import window_messages
 
+NODE_NAME = "clarification"
+NODE_CAPABILITY = (
+    "Resume an active clarification loop by interpreting the user's follow-up and handing "
+    "control back to the relevant subworkflow such as QA tool routing or code generation."
+)
+
 
 def _resume_qa_tool_clarification(state: AgentState, llm) -> AgentState:
     question = latest_user_message(state)

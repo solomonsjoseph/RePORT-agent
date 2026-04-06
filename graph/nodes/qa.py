@@ -24,6 +24,14 @@ from .tool_routing import (
 from utils.message_window import window_messages
 from utils.llm_response import coerce_text_content
 
+NODE_NAME = "qa"
+NODE_CAPABILITY = (
+    "Handle direct user-facing Q&A in natural language, including factual and explanatory "
+    "requests, conversation, and tool-assisted information tasks such as search, weather, "
+    "and calculator queries. Prefer this over code generation unless the user explicitly "
+    "wants code or dataset/programmatic work."
+)
+
 
 def _parse_structured_qa_response(text: str) -> tuple[str | None, bool, str | None]:
     try:
