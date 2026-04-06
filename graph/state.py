@@ -1,6 +1,15 @@
-from typing import Annotated, List, TypedDict
-from langchain_core.messages import BaseMessage
-from langgraph.graph.message import add_messages
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Annotated, List, TypedDict
+
+try:
+    from langgraph.graph.message import add_messages
+except ModuleNotFoundError:  # pragma: no cover - import safety for test envs without langgraph
+    def add_messages(left, right):
+        return right
+
+if TYPE_CHECKING:
+    from langchain_core.messages import BaseMessage
 
 class AgentState(TypedDict):
     messages: Annotated[List[BaseMessage], add_messages]
@@ -46,3 +55,7 @@ class MetaKeys:
     # One-shot list of actions allowed to bypass loop guards after explicit
     # human instruction (e.g., regenerate code in review).
     LOOP_GUARD_BYPASS_ACTIONS = "loop_guard_bypass_actions"
+    PROGRESS_SNAPSHOT = "progress_snapshot"
+    PROGRESS_MADE_LAST_STEP = "progress_made_last_step"
+    STAGNATION_COUNT = "stagnation_count"
+    REPEATED_FAILURE_SIGNATURE = "repeated_failure_signature"
