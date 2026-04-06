@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Iterable
 
 from ...state import AgentState, MetaKeys
-from ..node_registry import NODE_REGISTRY
+from ..node_registry import NODE_REGISTRY_MAP
 from ..state_helpers import get_agent_state
 from .state_logic import _should_end_now
 
@@ -42,11 +42,11 @@ def choose_invariant_action(state: AgentState, available_actions: Iterable[str])
         return "end"
 
     for action_name in DETERMINISTIC_CONTROL_ACTIONS:
-        node = next((nd for nd in NODE_REGISTRY if nd.name == action_name), None)
+        node = NODE_REGISTRY_MAP.get(action_name)
         if node and action_name in available and node.is_ready(state):
             return action_name
 
-    generate_node = next((nd for nd in NODE_REGISTRY if nd.name == "generate_code"), None)
+    generate_node = NODE_REGISTRY_MAP.get("generate_code")
     if (
         generate_node
         and "generate_code" in available
@@ -59,28 +59,3 @@ def choose_invariant_action(state: AgentState, available_actions: Iterable[str])
         return "end"
 
     return None
-
-
-def choose_next_action(state: AgentState, available_actions: Iterable[str]) -> str:
-    """Return the last-resort fallback action when the planner cannot help.
-
-    Semantic routing should come from the planner. This helper exists to keep
-    deterministic invariants intact and to provide a stable fallback for
-    malformed or empty planner responses.
-    """
-    available = set(available_actions)
-
-    invariant_action = choose_invariant_action(state, available_actions)
-    if invariant_action:
-        return invariant_action
-
-    qa_node = next((nd for nd in NODE_REGISTRY if nd.name == "qa"), None)
-
-    # Last-resort deterministic fallback: choose among semantic nodes only.
-    if qa_node and "qa" in available and qa_node.is_ready(state):
-        return "qa"
-    generate_node = next((nd for nd in NODE_REGISTRY if nd.name == "generate_code"), None)
-    if generate_node and "generate_code" in available and generate_node.is_ready(state):
-        return "generate_code"
-
-    return "end"

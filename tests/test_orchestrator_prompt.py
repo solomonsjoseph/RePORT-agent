@@ -101,6 +101,13 @@ def test_planner_prompt_formats_with_node_capabilities() -> None:
     assert "Blocked actions:\n- generate_code" in rendered[1]["content"]
 
 
+def test_choose_next_action_no_longer_uses_registry_readiness() -> None:
+    _install_langchain_and_langgraph_stubs()
+    policy = importlib.import_module("graph.nodes.orchestrator.policy")
+
+    assert getattr(policy, "choose_next_action", None) is None
+
+
 def test_orchestrator_fallback_prefers_qa_for_concept_questions() -> None:
     _install_langchain_and_langgraph_stubs()
     orchestrator = importlib.import_module("graph.nodes.orchestrator")

@@ -1,11 +1,12 @@
-"""Central registry for all graph action nodes.
+"""Central registry for graph action metadata and deterministic predicates.
 
 Every node is described by a single NodeDefinition.  When you add a new node:
 
   1. Add a NodeDefinition entry to NODE_REGISTRY below.
   2. Register the callable in builder.py's ``action_nodes`` dict.
-  3. That is all — routing policy is defined here, while planner-facing
-     capability text is sourced from the node modules via action_metadata.py.
+  3. That is all for transitional static structure and validation. Planner-
+     facing capability text is sourced from the node modules via
+     action_metadata.py, and semantic routing now lives outside this registry.
 
 Risk-1 fix: knowledge that was previously scattered across three locations
   (builder.py, orchestrator.NODE_CAPABILITIES, orchestrator.build_default_policies)
@@ -116,8 +117,8 @@ class NodeDefinition:
         priority:         Deterministic routing priority — lower numbers are
                           evaluated first.  Values must be unique across the
                           registry so ordering is unambiguous.
-        is_ready:         Predicate called by the orchestrator to decide whether
-                          this node should run given the current state.
+        is_ready:         Predicate for deterministic invariants and action
+                          masking. It is not a semantic planner fallback.
     """
     name: str
     capability: str

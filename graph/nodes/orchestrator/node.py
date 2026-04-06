@@ -11,7 +11,6 @@ from .policy import (
     _next_tool_requester,
     _tool_request_queue,
     choose_invariant_action,
-    choose_next_action,
 )
 from .progress import update_progress_tracking
 from .state_logic import (
@@ -40,6 +39,16 @@ def _record_planner_decision(
     planner["last_decision"] = decision
     planner["decision_trace"] = trace[-20:]
     return merge_state_patch(state, {"planner": planner})
+
+
+def _planner_fallback_action(available_actions: Iterable[str]) -> str:
+    """Return a stable semantic default when planner output is unusable."""
+    available = set(available_actions)
+    if "qa" in available:
+        return "qa"
+    if "generate_code" in available:
+        return "generate_code"
+    return "end"
 
 
 def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) -> AgentState:
@@ -129,11 +138,10 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
                     routing_state, llm, available_action_list
                 )
                 masked_actions, _blocked = mask_actions(routing_state, available_action_list)
-                fallback_action = choose_next_action(routing_state, available_action_list)
                 if llm_choice != "end" and llm_choice in masked_actions and not _should_end_now(routing_state):
                     next_action = llm_choice
                 else:
-                    next_action = fallback_action
+                    next_action = _planner_fallback_action(masked_actions)
                 routing_state = _record_planner_decision(
                     routing_state,
                     planner_action,
