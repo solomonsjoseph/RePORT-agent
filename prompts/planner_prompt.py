@@ -35,7 +35,9 @@ def make_planner_prompt():
             ("system", SYSTEM_TEXT),
             (
                 "human",
-                "Environment summary:\n{summary}\n\n"
+                "Environment summary:\n{environment_summary}\n\n"
+                "Recent observations:\n{recent_observations}\n\n"
+                "Planner decision trace:\n{planner_decision_trace}\n\n"
                 "READY actions:\n{ready_actions}\n\n"
                 "BLOCKED actions:\n{blocked_actions}",
             ),

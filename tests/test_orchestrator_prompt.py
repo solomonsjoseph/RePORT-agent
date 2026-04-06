@@ -86,7 +86,9 @@ def test_planner_prompt_formats_with_node_capabilities() -> None:
 
     prompt = planner_prompt.make_planner_prompt().format_prompt(
         actions="qa, generate_code",
-        summary="generated_code_present=False",
+        environment_summary="generated_code_present=False",
+        recent_observations='["obs"]',
+        planner_decision_trace='["thought"]',
         node_capabilities="- qa: answer directly",
         ready_actions="qa",
         blocked_actions="- generate_code",
@@ -798,6 +800,76 @@ def test_planner_keeps_ranked_actions_without_extra_calls() -> None:
     assert action == "execute_code"
     assert "ranked=" in thought
     assert len(llm.calls) == 1
+
+
+def test_llm_select_next_action_uses_environment_summary_and_action_mask() -> None:
+    _install_langchain_and_langgraph_stubs()
+    planner = importlib.import_module("graph.nodes.orchestrator.planner")
+
+    state = {
+        "messages": [SimpleNamespace(type="human", content="run the code")],
+        "artifacts": {"generated_code": "print(1)"},
+        "node_data": {"executor": {"run_status": "idle"}},
+        "observations": ["generate_code: code_generated"],
+        "planner": {"decision_trace": []},
+        "meta": {
+            "workflow_trace": ["orchestrator", "generate_code"],
+            "progress_made_last_step": True,
+            "stagnation_count": 0,
+        },
+        "last_action": "generate_code",
+    }
+
+    llm = _LLM('{"action":"execute_code","thought":"code already exists"}')
+    action, thought = planner.llm_select_next_action(
+        state,
+        llm,
+        ["qa", "generate_code", "execute_code"],
+    )
+
+    assert action == "execute_code"
+    assert "code already exists" in thought
+    assert len(llm.calls) == 1
+
+    planner_messages = llm.calls[0]
+    assert "Allowed actions:\nexecute_code, generate_code, qa" in planner_messages[0]["content"]
+    assert "Environment summary:" in planner_messages[1]["content"]
+    assert "latest_user_message=run the code" in planner_messages[1]["content"]
+    assert "workflow_trace_tail=['orchestrator', 'generate_code']" in planner_messages[1]["content"]
+    assert 'Recent observations:\n["generate_code: code_generated"]' in planner_messages[1]["content"]
+    assert "Planner decision trace:\n[]" in planner_messages[1]["content"]
+    assert "READY actions:\nnone" in planner_messages[1]["content"]
+    assert "BLOCKED actions:\n- qa\n- generate_code\n- execute_code\n- execute_code (requires fresh human approval)" in planner_messages[1]["content"]
+
+
+def test_llm_select_next_action_masks_blocked_actions_with_reasons() -> None:
+    _install_langchain_and_langgraph_stubs()
+    planner = importlib.import_module("graph.nodes.orchestrator.planner")
+
+    state = {
+        "messages": [SimpleNamespace(type="human", content="run the code")],
+        "artifacts": {},
+        "node_data": {"executor": {"run_status": "idle"}},
+        "observations": [],
+        "planner": {"decision_trace": ["prefer execution when code exists"]},
+        "meta": {"workflow_trace": ["orchestrator"], "progress_made_last_step": False, "stagnation_count": 1},
+        "last_action": "qa",
+    }
+
+    llm = _LLM('{"action":"execute_code","thought":"try execution"}')
+    action, thought = planner.llm_select_next_action(
+        state,
+        llm,
+        ["qa", "execute_code"],
+    )
+
+    assert action == "end"
+    assert thought == "try execution"
+
+    planner_messages = llm.calls[0]
+    assert "Allowed actions:\nqa" in planner_messages[0]["content"]
+    assert "READY actions:\nqa" in planner_messages[1]["content"]
+    assert "BLOCKED actions:\n- execute_code (requires generated code)" in planner_messages[1]["content"]
 
 def test_orchestrator_routes_latest_qa_turn_without_stale_code_bias() -> None:
     _install_langchain_and_langgraph_stubs()

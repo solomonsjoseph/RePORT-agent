@@ -9,6 +9,7 @@ from ...state import AgentState
 from ..node_registry import NODE_REGISTRY
 from ..state_helpers import get_agent_state
 from ..tool_routing import is_tool_requested
+from .action_mask import mask_actions
 from .context_builder import build_planner_context, build_planner_runtime_state
 from utils.llm_response import coerce_text_content
 
@@ -95,17 +96,26 @@ def llm_select_next_action(
     available_actions: Iterable[str],
 ) -> tuple[str, str]:
     available_action_list = sorted(set(available_actions))
-    actions = ", ".join(available_action_list)
     planner_state = build_planner_runtime_state(state, available_action_list)
-    ready_actions, blocked_actions = _action_affordances(planner_state, available_action_list)
-    planner_context = build_planner_context(planner_state, available_action_list)
+    masked_actions, mask_reasons = mask_actions(planner_state, available_action_list)
+    ready_actions, readiness_blocked_actions = _action_affordances(planner_state, masked_actions)
+    planner_context = build_planner_context(planner_state, masked_actions)
+
+    blocked_actions = [
+        f"{action} ({mask_reasons[action]})"
+        for action in available_action_list
+        if action in mask_reasons
+    ]
+    blocked_actions.extend(readiness_blocked_actions)
 
     planner_prompt = make_planner_prompt().format_prompt(
-        actions=actions,
-        summary=(
-            f"{planner_context['environment_summary']}\n"
-            f"recent_observations={json.dumps(planner_context['recent_observations'], default=str, ensure_ascii=False)}\n"
-            f"planner_decision_trace={json.dumps(planner_context['planner_decision_trace'], default=str, ensure_ascii=False)}"
+        actions=", ".join(masked_actions) if masked_actions else "none",
+        environment_summary=planner_context["environment_summary"],
+        recent_observations=json.dumps(
+            planner_context["recent_observations"], default=str, ensure_ascii=False
+        ),
+        planner_decision_trace=json.dumps(
+            planner_context["planner_decision_trace"], default=str, ensure_ascii=False
         ),
         node_capabilities=planner_context["node_capabilities"],
         ready_actions=", ".join(ready_actions) if ready_actions else "none",
@@ -114,7 +124,7 @@ def llm_select_next_action(
     planner_response = llm.invoke(planner_prompt.to_messages())
     parsed_action, thought, ranked_actions = _parse_planner_response(
         coerce_text_content(getattr(planner_response, "content", "")),
-        available_actions,
+        masked_actions,
     )
     final_action = parsed_action
     if final_action == "end" and ranked_actions:
