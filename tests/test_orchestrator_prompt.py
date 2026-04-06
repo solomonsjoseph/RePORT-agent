@@ -729,7 +729,7 @@ def test_planner_two_stage_selection_uses_ranked_ready_candidate() -> None:
         state, llm, ["generate_code", "execute_code", "human_review_final", "end"]
     )
 
-    assert action == "execute_code"
+    assert action == "human_review_final"
     assert "ranked=" in thought
 
 
@@ -764,7 +764,7 @@ def test_planner_uses_single_planner_call() -> None:
         state, llm, ["generate_code", "execute_code", "human_review_final", "end"]
     )
 
-    assert action == "execute_code"
+    assert action == "end"
     assert len(llm.calls) == 1
 
 
@@ -799,7 +799,7 @@ def test_planner_keeps_ranked_actions_without_extra_calls() -> None:
         state, llm, ["generate_code", "execute_code", "human_review_final", "end"]
     )
 
-    assert action == "execute_code"
+    assert action == "human_review_final"
     assert "ranked=" in thought
     assert len(llm.calls) == 1
 
@@ -829,18 +829,18 @@ def test_llm_select_next_action_uses_environment_summary_and_action_mask() -> No
         ["qa", "generate_code", "execute_code"],
     )
 
-    assert action == "execute_code"
+    assert action == "end"
     assert "code already exists" in thought
     assert len(llm.calls) == 1
 
     planner_messages = llm.calls[0]
-    assert "Allowed actions:\nexecute_code, generate_code, qa" in planner_messages[0]["content"]
+    assert "Allowed actions:\ngenerate_code, qa" in planner_messages[0]["content"]
     assert "Environment summary:" in planner_messages[1]["content"]
     assert "latest_user_message=run the code" in planner_messages[1]["content"]
     assert "workflow_trace_tail=['orchestrator', 'generate_code']" in planner_messages[1]["content"]
     assert 'Recent observations:\n["generate_code: code_generated"]' in planner_messages[1]["content"]
     assert "Planner decision trace:\n[]" in planner_messages[1]["content"]
-    assert "Blocked actions:\nnone" in planner_messages[1]["content"]
+    assert "Blocked actions:\n- execute_code (requires approved generated code ready to run)" in planner_messages[1]["content"]
 
 
 def test_llm_select_next_action_masks_blocked_actions_with_reasons() -> None:
@@ -869,7 +869,7 @@ def test_llm_select_next_action_masks_blocked_actions_with_reasons() -> None:
 
     planner_messages = llm.calls[0]
     assert "Allowed actions:\nqa" in planner_messages[0]["content"]
-    assert "Blocked actions:\n- execute_code (requires generated code)" in planner_messages[1]["content"]
+    assert "Blocked actions:\n- execute_code (requires approved generated code ready to run)" in planner_messages[1]["content"]
 
 
 def test_llm_select_next_action_rejects_inactive_tool_handler_choice() -> None:
@@ -926,6 +926,40 @@ def test_llm_select_next_action_rejects_inactive_clarification_choice() -> None:
     planner_messages = llm.calls[0]
     assert "Allowed actions:\nqa" in planner_messages[0]["content"]
     assert "Blocked actions:\n- clarification (requires active clarification loop)" in planner_messages[1]["content"]
+
+
+def test_llm_select_next_action_rejects_inactive_human_review_final_choice() -> None:
+    _install_langchain_and_langgraph_stubs()
+    planner = importlib.import_module("graph.nodes.orchestrator.planner")
+
+    state = {
+        "messages": [SimpleNamespace(type="human", content="what is PCA?")],
+        "artifacts": {},
+        "node_data": {
+            "executor": {"run_status": "idle"},
+            "human_review": {"final_decision": None},
+        },
+        "observations": [],
+        "planner": {"decision_trace": []},
+        "meta": {"workflow_trace": ["orchestrator"]},
+        "last_action": None,
+    }
+
+    llm = _LLM('{"action":"human_review_final","thought":"final review"}')
+    action, thought = planner.llm_select_next_action(
+        state,
+        llm,
+        ["qa", "human_review_final"],
+    )
+
+    assert action == "end"
+    assert thought == "final review"
+    planner_messages = llm.calls[0]
+    assert "Allowed actions:\nqa" in planner_messages[0]["content"]
+    assert (
+        "Blocked actions:\n- human_review_final (requires successful execution awaiting final review)"
+        in planner_messages[1]["content"]
+    )
 
 def test_orchestrator_routes_latest_qa_turn_without_stale_code_bias() -> None:
     _install_langchain_and_langgraph_stubs()

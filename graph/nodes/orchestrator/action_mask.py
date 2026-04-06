@@ -1,27 +1,18 @@
 from __future__ import annotations
 
 from ...state import MetaKeys
-from ...state_views import get_artifacts
+from ..node_registry import NODE_REGISTRY_MAP
 
 
-def _tool_request_active(state: dict) -> bool:
-    agents = dict(state.get("agents") or {})
-    return any(agent_state.get("tool_requests") for agent_state in agents.values())
-
-
-def _clarification_loop_active(state: dict) -> bool:
-    meta = dict(state.get("meta") or {})
-    return bool(meta.get(MetaKeys.AWAITING_USER_CLARIFICATION))
-
-
-def _generated_code_present(state: dict) -> bool:
-    return bool(get_artifacts(state).get("generated_code"))
-
-
-CONTROL_ACTION_GATES = {
-    "tool_handler": (_tool_request_active, "requires active tool request"),
-    "clarification": (_clarification_loop_active, "requires active clarification loop"),
-    "execute_code": (_generated_code_present, "requires generated code"),
+CONTROL_ACTION_REASONS = {
+    "tool_handler": "requires active tool request",
+    "clarification": "requires active clarification loop",
+    "error_handler": "requires retryable execution error",
+    "terminal_execution_error": "requires terminal execution error",
+    "human_review_after_error": "requires exhausted retryable execution error awaiting review",
+    "human_review_before_run": "requires generated code awaiting run approval",
+    "execute_code": "requires approved generated code ready to run",
+    "human_review_final": "requires successful execution awaiting final review",
 }
 
 
@@ -38,9 +29,9 @@ def mask_actions(state: dict, available_actions: list[str]) -> tuple[list[str], 
 
     allowed: list[str] = []
     for action in available_actions:
-        gate = CONTROL_ACTION_GATES.get(action)
-        if gate and not gate[0](state):
-            blocked[action] = gate[1]
+        node = NODE_REGISTRY_MAP.get(action)
+        if action in CONTROL_ACTION_REASONS and node and not node.is_ready(state):
+            blocked[action] = CONTROL_ACTION_REASONS[action]
             continue
         allowed.append(action)
 
