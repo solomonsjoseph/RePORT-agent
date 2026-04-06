@@ -840,7 +840,7 @@ def test_llm_select_next_action_uses_environment_summary_and_action_mask() -> No
     assert "workflow_trace_tail=['orchestrator', 'generate_code']" in planner_messages[1]["content"]
     assert 'Recent observations:\n["generate_code: code_generated"]' in planner_messages[1]["content"]
     assert "Planner decision trace:\n[]" in planner_messages[1]["content"]
-    assert "Blocked actions:\n- execute_code (requires approved generated code ready to run)" in planner_messages[1]["content"]
+    assert "Blocked actions:\n- execute_code (requires generated code awaiting run approval)" in planner_messages[1]["content"]
 
 
 def test_llm_select_next_action_masks_blocked_actions_with_reasons() -> None:
@@ -960,6 +960,37 @@ def test_llm_select_next_action_rejects_inactive_human_review_final_choice() -> 
         "Blocked actions:\n- human_review_final (requires successful execution awaiting final review)"
         in planner_messages[1]["content"]
     )
+
+
+def test_llm_select_next_action_explains_execute_code_block_when_final_review_is_pending() -> None:
+    _install_langchain_and_langgraph_stubs()
+    planner = importlib.import_module("graph.nodes.orchestrator.planner")
+
+    state = {
+        "messages": [SimpleNamespace(type="human", content="continue")],
+        "artifacts": {"generated_code": "print(1)"},
+        "node_data": {
+            "executor": {"run_status": "ok"},
+            "human_review": {"final_decision": None},
+        },
+        "observations": ["execute_code: run_succeeded"],
+        "planner": {"decision_trace": []},
+        "meta": {"workflow_trace": ["orchestrator", "execute_code"]},
+        "last_action": "execute_code",
+    }
+
+    llm = _LLM('{"action":"execute_code","thought":"run again"}')
+    action, thought = planner.llm_select_next_action(
+        state,
+        llm,
+        ["qa", "execute_code", "human_review_final"],
+    )
+
+    assert action == "end"
+    assert thought == "run again"
+    planner_messages = llm.calls[0]
+    assert "Allowed actions:\nhuman_review_final, qa" in planner_messages[0]["content"]
+    assert "Blocked actions:\n- execute_code (already succeeded; move to human_review_final)" in planner_messages[1]["content"]
 
 def test_orchestrator_routes_latest_qa_turn_without_stale_code_bias() -> None:
     _install_langchain_and_langgraph_stubs()

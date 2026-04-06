@@ -2,17 +2,32 @@ from __future__ import annotations
 
 from ...state import MetaKeys
 from ..node_registry import NODE_REGISTRY_MAP
+from .policy import DETERMINISTIC_CONTROL_ACTIONS
 
 
-CONTROL_ACTION_REASONS = {
-    "tool_handler": "requires active tool request",
-    "clarification": "requires active clarification loop",
-    "error_handler": "requires retryable execution error",
-    "terminal_execution_error": "requires terminal execution error",
-    "human_review_after_error": "requires exhausted retryable execution error awaiting review",
-    "human_review_before_run": "requires generated code awaiting run approval",
-    "execute_code": "requires approved generated code ready to run",
-    "human_review_final": "requires successful execution awaiting final review",
+def _static_reason(text: str):
+    return lambda _state: text
+
+
+def _execute_code_block_reason(state: dict) -> str:
+    final_review = NODE_REGISTRY_MAP.get("human_review_final")
+    before_run = NODE_REGISTRY_MAP.get("human_review_before_run")
+    if final_review and final_review.is_ready(state):
+        return "already succeeded; move to human_review_final"
+    if before_run and before_run.is_ready(state):
+        return "requires generated code awaiting run approval"
+    return "requires approved generated code ready to run"
+
+
+CONTROL_ACTION_REASON_FACTORIES = {
+    "tool_handler": _static_reason("requires active tool request"),
+    "clarification": _static_reason("requires active clarification loop"),
+    "error_handler": _static_reason("requires retryable execution error"),
+    "terminal_execution_error": _static_reason("requires terminal execution error"),
+    "human_review_after_error": _static_reason("requires exhausted retryable execution error awaiting review"),
+    "human_review_before_run": _static_reason("requires generated code awaiting run approval"),
+    "execute_code": _execute_code_block_reason,
+    "human_review_final": _static_reason("requires successful execution awaiting final review"),
 }
 
 
@@ -30,8 +45,11 @@ def mask_actions(state: dict, available_actions: list[str]) -> tuple[list[str], 
     allowed: list[str] = []
     for action in available_actions:
         node = NODE_REGISTRY_MAP.get(action)
-        if action in CONTROL_ACTION_REASONS and node and not node.is_ready(state):
-            blocked[action] = CONTROL_ACTION_REASONS[action]
+        if action == "clarification" and node and not node.is_ready(state):
+            blocked[action] = CONTROL_ACTION_REASON_FACTORIES[action](state)
+            continue
+        if action in DETERMINISTIC_CONTROL_ACTIONS and node and not node.is_ready(state):
+            blocked[action] = CONTROL_ACTION_REASON_FACTORIES[action](state)
             continue
         allowed.append(action)
 

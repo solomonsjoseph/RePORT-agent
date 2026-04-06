@@ -91,3 +91,19 @@ def test_mask_actions_blocks_inactive_review_control_actions_without_preconditio
 
     assert allowed == ["qa"]
     assert blocked["human_review_final"] == "requires successful execution awaiting final review"
+
+
+def test_mask_actions_explain_execute_code_block_when_final_review_is_pending() -> None:
+    state = {
+        "artifacts": {"generated_code": "print(1)"},
+        "agents": {
+            "executor": {"run_status": "ok"},
+            "human_review": {"final_decision": None},
+        },
+        "meta": {},
+    }
+
+    allowed, blocked = mask_actions(state, ["qa", "execute_code", "human_review_final"])
+
+    assert allowed == ["qa", "human_review_final"]
+    assert blocked["execute_code"] == "already succeeded; move to human_review_final"

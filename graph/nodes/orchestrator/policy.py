@@ -7,6 +7,16 @@ from ..node_registry import NODE_REGISTRY
 from ..state_helpers import get_agent_state
 from .state_logic import _should_end_now
 
+DETERMINISTIC_CONTROL_ACTIONS = (
+    "tool_handler",
+    "error_handler",
+    "terminal_execution_error",
+    "human_review_after_error",
+    "human_review_before_run",
+    "execute_code",
+    "human_review_final",
+)
+
 
 def _tool_request_queue(state: AgentState) -> list[str]:
     return list((state.get("meta") or {}).get(MetaKeys.TOOL_REQUEST_QUEUE, []))
@@ -31,16 +41,7 @@ def choose_invariant_action(state: AgentState, available_actions: Iterable[str])
     if _should_end_now(state):
         return "end"
 
-    invariant_actions = (
-        "tool_handler",
-        "error_handler",
-        "terminal_execution_error",
-        "human_review_after_error",
-        "human_review_before_run",
-        "execute_code",
-        "human_review_final",
-    )
-    for action_name in invariant_actions:
+    for action_name in DETERMINISTIC_CONTROL_ACTIONS:
         node = next((nd for nd in NODE_REGISTRY if nd.name == action_name), None)
         if node and action_name in available and node.is_ready(state):
             return action_name
