@@ -3,6 +3,17 @@ from __future__ import annotations
 from copy import deepcopy
 
 
+def _merge_dicts(base: dict | None, patch: dict | None) -> dict:
+    merged = dict(base or {})
+    for key, value in dict(patch or {}).items():
+        existing = merged.get(key)
+        if isinstance(existing, dict) and isinstance(value, dict):
+            merged[key] = _merge_dicts(existing, value)
+        else:
+            merged[key] = value
+    return merged
+
+
 def get_artifacts(state: dict) -> dict:
     artifacts = dict(state.get("artifacts") or {})
     output = dict(state.get("output") or {})
@@ -14,27 +25,22 @@ def get_artifacts(state: dict) -> dict:
 
 
 def get_node_data(state: dict, node_name: str) -> dict:
-    node_data = dict(state.get("node_data") or {})
-    if node_name in node_data:
-        return dict(node_data[node_name] or {})
-    return dict((state.get("agents") or {}).get(node_name) or {})
+    agents = dict((state.get("agents") or {}).get(node_name) or {})
+    node_data = dict((state.get("node_data") or {}).get(node_name) or {})
+    return _merge_dicts(agents, node_data)
 
 
 def get_planner_state(state: dict) -> dict:
-    planner = dict(state.get("planner") or {})
     orchestrator = dict(state.get("orchestrator") or {})
-    planner.setdefault("last_decision", orchestrator.get("last_decision"))
-    planner.setdefault("decision_trace", list(orchestrator.get("thoughts", [])))
-    return planner
+    planner = dict(state.get("planner") or {})
+    return _merge_dicts(orchestrator, planner)
 
 
 def merge_state_patch(state: dict, patch: dict) -> dict:
     updated = deepcopy(state)
     for key, value in patch.items():
-        if key in {"artifacts", "node_data", "planner", "meta"}:
-            current = dict(updated.get(key) or {})
-            current.update(value)
-            updated[key] = current
+        if key in {"artifacts", "node_data", "planner", "meta", "orchestrator"}:
+            updated[key] = _merge_dicts(updated.get(key), value)
         else:
             updated[key] = value
 
@@ -55,7 +61,11 @@ def merge_state_patch(state: dict, patch: dict) -> dict:
     if node_data:
         agents = dict(updated.get("agents") or {})
         for name, value in node_data.items():
-            agents[name] = dict(agents.get(name) or {}) | dict(value or {})
+            agents[name] = _merge_dicts(agents.get(name), value)
         updated["agents"] = agents
+
+    planner = dict(updated.get("planner") or {})
+    if planner:
+        updated["orchestrator"] = _merge_dicts(updated.get("orchestrator"), planner)
 
     return updated
