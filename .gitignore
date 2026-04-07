@@ -12,3 +12,5 @@ report-env/
 data/.DS_Store
 AGENTS.md
 .worktrees/
+.superpowers/
+docs/superpowers/

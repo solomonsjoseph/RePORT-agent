@@ -130,7 +130,7 @@ def test_generate_code_resets_approval_and_sets_current_code_hash() -> None:
         "messages": [_HumanMessage("write python code")],
         "output": {},
         "observations": [],
-        "meta": {},
+        "meta": {"execution_ticket_hash": "old", "error_recovery_active": True},
         "agents": {
             "generate_code": {"tool_requests": [], "tool_results": []},
             "human_review": {"before_run_decision": "approve", "approved_code_hash": "old"},
@@ -144,6 +144,8 @@ def test_generate_code_resets_approval_and_sets_current_code_hash() -> None:
     assert updated["agents"]["human_review"]["before_run_decision"] is None
     assert updated["agents"]["human_review"]["approved_code_hash"] is None
     assert updated["meta"].get("current_code_hash")
+    assert updated["meta"].get("execution_ticket_hash") is None
+    assert updated["meta"].get("error_recovery_active") is None
 
 
 def test_generate_code_does_not_run_tool_routing_clarification_path() -> None:

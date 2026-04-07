@@ -50,3 +50,5 @@ class MetaKeys:
     PROGRESS_MADE_LAST_STEP = "progress_made_last_step"
     STAGNATION_COUNT = "stagnation_count"
     REPEATED_FAILURE_SIGNATURE = "repeated_failure_signature"
+    EXECUTION_TICKET_HASH = "execution_ticket_hash"
+    ERROR_RECOVERY_ACTIVE = "error_recovery_active"

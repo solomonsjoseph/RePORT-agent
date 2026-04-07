@@ -4,7 +4,7 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.sqlite import SqliteSaver
 from utils.context import build_context
 from .state import AgentState
-from .routing import route_after_final_review, route_by_next_action
+from .routing import route_by_next_action
 from .nodes.node_registry import validate_registry
 
 from .nodes.orchestrator import orchestrator_node
@@ -99,18 +99,7 @@ def build_graph(llm, df, schema, db_path):
     )
 
     for node_name in action_nodes:
-        if node_name == "human_review_final":
-            continue
         workflow.add_edge(node_name, "orchestrator")
-
-    workflow.add_conditional_edges(
-        "human_review_final",
-        route_after_final_review,
-        {
-            END: END,
-            "orchestrator": "orchestrator",
-        },
-    )
 
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
     conn = sqlite3.connect(db_path, check_same_thread=False)

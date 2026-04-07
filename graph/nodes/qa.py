@@ -216,6 +216,8 @@ def qa_node(
     if is_executable_python(code):
         output["generated_code"] = code
         meta[MetaKeys.CURRENT_CODE_HASH] = code_fingerprint(code)
+        meta.pop(MetaKeys.EXECUTION_TICKET_HASH, None)
+        meta.pop(MetaKeys.ERROR_RECOVERY_ACTIVE, None)
         agents = dict(updated_state.get("agents", {}))
         review_state = dict(agents.get("human_review", {}))
         review_state["before_run_decision"] = None

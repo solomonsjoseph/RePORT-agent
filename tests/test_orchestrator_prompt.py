@@ -606,6 +606,41 @@ def test_orchestrator_regenerate_before_run_routes_back_to_generate_code() -> No
     assert updated["meta"].get("current_code_hash") is None
 
 
+def test_orchestrator_consumes_before_run_approval_into_execution_ticket() -> None:
+    _install_langchain_and_langgraph_stubs()
+    orchestrator = importlib.import_module("graph.nodes.orchestrator")
+
+    state = {
+        "messages": [SimpleNamespace(type="ai", content="Please review generated code")],
+        "output": {"generated_code": "print('run me')"},
+        "observations": [],
+        "last_action": "human_review_before_run",
+        "orchestrator": {},
+        "agents": {
+            "executor": {"run_status": "idle"},
+            "human_review": {
+                "before_run_decision": "approve",
+                "approved_code_hash": "abc",
+                "final_decision": None,
+            },
+        },
+        "meta": {
+            "workflow_trace": ["orchestrator", "human_review_before_run"],
+            "current_code_hash": "abc",
+        },
+    }
+
+    updated = orchestrator.orchestrator_node(
+        state,
+        _LLM("not-json"),
+        ["generate_code", "execute_code", "human_review_before_run", "end"],
+    )
+
+    assert updated["next_action"] == "execute_code"
+    assert (updated["agents"].get("human_review") or {}).get("before_run_decision") is None
+    assert updated["meta"].get("execution_ticket_hash") == "abc"
+
+
 def test_detect_two_node_cycle_ignores_expected_execute_error_retry_pair() -> None:
     _install_langchain_and_langgraph_stubs()
     orchestrator = importlib.import_module("graph.nodes.orchestrator")
@@ -703,6 +738,80 @@ def test_orchestrator_final_review_regenerate_routes_back_to_generate_code() -> 
     assert updated["meta"].get("current_code_hash") is None
     assert (updated["agents"].get("human_review") or {}).get("final_decision") is None
     assert (updated["agents"].get("executor") or {}).get("run_status") == "idle"
+
+
+def test_orchestrator_consumes_final_review_approval_and_ends() -> None:
+    _install_langchain_and_langgraph_stubs()
+    orchestrator = importlib.import_module("graph.nodes.orchestrator")
+
+    state = {
+        "messages": [SimpleNamespace(type="ai", content="Please review final output")],
+        "output": {
+            "generated_code": "print('done')",
+            "text": "ok",
+        },
+        "observations": [],
+        "last_action": "human_review_final",
+        "orchestrator": {},
+        "agents": {
+            "executor": {"run_status": "ok"},
+            "human_review": {
+                "before_run_decision": None,
+                "approved_code_hash": "abc",
+                "final_decision": "approve",
+            },
+        },
+        "meta": {
+            "workflow_trace": ["orchestrator", "human_review_final"],
+            "current_code_hash": "abc",
+            "execution_ticket_hash": "abc",
+        },
+    }
+
+    updated = orchestrator.orchestrator_node(
+        state,
+        _LLM("not-json"),
+        ["generate_code", "human_review_final", "end"],
+    )
+
+    assert updated["next_action"] == "end"
+    assert (updated["agents"].get("human_review") or {}).get("final_decision") is None
+    assert updated["meta"].get("execution_ticket_hash") is None
+
+
+def test_orchestrator_consumes_after_error_feedback_and_routes_to_generate_code() -> None:
+    _install_langchain_and_langgraph_stubs()
+    orchestrator = importlib.import_module("graph.nodes.orchestrator")
+
+    state = {
+        "messages": [SimpleNamespace(type="human", id="feedback-1", content="try a simpler model")],
+        "output": {"generated_code": ""},
+        "observations": [],
+        "last_action": "human_review_after_error",
+        "orchestrator": {},
+        "agents": {
+            "executor": {"run_status": "idle"},
+            "human_review": {
+                "after_error_decision": "feedback",
+                "before_run_decision": None,
+                "final_decision": None,
+            },
+        },
+        "meta": {
+            "workflow_trace": ["orchestrator", "human_review_after_error"],
+            "last_user_message_hash": "old",
+        },
+    }
+
+    updated = orchestrator.orchestrator_node(
+        state,
+        _LLM("not-json"),
+        ["generate_code", "human_review_after_error", "end"],
+    )
+
+    assert updated["next_action"] == "generate_code"
+    assert (updated["agents"].get("human_review") or {}).get("after_error_decision") is None
+
 
 
 def test_orchestrator_keeps_workflow_trace_on_new_user_turn_without_reset() -> None:

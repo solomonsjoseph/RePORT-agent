@@ -69,6 +69,8 @@ def _consume_regenerate_before_run(output: dict, agents: dict, meta: dict) -> tu
 
     updated_meta = dict(meta)
     updated_meta.pop(MetaKeys.CURRENT_CODE_HASH, None)
+    updated_meta.pop(MetaKeys.EXECUTION_TICKET_HASH, None)
+    updated_meta.pop(MetaKeys.ERROR_RECOVERY_ACTIVE, None)
     bypass_actions = list(updated_meta.get(MetaKeys.LOOP_GUARD_BYPASS_ACTIONS, []))
     if "generate_code" not in bypass_actions:
         bypass_actions.append("generate_code")
@@ -105,6 +107,8 @@ def _consume_final_review_regenerate(
 
     updated_meta = dict(meta)
     updated_meta.pop(MetaKeys.CURRENT_CODE_HASH, None)
+    updated_meta.pop(MetaKeys.EXECUTION_TICKET_HASH, None)
+    updated_meta.pop(MetaKeys.ERROR_RECOVERY_ACTIVE, None)
     bypass_actions = list(updated_meta.get(MetaKeys.LOOP_GUARD_BYPASS_ACTIONS, []))
     if "generate_code" not in bypass_actions:
         bypass_actions.append("generate_code")
@@ -123,3 +127,80 @@ def _consume_final_review_regenerate(
         updated_agents["executor"] = executor
 
     return updated_output, updated_agents, updated_meta, True
+
+
+def _consume_before_run_approval(
+    output: dict,
+    agents: dict,
+    meta: dict,
+) -> tuple[dict, dict, dict, bool]:
+    review = (agents.get("human_review") or {}) if isinstance(agents, dict) else {}
+    if review.get("before_run_decision") != "approve":
+        return output, agents, meta, False
+
+    updated_agents = dict(agents)
+    updated_review = dict(review)
+    updated_meta = dict(meta)
+    current_hash = updated_meta.get(MetaKeys.CURRENT_CODE_HASH)
+
+    updated_review["before_run_decision"] = None
+    updated_review["approved_code_hash"] = current_hash if current_hash else None
+    updated_agents["human_review"] = updated_review
+
+    if current_hash:
+        updated_meta[MetaKeys.EXECUTION_TICKET_HASH] = current_hash
+    else:
+        updated_meta.pop(MetaKeys.EXECUTION_TICKET_HASH, None)
+    updated_meta.pop(MetaKeys.ERROR_RECOVERY_ACTIVE, None)
+
+    return output, updated_agents, updated_meta, True
+
+
+def _consume_after_error_decision(
+    output: dict,
+    agents: dict,
+    meta: dict,
+) -> tuple[dict, dict, dict, str | None]:
+    review = (agents.get("human_review") or {}) if isinstance(agents, dict) else {}
+    decision = review.get("after_error_decision")
+    if not decision:
+        return output, agents, meta, None
+
+    updated_agents = dict(agents)
+    updated_review = dict(review)
+    updated_meta = dict(meta)
+    updated_review["after_error_decision"] = None
+    updated_review["before_run_decision"] = None
+    updated_review["approved_code_hash"] = None
+    updated_agents["human_review"] = updated_review
+    updated_meta.pop(MetaKeys.EXECUTION_TICKET_HASH, None)
+    updated_meta.pop(MetaKeys.ERROR_RECOVERY_ACTIVE, None)
+
+    bypass_actions = list(updated_meta.get(MetaKeys.LOOP_GUARD_BYPASS_ACTIONS, []))
+    if "generate_code" not in bypass_actions:
+        bypass_actions.append("generate_code")
+    updated_meta[MetaKeys.LOOP_GUARD_BYPASS_ACTIONS] = bypass_actions
+
+    return output, updated_agents, updated_meta, "generate_code"
+
+
+def _consume_final_review_approval(
+    output: dict,
+    agents: dict,
+    meta: dict,
+) -> tuple[dict, dict, dict, bool]:
+    review = (agents.get("human_review") or {}) if isinstance(agents, dict) else {}
+    if review.get("final_decision") != "approve":
+        return output, agents, meta, False
+
+    updated_agents = dict(agents)
+    updated_review = dict(review)
+    updated_meta = dict(meta)
+    updated_review["final_decision"] = None
+    updated_review["before_run_decision"] = None
+    updated_review["approved_code_hash"] = None
+    updated_agents["human_review"] = updated_review
+    updated_meta.pop(MetaKeys.EXECUTION_TICKET_HASH, None)
+    updated_meta.pop(MetaKeys.ERROR_RECOVERY_ACTIVE, None)
+
+    return output, updated_agents, updated_meta, True

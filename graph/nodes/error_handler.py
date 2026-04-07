@@ -3,6 +3,7 @@ from utils.message_window import window_messages
 from prompts.fix_prompt import make_fix_code_prompt
 from .state_helpers import clear_clarification_meta, update_agent_state
 from .code_guardrails import code_fingerprint, is_executable_python
+from ..state import MetaKeys
 
 NODE_NAME = "error_handler"
 NODE_CAPABILITY = (
@@ -66,18 +67,18 @@ def error_handler_node(state, llm, context):
     output["generated_code"] = new_code
     review_state = dict(state.get("agents", {}).get("human_review", {}))
     new_hash = code_fingerprint(new_code)
-    # Preserve human approval across auto-fix retries so execution can continue
-    # without repeatedly asking for review in the error-recovery loop.
-    if review_state.get("before_run_decision") == "approve":
-        review_state["before_run_decision"] = "approve"
+    meta = clear_clarification_meta(meta)
+    meta[MetaKeys.CURRENT_CODE_HASH] = new_hash
+    if meta.get(MetaKeys.ERROR_RECOVERY_ACTIVE) and meta.get(MetaKeys.EXECUTION_TICKET_HASH):
         review_state["approved_code_hash"] = new_hash
+        meta[MetaKeys.EXECUTION_TICKET_HASH] = new_hash
     else:
         review_state["before_run_decision"] = None
         review_state["approved_code_hash"] = None
+        meta.pop(MetaKeys.EXECUTION_TICKET_HASH, None)
+        meta.pop(MetaKeys.ERROR_RECOVERY_ACTIVE, None)
     agents = dict(state.get("agents", {}))
     agents["human_review"] = review_state
-    meta = clear_clarification_meta(meta)
-    meta["current_code_hash"] = new_hash
     updated_state = {
         **state,
         "output": output,

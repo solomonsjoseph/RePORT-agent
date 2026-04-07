@@ -8,9 +8,8 @@ Every node is described by a single NodeDefinition.  When you add a new node:
      facing capability text is sourced from the node modules via
      action_metadata.py, and semantic routing now lives outside this registry.
 
-Risk-1 fix: knowledge that was previously scattered across three locations
-  (builder.py, orchestrator.NODE_CAPABILITIES, orchestrator.build_default_policies)
-  now lives in one place.
+Risk-1 fix: routing metadata that was previously scattered across multiple
+  locations now lives in one place.
 
 Risk-2 fix: ``validate_registry()`` asserts structural invariants at startup.
 
@@ -72,35 +71,10 @@ def _has_exhausted_retryable_execution_error(state: AgentState) -> bool:
 
 
 def _has_fresh_run_approval(state: AgentState) -> bool:
-    review = get_agent_state(state, "human_review")
-    if review.get("before_run_decision") != "approve":
-        return False
-    approved = review.get("approved_code_hash")
-    current = (state.get("meta") or {}).get("current_code_hash")
+    meta = dict(state.get("meta") or {})
+    approved = meta.get(MetaKeys.EXECUTION_TICKET_HASH)
+    current = meta.get(MetaKeys.CURRENT_CODE_HASH)
     return bool(approved and current and approved == current)
-
-
-def _is_code_clarification_continuation(state: AgentState) -> bool:
-    meta = state.get("meta") or {}
-    if not meta.get(MetaKeys.AWAITING_USER_CLARIFICATION):
-        return False
-
-    return_node = meta.get(MetaKeys.CLARIFICATION_RETURN_NODE)
-    if return_node in ("generate_code", "error_handler"):
-        return True
-
-    # Backward-compatible handling for older threads that set only the generic
-    # clarification flag from generate_code/error_handler without a return node.
-    return state.get("last_action") in ("generate_code", "error_handler")
-
-
-def _has_affirmative_code_readiness(state: AgentState) -> bool:
-    meta = state.get("meta") or {}
-    if "generate_code" in list(meta.get(MetaKeys.LOOP_GUARD_BYPASS_ACTIONS, [])):
-        return True
-    if _is_code_clarification_continuation(state):
-        return True
-    return False
 
 
 # ---------------------------------------------------------------------------
@@ -197,7 +171,7 @@ NODE_REGISTRY: list[NodeDefinition] = [
         is_ready=lambda s: (
             bool((s.get("output") or {}).get("generated_code"))
             and get_agent_state(s, "executor").get("run_status") in ("idle", "pending")
-            and get_agent_state(s, "human_review").get("before_run_decision") is None
+            and not _has_fresh_run_approval(s)
         ),
     ),
     NodeDefinition(
@@ -220,14 +194,6 @@ NODE_REGISTRY: list[NodeDefinition] = [
         ),
     ),
 ]
-
-# ---------------------------------------------------------------------------
-# Derived lookups — built once at import time, used by orchestrator + builder.
-# ---------------------------------------------------------------------------
-
-# Backward-compatible alias used by a few tests and callers. The source of truth
-# now lives in graph.nodes.action_metadata.
-NODE_CAPABILITIES: dict[str, str] = dict(ACTION_CAPABILITIES)
 
 # Maps node name → NodeDefinition for O(1) lookup.
 NODE_REGISTRY_MAP: dict[str, NodeDefinition] = {nd.name: nd for nd in NODE_REGISTRY}

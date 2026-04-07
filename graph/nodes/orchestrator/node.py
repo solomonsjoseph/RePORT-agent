@@ -14,7 +14,10 @@ from .policy import (
 )
 from .progress import update_progress_tracking
 from .state_logic import (
+    _consume_after_error_decision,
+    _consume_before_run_approval,
     _consume_final_review_regenerate,
+    _consume_final_review_approval,
     _consume_regenerate_before_run,
     _should_end_now,
     _user_message_hash,
@@ -51,6 +54,13 @@ def _planner_fallback_action(available_actions: Iterable[str]) -> str:
     return "end"
 
 
+def _resumed_from(state: AgentState, node_name: str) -> bool:
+    if state.get("last_action") == node_name:
+        return True
+    workflow_trace = list((state.get("meta") or {}).get(MetaKeys.WORKFLOW_TRACE, []))
+    return bool(workflow_trace and workflow_trace[-1] == node_name)
+
+
 def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) -> AgentState:
     state = update_progress_tracking(state)
     available_action_list = sorted(set(available_actions))
@@ -62,7 +72,59 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
 
     output = dict(state.get("output") or {})
     agents = dict(state.get("agents") or {})
+    if _resumed_from(state, "human_review_before_run"):
+        output, agents, meta, regenerated = _consume_regenerate_before_run(output, agents, meta)
+        if regenerated:
+            next_action = None
+            orchestrator_state.pop("next_action", None)
+            observations = list(state.get("observations", []))
+            observations.append(
+                "orchestrator: received regenerate request; routing back to generate_code"
+            )
+            state = {**state, "observations": observations}
+
+        output, agents, meta, approved_before_run = _consume_before_run_approval(output, agents, meta)
+        if approved_before_run:
+            next_action = "execute_code"
+            orchestrator_state.pop("next_action", None)
+            observations = list(state.get("observations", []))
+            observations.append("orchestrator: consumed before-run approval; routing to execute_code")
+            state = {**state, "observations": observations}
+
+    if _resumed_from(state, "human_review_after_error"):
+        output, agents, meta, after_error_action = _consume_after_error_decision(output, agents, meta)
+        if after_error_action:
+            next_action = after_error_action
+            orchestrator_state.pop("next_action", None)
+            observations = list(state.get("observations", []))
+            observations.append(
+                "orchestrator: consumed after-error review decision; routing to generate_code"
+            )
+            state = {**state, "observations": observations}
+
+    if _resumed_from(state, "human_review_final"):
+        output, agents, meta, regenerated_final = _consume_final_review_regenerate(output, agents, meta)
+        if regenerated_final:
+            next_action = None
+            orchestrator_state.pop("next_action", None)
+            observations = list(state.get("observations", []))
+            observations.append(
+                "orchestrator: received final-review regenerate request; routing back to generate_code"
+            )
+            state = {**state, "observations": observations}
+
+        output, agents, meta, approved_final = _consume_final_review_approval(output, agents, meta)
+        if approved_final:
+            next_action = "end"
+            orchestrator_state.pop("next_action", None)
+            observations = list(state.get("observations", []))
+            observations.append("orchestrator: consumed final approval; routing to end")
+            state = {**state, "observations": observations}
+
     current_hash = _user_message_hash(state)
+    if current_hash and next_action in {"generate_code", "execute_code", "end"}:
+        meta[MetaKeys.LAST_USER_MESSAGE_HASH] = current_hash
+
     was_awaiting_clarification = bool(meta.get(MetaKeys.AWAITING_USER_CLARIFICATION))
     review_state = dict(agents.get("human_review") or {})
     has_pending_regenerate = (
@@ -94,24 +156,6 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
             meta[MetaKeys.LAST_USER_MESSAGE_HASH] = current_hash
             next_action = None
             orchestrator_state.pop("next_action", None)
-
-    output, agents, meta, regenerated = _consume_regenerate_before_run(output, agents, meta)
-    if regenerated:
-        next_action = None
-        orchestrator_state.pop("next_action", None)
-        observations = list(state.get("observations", []))
-        observations.append("orchestrator: received regenerate request; routing back to generate_code")
-        state = {**state, "observations": observations}
-
-    output, agents, meta, regenerated_final = _consume_final_review_regenerate(output, agents, meta)
-    if regenerated_final:
-        next_action = None
-        orchestrator_state.pop("next_action", None)
-        observations = list(state.get("observations", []))
-        observations.append(
-            "orchestrator: received final-review regenerate request; routing back to generate_code"
-        )
-        state = {**state, "observations": observations}
 
     routing_state = {
         **state,

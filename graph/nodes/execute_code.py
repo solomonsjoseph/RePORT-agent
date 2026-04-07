@@ -1,3 +1,4 @@
+from ..state import MetaKeys
 from tools.execution import run_python_user
 from .state_helpers import update_agent_state
 
@@ -38,12 +39,18 @@ def execute_code_node(state, df):
     # Handle execution error
     # --------------------------------------------------
     if error:
-
         output = dict(state.get("output") or {})
         output["error"] = error
+        meta = dict(state.get("meta", {}) or {})
+        if error.get("category") == "retryable_code":
+            meta[MetaKeys.ERROR_RECOVERY_ACTIVE] = True
+        else:
+            meta.pop(MetaKeys.ERROR_RECOVERY_ACTIVE, None)
+            meta.pop(MetaKeys.EXECUTION_TICKET_HASH, None)
         updated_state = {
             **state,
             "output": output,
+            "meta": meta,
         }
         return update_agent_state(
             updated_state,
@@ -65,7 +72,8 @@ def execute_code_node(state, df):
     if figure_png:
         output_payload["figure_png"] = figure_png
     meta = dict(state.get("meta", {}))
-    meta["error_iterations"] = 0
+    meta[MetaKeys.ERROR_ITERATIONS] = 0
+    meta.pop(MetaKeys.ERROR_RECOVERY_ACTIVE, None)
     updated_state = {
         **state,
         "output": output_payload,

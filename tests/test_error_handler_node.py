@@ -56,7 +56,7 @@ def test_error_handler_non_code_response_does_not_start_clarification_loop() -> 
     assert updated["agents"]["executor"]["run_status"] == "idle"
 
 
-def test_error_handler_preserves_approval_during_retry_loop() -> None:
+def test_error_handler_rolls_execution_ticket_forward_during_retry_loop() -> None:
     _install_stubs()
     for _mod in ("utils.message_window", "graph.nodes.error_handler"):
         sys.modules.pop(_mod, None)
@@ -65,9 +65,14 @@ def test_error_handler_preserves_approval_during_retry_loop() -> None:
     state = {
         "messages": [],
         "output": {"generated_code": "print('x')", "error": {"type": "NameError", "message": "bad"}},
-        "meta": {"error_iterations": 1, "current_code_hash": "old"},
+        "meta": {
+            "error_iterations": 1,
+            "current_code_hash": "old",
+            "execution_ticket_hash": "old",
+            "error_recovery_active": True,
+        },
         "agents": {
-            "human_review": {"before_run_decision": "approve", "approved_code_hash": "old"},
+            "human_review": {"before_run_decision": None, "approved_code_hash": "old"},
             "executor": {"run_status": "error"},
         },
     }
@@ -75,6 +80,6 @@ def test_error_handler_preserves_approval_during_retry_loop() -> None:
     updated = mod.error_handler_node(state, _LLM("```python\nprint('fixed')\n```"), context="ctx")
 
     review = updated["agents"]["human_review"]
-    assert review["before_run_decision"] == "approve"
     assert review["approved_code_hash"] == updated["meta"]["current_code_hash"]
+    assert updated["meta"]["execution_ticket_hash"] == updated["meta"]["current_code_hash"]
     assert updated["agents"]["executor"]["run_status"] == "pending"

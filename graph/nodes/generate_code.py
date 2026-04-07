@@ -10,6 +10,7 @@ from .state_helpers import (
 )
 from .tool_routing import format_tool_results
 from .code_guardrails import code_fingerprint, is_executable_python
+from ..state import MetaKeys
 from utils.llm_response import coerce_text_content
 
 NODE_NAME = "generate_code"
@@ -79,7 +80,9 @@ def generate_code_node(state, llm, context):
     agents = dict(state.get("agents", {}))
     agents["human_review"] = human_review_state
     meta = clear_clarification_meta(state.get("meta", {}))
-    meta["current_code_hash"] = code_fingerprint(code)
+    meta[MetaKeys.CURRENT_CODE_HASH] = code_fingerprint(code)
+    meta.pop(MetaKeys.EXECUTION_TICKET_HASH, None)
+    meta.pop(MetaKeys.ERROR_RECOVERY_ACTIVE, None)
     updated_state = {
         **state,
         "output": output,

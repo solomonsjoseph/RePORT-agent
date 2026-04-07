@@ -55,7 +55,4 @@ def choose_invariant_action(state: AgentState, available_actions: Iterable[str])
     ):
         return "generate_code"
 
-    if get_agent_state(state, "human_review").get("final_decision") == "approve":
-        return "end"
-
     return None

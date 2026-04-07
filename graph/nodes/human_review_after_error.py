@@ -1,5 +1,7 @@
 from langgraph.types import interrupt
 from langchain_core.messages import HumanMessage
+
+from ..state import MetaKeys
 from .state_helpers import update_agent_state
 
 NODE_NAME = "human_review_after_error"
@@ -22,7 +24,10 @@ def human_review_after_error_node(state):
         messages.append(HumanMessage(content=suggestion))
 
     meta = dict(state.get("meta", {}))
-    meta["error_iterations"] = 0
+    meta[MetaKeys.ERROR_ITERATIONS] = 0
+    meta.pop(MetaKeys.CURRENT_CODE_HASH, None)
+    meta.pop(MetaKeys.EXECUTION_TICKET_HASH, None)
+    meta.pop(MetaKeys.ERROR_RECOVERY_ACTIVE, None)
 
     output["generated_code"] = ""
     updated_state = {
@@ -44,5 +49,7 @@ def human_review_after_error_node(state):
         {
             "status": "done",
             "after_error_decision": decision,
+            "before_run_decision": None,
+            "approved_code_hash": None,
         },
     )

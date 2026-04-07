@@ -40,8 +40,8 @@ def test_route_by_next_action_allows_execute_with_approval() -> None:
 
     state = {
         "next_action": "execute_code",
-        "meta": {"current_code_hash": "h1"},
-        "agents": {"human_review": {"before_run_decision": "approve", "approved_code_hash": "h1"}},
+        "agents": {"human_review": {}},
+        "meta": {"current_code_hash": "h1", "execution_ticket_hash": "h1"},
     }
 
     assert routing.route_by_next_action(state) == "execute_code"
@@ -62,8 +62,8 @@ def test_route_by_next_action_redirects_execute_when_approval_hash_is_stale() ->
 
     state = {
         "next_action": "execute_code",
-        "meta": {"current_code_hash": "new-hash"},
-        "agents": {"human_review": {"before_run_decision": "approve", "approved_code_hash": "old-hash"}},
+        "meta": {"current_code_hash": "new-hash", "execution_ticket_hash": "old-hash"},
+        "agents": {"human_review": {}},
     }
 
     assert routing.route_by_next_action(state) == "human_review_before_run"
@@ -76,8 +76,8 @@ def test_route_by_next_action_allows_execute_with_matching_approval_hash() -> No
 
     state = {
         "next_action": "execute_code",
-        "meta": {"current_code_hash": "same-hash"},
-        "agents": {"human_review": {"before_run_decision": "approve", "approved_code_hash": "same-hash"}},
+        "meta": {"current_code_hash": "same-hash", "execution_ticket_hash": "same-hash"},
+        "agents": {"human_review": {}},
     }
 
     assert routing.route_by_next_action(state) == "execute_code"
@@ -90,12 +90,10 @@ def test_route_by_next_action_allows_execute_after_success_when_approved() -> No
 
     state = {
         "next_action": "execute_code",
-        "meta": {"current_code_hash": "same-hash"},
+        "meta": {"current_code_hash": "same-hash", "execution_ticket_hash": "same-hash"},
         "agents": {
             "executor": {"run_status": "ok"},
             "human_review": {
-                "before_run_decision": "approve",
-                "approved_code_hash": "same-hash",
                 "final_decision": None,
             },
         },
