@@ -26,6 +26,13 @@ from .tool_routing import is_tool_requested
 
 
 MAX_ERROR_ITERATIONS = 5
+RETRYABLE_EXECUTION_ERROR_CATEGORY = "retryable_code"
+TERMINAL_EXECUTION_ERROR_CATEGORIES = (
+    "policy_blocked",
+    "unsupported_runtime",
+    "infrastructure",
+    "timeout",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -47,19 +54,14 @@ def _execution_error_category(state: AgentState) -> str | None:
 def _has_retryable_execution_error(state: AgentState) -> bool:
     return (
         get_agent_state(state, "executor").get("run_status") == "error"
-        and _execution_error_category(state) == "retryable_code"
+        and _execution_error_category(state) == RETRYABLE_EXECUTION_ERROR_CATEGORY
     )
 
 
 def _has_terminal_execution_error(state: AgentState) -> bool:
     return (
         get_agent_state(state, "executor").get("run_status") == "error"
-        and _execution_error_category(state) in {
-            "policy_blocked",
-            "unsupported_runtime",
-            "infrastructure",
-            "timeout",
-        }
+        and _execution_error_category(state) in TERMINAL_EXECUTION_ERROR_CATEGORIES
     )
 
 

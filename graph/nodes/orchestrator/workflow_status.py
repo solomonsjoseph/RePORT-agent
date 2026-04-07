@@ -4,6 +4,11 @@ from hashlib import sha256
 
 from ...state import MetaKeys
 from ...state_views import get_artifacts, get_node_data
+from ..node_registry import (
+    MAX_ERROR_ITERATIONS,
+    RETRYABLE_EXECUTION_ERROR_CATEGORY,
+    TERMINAL_EXECUTION_ERROR_CATEGORIES,
+)
 
 
 def _error_signature(error: dict) -> str:
@@ -38,9 +43,8 @@ def derive_workflow_status(state: dict) -> dict:
             "blocker_signature": "waiting_for_tool_results",
         }
 
-    if executor.get("run_status") == "error" and error.get("category") == "retryable_code":
-        max_iters = 5
-        if int(meta.get(MetaKeys.ERROR_ITERATIONS, 0)) >= max_iters:
+    if executor.get("run_status") == "error" and error.get("category") == RETRYABLE_EXECUTION_ERROR_CATEGORY:
+        if int(meta.get(MetaKeys.ERROR_ITERATIONS, 0)) >= MAX_ERROR_ITERATIONS:
             return {
                 "milestone": "awaiting_after_error_review",
                 "completion_status": "blocked_waiting",
@@ -52,16 +56,17 @@ def derive_workflow_status(state: dict) -> dict:
             "blocker_signature": f"retryable_error:{error.get('type')}:{_error_signature(error)}",
         }
 
-    if executor.get("run_status") == "error" and error.get("category") in {
-        "policy_blocked",
-        "unsupported_runtime",
-        "infrastructure",
-        "timeout",
-    }:
+    if executor.get("run_status") == "error" and error.get("category") in TERMINAL_EXECUTION_ERROR_CATEGORIES:
+        if state.get("last_action") == "terminal_execution_error" and output.get("qa_response"):
+            return {
+                "milestone": "answered",
+                "completion_status": "complete",
+                "blocker_signature": None,
+            }
         return {
-            "milestone": "terminal_error",
-            "completion_status": "complete",
-            "blocker_signature": f"terminal_error:{error.get('category')}",
+            "milestone": "awaiting_terminal_error_explanation",
+            "completion_status": "blocked_waiting",
+            "blocker_signature": "waiting_for_terminal_execution_error_node",
         }
 
     if has_code and not has_ticket and executor.get("run_status") != "ok":
@@ -78,6 +83,13 @@ def derive_workflow_status(state: dict) -> dict:
             "blocker_signature": "ready_for_execution",
         }
 
+    if state.get("next_action") == "end" and executor.get("run_status") == "ok":
+        return {
+            "milestone": "complete",
+            "completion_status": "complete",
+            "blocker_signature": None,
+        }
+
     if executor.get("run_status") == "ok" and review.get("final_decision") is None:
         return {
             "milestone": "awaiting_final_review",
@@ -85,7 +97,7 @@ def derive_workflow_status(state: dict) -> dict:
             "blocker_signature": "waiting_for_final_review",
         }
 
-    if state.get("last_action") == "qa" and output.get("qa_response"):
+    if state.get("last_action") in {"qa", "generate_code", "error_handler"} and output.get("qa_response"):
         return {
             "milestone": "answered",
             "completion_status": "complete",
