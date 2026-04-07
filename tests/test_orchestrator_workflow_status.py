@@ -74,3 +74,22 @@ def test_retryable_error_with_budget_remaining_is_retrying_after_error() -> None
     assert status["milestone"] == "retrying_after_error"
     assert status["completion_status"] == "incomplete"
     assert status["blocker_signature"].startswith("retryable_error:NameError:")
+
+
+def test_terminal_error_is_complete_after_terminal_response_node_runs() -> None:
+    state = {
+        "output": {
+            "generated_code": "print(1)",
+            "error": {"category": "timeout", "type": "TimeoutError", "message": "timed out"},
+            "qa_response": "This analysis ran longer than the allowed execution time.",
+        },
+        "agents": {"executor": {"run_status": "error"}},
+        "meta": {"current_code_hash": "h1"},
+        "last_action": "terminal_execution_error",
+    }
+
+    status = derive_workflow_status(state)
+
+    assert status["milestone"] == "terminal_error"
+    assert status["completion_status"] == "complete"
+    assert status["blocker_signature"] == "terminal_error:timeout"

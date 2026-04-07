@@ -2,6 +2,16 @@ from __future__ import annotations
 
 from hashlib import sha256
 
+MAX_ERROR_ITERATIONS = 5
+TERMINAL_EXECUTION_ERROR_CATEGORIES = frozenset(
+    {
+        "policy_blocked",
+        "unsupported_runtime",
+        "infrastructure",
+        "timeout",
+    }
+)
+
 from ...state import MetaKeys
 from ...state_views import get_artifacts, get_node_data
 
@@ -22,7 +32,7 @@ def derive_workflow_status(state: dict) -> dict:
     current_hash = meta.get(MetaKeys.CURRENT_CODE_HASH)
     ticket_hash = meta.get(MetaKeys.EXECUTION_TICKET_HASH)
     has_ticket = bool(current_hash and ticket_hash and current_hash == ticket_hash)
-
+    terminal_error_category = error.get("category") if executor.get("run_status") == "error" else None
     if meta.get(MetaKeys.AWAITING_USER_CLARIFICATION):
         kind = meta.get(MetaKeys.CLARIFICATION_KIND, "unknown")
         return {
@@ -38,8 +48,15 @@ def derive_workflow_status(state: dict) -> dict:
             "blocker_signature": "waiting_for_tool_results",
         }
 
+    if state.get("last_action") == "terminal_execution_error" and terminal_error_category in TERMINAL_EXECUTION_ERROR_CATEGORIES:
+        return {
+            "milestone": "terminal_error",
+            "completion_status": "complete",
+            "blocker_signature": f"terminal_error:{terminal_error_category}",
+        }
+
     if executor.get("run_status") == "error" and error.get("category") == "retryable_code":
-        if int(meta.get(MetaKeys.ERROR_ITERATIONS, 0)) >= 5:
+        if int(meta.get(MetaKeys.ERROR_ITERATIONS, 0)) >= MAX_ERROR_ITERATIONS:
             return {
                 "milestone": "awaiting_after_error_review",
                 "completion_status": "blocked_waiting",
@@ -72,7 +89,7 @@ def derive_workflow_status(state: dict) -> dict:
             "blocker_signature": "waiting_for_final_review",
         }
 
-    if state.get("last_action") == "qa" and output.get("qa_response"):
+    if output.get("qa_response") and not has_code and state.get("last_action") == "qa":
         return {
             "milestone": "answered",
             "completion_status": "complete",
