@@ -569,14 +569,6 @@ def test_orchestrator_routes_attached_data_analysis_to_generate_code() -> None:
     assert fallback["next_action"] == "qa"
 
 
-def test_detect_two_node_cycle_ignores_orchestrator_ping_pong() -> None:
-    _install_langchain_and_langgraph_stubs()
-    orchestrator = importlib.import_module("graph.nodes.orchestrator")
-
-    trace = ["orchestrator", "execute_code", "orchestrator", "execute_code", "orchestrator"]
-    assert orchestrator._detect_two_node_cycle(trace) is False
-
-
 def test_orchestrator_regenerate_before_run_routes_back_to_generate_code() -> None:
     _install_langchain_and_langgraph_stubs()
     orchestrator = importlib.import_module("graph.nodes.orchestrator")
@@ -641,60 +633,75 @@ def test_orchestrator_consumes_before_run_approval_into_execution_ticket() -> No
     assert updated["meta"].get("execution_ticket_hash") == "abc"
 
 
-def test_detect_two_node_cycle_ignores_expected_execute_error_retry_pair() -> None:
+def test_apply_recurrence_guard_stops_repeated_execute_code_stagnation() -> None:
     _install_langchain_and_langgraph_stubs()
-    orchestrator = importlib.import_module("graph.nodes.orchestrator")
-
-    trace = [
-        "orchestrator", "execute_code", "orchestrator", "error_handler",
-        "orchestrator", "execute_code", "orchestrator", "error_handler",
-    ]
-    assert orchestrator._detect_two_node_cycle(trace) is False
-
-
-def test_apply_loop_guard_stops_repeated_execute_code_spam() -> None:
-    _install_langchain_and_langgraph_stubs()
-    orchestrator = importlib.import_module("graph.nodes.orchestrator")
+    progress_controller = importlib.import_module("graph.nodes.orchestrator.progress_controller")
 
     state = {
         "meta": {
-            "workflow_trace": [
-                "orchestrator", "execute_code", "orchestrator", "execute_code",
-                "orchestrator", "execute_code", "orchestrator", "execute_code",
-            ]
+            "workflow_milestone": "ready_to_execute",
+            "blocker_signature": "ready_for_execution",
+            "weak_progress_count": 0,
+            "stagnation_count": 4,
         }
     }
 
-    action, observations, fired = orchestrator._apply_loop_guards(
+    action, observations, fired = progress_controller.apply_recurrence_guard(
         "execute_code", state, []
     )
 
     assert fired is True
     assert action == "end"
-    assert observations and "execute_code" in observations[-1]
+    assert observations and "stagnating" in observations[-1]
 
 
-def test_apply_loop_guard_allows_human_requested_generate_code_regeneration() -> None:
+def test_apply_recurrence_guard_allows_human_requested_generate_code_regeneration() -> None:
     _install_langchain_and_langgraph_stubs()
-    orchestrator = importlib.import_module("graph.nodes.orchestrator")
+    progress_controller = importlib.import_module("graph.nodes.orchestrator.progress_controller")
 
     state = {
         "meta": {
             "loop_guard_bypass_actions": ["generate_code"],
-            "workflow_trace": [
-                "orchestrator", "generate_code", "orchestrator", "generate_code",
-                "orchestrator", "generate_code", "orchestrator", "generate_code",
-            ],
+            "workflow_milestone": "awaiting_run_review",
+            "blocker_signature": "waiting_for_before_run_review",
+            "weak_progress_count": 4,
+            "stagnation_count": 0,
         }
     }
 
-    action, observations, fired = orchestrator._apply_loop_guards(
+    action, observations, fired = progress_controller.apply_recurrence_guard(
         "generate_code", state, []
     )
 
     assert fired is False
     assert action == "generate_code"
     assert observations and "bypass for human-requested action 'generate_code'" in observations[-1]
+
+
+def test_orchestrator_ends_deterministically_after_completed_qa_answer() -> None:
+    _install_langchain_and_langgraph_stubs()
+    orchestrator = importlib.import_module("graph.nodes.orchestrator")
+
+    llm = _LLM('{"action":"qa","thought":"keep answering"}')
+    state = {
+        "messages": [SimpleNamespace(type="human", content="who are you")],
+        "output": {"qa_response": "I am a data-analysis assistant."},
+        "observations": [],
+        "last_action": "qa",
+        "orchestrator": {},
+        "agents": {
+            "executor": {"run_status": "idle"},
+            "human_review": {"before_run_decision": None, "final_decision": None},
+        },
+        "meta": {"workflow_trace": ["orchestrator", "qa"]},
+    }
+
+    updated = orchestrator.orchestrator_node(llm=llm, state=state, available_actions=["qa", "generate_code", "end"])
+
+    assert updated["next_action"] == "end"
+    assert updated["meta"]["workflow_milestone"] == "answered"
+    assert updated["meta"]["completion_status"] == "complete"
+    assert len(llm.calls) == 0
 
 
 def test_orchestrator_final_review_regenerate_routes_back_to_generate_code() -> None:

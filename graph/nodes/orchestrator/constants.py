@@ -1,10 +1,5 @@
 """Constants for orchestrator routing."""
 
-# Loop-guard constants
-MAX_ACTION_REPEATS = 4
-LOOP_GUARD_LOOKBACK = 8
-ACTION_LOOKBACK_ACTIONS = 8
-
 # Intent-detection cue lists
 CODE_REQUEST_CUES = (
     "write code",

@@ -40,8 +40,13 @@ def build_planner_context(state: dict, available_actions: list[str]) -> dict:
         f"generated_code_present={bool(artifacts.get('generated_code'))}",
         f"executor_run_status={executor.get('run_status')}",
         f"review_state={json.dumps(review, default=str, sort_keys=True)}",
+        f"workflow_milestone={meta.get(MetaKeys.WORKFLOW_MILESTONE)}",
+        f"completion_status={meta.get(MetaKeys.COMPLETION_STATUS)}",
+        f"blocker_signature={meta.get(MetaKeys.BLOCKER_SIGNATURE)}",
+        f"progress_class={meta.get(MetaKeys.PROGRESS_CLASS)}",
         f"progress_made_last_step={meta.get(MetaKeys.PROGRESS_MADE_LAST_STEP)}",
         f"stagnation_count={meta.get(MetaKeys.STAGNATION_COUNT, 0)}",
+        f"weak_progress_count={meta.get(MetaKeys.WEAK_PROGRESS_COUNT, 0)}",
         f"repeated_failure_signature={meta.get(MetaKeys.REPEATED_FAILURE_SIGNATURE)}",
     ]
     node_caps = "\n".join(

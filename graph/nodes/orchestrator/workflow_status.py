@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from hashlib import sha256
 
-MAX_ERROR_ITERATIONS = 5
+from ...state import MetaKeys
+from ...state_views import get_artifacts, get_node_data
+from ..node_registry import MAX_ERROR_ITERATIONS
+
 TERMINAL_EXECUTION_ERROR_CATEGORIES = frozenset(
     {
         "policy_blocked",
@@ -11,9 +14,6 @@ TERMINAL_EXECUTION_ERROR_CATEGORIES = frozenset(
         "timeout",
     }
 )
-
-from ...state import MetaKeys
-from ...state_views import get_artifacts, get_node_data
 
 
 def _error_signature(error: dict) -> str:
@@ -57,11 +57,24 @@ def derive_workflow_status(state: dict) -> dict:
 
     if executor.get("run_status") == "error" and error.get("category") == "retryable_code":
         if int(meta.get(MetaKeys.ERROR_ITERATIONS, 0)) >= MAX_ERROR_ITERATIONS:
+            if review.get("after_error_decision") is not None:
+                return {
+                    "milestone": "retrying_after_error",
+                    "completion_status": "incomplete",
+                    "blocker_signature": f"retryable_error:{error.get('type')}:{_error_signature(error)}",
+                }
             return {
                 "milestone": "awaiting_after_error_review",
                 "completion_status": "blocked_waiting",
                 "blocker_signature": f"waiting_for_after_error_review:{error.get('category')}:{error.get('type')}",
             }
+        return {
+            "milestone": "retrying_after_error",
+            "completion_status": "incomplete",
+            "blocker_signature": f"retryable_error:{error.get('type')}:{_error_signature(error)}",
+        }
+
+    if meta.get(MetaKeys.ERROR_RECOVERY_ACTIVE) and has_code and executor.get("run_status") in ("idle", "pending"):
         return {
             "milestone": "retrying_after_error",
             "completion_status": "incomplete",

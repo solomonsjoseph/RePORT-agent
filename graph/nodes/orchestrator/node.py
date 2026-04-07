@@ -5,13 +5,12 @@ from typing import Iterable
 from ...state import AgentState, MetaKeys
 from ...state_views import get_planner_state, merge_state_patch
 from .action_mask import mask_actions
-from .loop_guards import _apply_loop_guards
 from .planner import llm_plan_next_action
 from .policy import (
     _next_tool_requester,
     _tool_request_queue,
 )
-from .progress import update_progress_tracking
+from .progress_controller import apply_recurrence_guard, update_recurrence_state
 from .state_logic import (
     _consume_after_error_decision,
     _consume_before_run_approval,
@@ -20,6 +19,7 @@ from .state_logic import (
     _consume_regenerate_before_run,
     _user_message_hash,
 )
+from .workflow_status import derive_workflow_status
 
 
 def _record_planner_decision(
@@ -59,8 +59,32 @@ def _resumed_from(state: AgentState, node_name: str) -> bool:
     return bool(workflow_trace and workflow_trace[-1] == node_name)
 
 
+def _store_workflow_status(state: AgentState) -> AgentState:
+    meta = dict(state.get("meta") or {})
+    status = derive_workflow_status(state)
+    meta[MetaKeys.WORKFLOW_MILESTONE] = status["milestone"]
+    meta[MetaKeys.COMPLETION_STATUS] = status["completion_status"]
+    meta[MetaKeys.BLOCKER_SIGNATURE] = status["blocker_signature"]
+    return {**state, "meta": meta}
+
+
+def _should_end_for_completion(state: AgentState) -> bool:
+    meta = dict(state.get("meta") or {})
+    completion = meta.get(MetaKeys.COMPLETION_STATUS)
+    if completion == "complete":
+        return True
+    if completion != "blocked_waiting":
+        return False
+    return state.get("last_action") in {
+        "clarification",
+        "human_review_before_run",
+        "human_review_after_error",
+        "human_review_final",
+        "terminal_execution_error",
+    }
+
+
 def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) -> AgentState:
-    state = update_progress_tracking(state)
     available_action_list = sorted(set(available_actions))
     available_action_set = set(available_action_list)
     orchestrator_state = dict(state.get("orchestrator", {}))
@@ -171,28 +195,34 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
                 meta[MetaKeys.TOOL_REQUEST_QUEUE] = [n for n in queue if n != requester]
                 routing_state["meta"] = meta
 
-        if not next_action:
-            llm_choice, thought, planner_action = llm_plan_next_action(
-                routing_state, llm, available_action_list
-            )
-            masked_actions, _blocked = mask_actions(routing_state, available_action_list)
-            if llm_choice != "end" and llm_choice in masked_actions:
-                next_action = llm_choice
-            else:
-                next_action = _planner_fallback_action(masked_actions)
-            routing_state = _record_planner_decision(
-                routing_state,
-                planner_action,
-                thought,
-                next_action,
-            )
+    routing_state = _store_workflow_status(routing_state)
+    routing_state = update_recurrence_state(routing_state)
+
+    if not next_action and _should_end_for_completion(routing_state):
+        next_action = "end"
+
+    if not next_action:
+        llm_choice, thought, planner_action = llm_plan_next_action(
+            routing_state, llm, available_action_list
+        )
+        masked_actions, _blocked = mask_actions(routing_state, available_action_list)
+        if llm_choice != "end" and llm_choice in masked_actions:
+            next_action = llm_choice
+        else:
+            next_action = _planner_fallback_action(masked_actions)
+        routing_state = _record_planner_decision(
+            routing_state,
+            planner_action,
+            thought,
+            next_action,
+        )
 
     state = routing_state
     orchestrator_state = dict(state.get("orchestrator", {}))
     meta = dict(state.get("meta") or {})
 
     observations = list(state.get("observations", []))
-    next_action, observations, _guard_fired = _apply_loop_guards(
+    next_action, observations, _guard_fired = apply_recurrence_guard(
         next_action or "end", routing_state, observations
     )
 

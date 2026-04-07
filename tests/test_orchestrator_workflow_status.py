@@ -5,11 +5,16 @@ from types import ModuleType
 
 langchain_core_mod = ModuleType("langchain_core")
 messages_mod = ModuleType("langchain_core.messages")
+prompts_mod = ModuleType("langchain_core.prompts")
 messages_mod.BaseMessage = object
+prompts_mod.ChatPromptTemplate = object
+prompts_mod.MessagesPlaceholder = object
 langchain_core_mod.messages = messages_mod
+langchain_core_mod.prompts = prompts_mod
 sys.modules["langchain_core"] = langchain_core_mod
 
 sys.modules["langchain_core.messages"] = messages_mod
+sys.modules["langchain_core.prompts"] = prompts_mod
 
 langgraph_mod = ModuleType("langgraph")
 langgraph_graph_mod = ModuleType("langgraph.graph")
@@ -61,11 +66,52 @@ def test_generated_code_without_ticket_is_awaiting_run_review() -> None:
     assert status["blocker_signature"] == "waiting_for_before_run_review"
 
 
+def test_active_retry_recovery_with_ticket_does_not_fall_through_to_ready_to_execute() -> None:
+    state = {
+        "output": {
+            "generated_code": "print(2)",
+            "error": {"category": "retryable_code", "type": "NameError", "message": "name x is not defined"},
+        },
+        "agents": {"executor": {"run_status": "idle"}},
+        "meta": {
+            "current_code_hash": "h2",
+            "execution_ticket_hash": "h2",
+            "error_recovery_active": True,
+            "error_iterations": 1,
+        },
+        "last_action": "error_handler",
+    }
+
+    status = derive_workflow_status(state)
+
+    assert status["milestone"] == "retrying_after_error"
+    assert status["completion_status"] == "incomplete"
+    assert status["blocker_signature"].startswith("retryable_error:NameError:")
+
+
 def test_retryable_error_with_budget_remaining_is_retrying_after_error() -> None:
     state = {
         "output": {"error": {"category": "retryable_code", "type": "NameError", "message": "name x is not defined"}},
         "agents": {"executor": {"run_status": "error"}},
         "meta": {"error_iterations": 1},
+        "last_action": "execute_code",
+    }
+
+    status = derive_workflow_status(state)
+
+    assert status["milestone"] == "retrying_after_error"
+    assert status["completion_status"] == "incomplete"
+    assert status["blocker_signature"].startswith("retryable_error:NameError:")
+
+
+def test_exhausted_retry_review_with_decision_is_not_blocked_waiting() -> None:
+    state = {
+        "output": {"error": {"category": "retryable_code", "type": "NameError", "message": "name x is not defined"}},
+        "agents": {
+            "executor": {"run_status": "error"},
+            "human_review": {"after_error_decision": "regenerate"},
+        },
+        "meta": {"error_iterations": 5},
         "last_action": "execute_code",
     }
 

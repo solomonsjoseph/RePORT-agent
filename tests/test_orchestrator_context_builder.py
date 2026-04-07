@@ -64,7 +64,7 @@ class _LLM:
         return SimpleNamespace(content=self._content)
 
 
-def test_build_planner_context_includes_history_observations_and_progress() -> None:
+def test_build_planner_context_includes_history_observations_and_recurrence_state() -> None:
     _install_langchain_and_langgraph_stubs()
     build_planner_context = importlib.import_module(
         "graph.nodes.orchestrator.context_builder"
@@ -85,8 +85,12 @@ def test_build_planner_context_includes_history_observations_and_progress() -> N
         "observations": ["generate_code: code_generated", "execute_code: execution_failed_retryable"],
         "meta": {
             "workflow_trace": ["orchestrator", "generate_code", "orchestrator", "execute_code"],
-            "progress_made_last_step": False,
+            "workflow_milestone": "retrying_after_error",
+            "completion_status": "incomplete",
+            "blocker_signature": "retryable_error:NameError:deadbeef",
+            "progress_class": "none",
             "stagnation_count": 2,
+            "weak_progress_count": 1,
         },
         "last_action": "execute_code",
     }
@@ -97,7 +101,12 @@ def test_build_planner_context_includes_history_observations_and_progress() -> N
     )
 
     assert "recent_observations" in context
+    assert "workflow_milestone=retrying_after_error" in context["environment_summary"]
+    assert "completion_status=incomplete" in context["environment_summary"]
+    assert "blocker_signature=retryable_error:NameError:deadbeef" in context["environment_summary"]
+    assert "progress_class=none" in context["environment_summary"]
     assert "stagnation_count=2" in context["environment_summary"]
+    assert "weak_progress_count=1" in context["environment_summary"]
     assert "generate_code" in context["node_capabilities"]
 
 

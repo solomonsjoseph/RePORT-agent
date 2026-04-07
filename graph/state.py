@@ -47,8 +47,10 @@ class MetaKeys:
     # human instruction (e.g., regenerate code in review).
     LOOP_GUARD_BYPASS_ACTIONS = "loop_guard_bypass_actions"
     PROGRESS_SNAPSHOT = "progress_snapshot"
+    PROGRESS_CLASS = "progress_class"
     PROGRESS_MADE_LAST_STEP = "progress_made_last_step"
     STAGNATION_COUNT = "stagnation_count"
+    WEAK_PROGRESS_COUNT = "weak_progress_count"
     REPEATED_FAILURE_SIGNATURE = "repeated_failure_signature"
     EXECUTION_TICKET_HASH = "execution_ticket_hash"
     ERROR_RECOVERY_ACTIVE = "error_recovery_active"
