@@ -10,7 +10,6 @@ from .planner import llm_plan_next_action
 from .policy import (
     _next_tool_requester,
     _tool_request_queue,
-    choose_invariant_action,
 )
 from .progress import update_progress_tracking
 from .state_logic import (
@@ -19,7 +18,6 @@ from .state_logic import (
     _consume_final_review_regenerate,
     _consume_final_review_approval,
     _consume_regenerate_before_run,
-    _should_end_now,
     _user_message_hash,
 )
 
@@ -75,7 +73,7 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
     if _resumed_from(state, "human_review_before_run"):
         output, agents, meta, regenerated = _consume_regenerate_before_run(output, agents, meta)
         if regenerated:
-            next_action = None
+            next_action = "generate_code"
             orchestrator_state.pop("next_action", None)
             observations = list(state.get("observations", []))
             observations.append(
@@ -105,7 +103,7 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
     if _resumed_from(state, "human_review_final"):
         output, agents, meta, regenerated_final = _consume_final_review_regenerate(output, agents, meta)
         if regenerated_final:
-            next_action = None
+            next_action = "generate_code"
             orchestrator_state.pop("next_action", None)
             observations = list(state.get("observations", []))
             observations.append(
@@ -174,24 +172,20 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
                 routing_state["meta"] = meta
 
         if not next_action:
-            invariant_action = choose_invariant_action(routing_state, available_action_list)
-            if invariant_action:
-                next_action = invariant_action
+            llm_choice, thought, planner_action = llm_plan_next_action(
+                routing_state, llm, available_action_list
+            )
+            masked_actions, _blocked = mask_actions(routing_state, available_action_list)
+            if llm_choice != "end" and llm_choice in masked_actions:
+                next_action = llm_choice
             else:
-                llm_choice, thought, planner_action = llm_plan_next_action(
-                    routing_state, llm, available_action_list
-                )
-                masked_actions, _blocked = mask_actions(routing_state, available_action_list)
-                if llm_choice != "end" and llm_choice in masked_actions and not _should_end_now(routing_state):
-                    next_action = llm_choice
-                else:
-                    next_action = _planner_fallback_action(masked_actions)
-                routing_state = _record_planner_decision(
-                    routing_state,
-                    planner_action,
-                    thought,
-                    next_action,
-                )
+                next_action = _planner_fallback_action(masked_actions)
+            routing_state = _record_planner_decision(
+                routing_state,
+                planner_action,
+                thought,
+                next_action,
+            )
 
     state = routing_state
     orchestrator_state = dict(state.get("orchestrator", {}))

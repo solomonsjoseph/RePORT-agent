@@ -20,31 +20,6 @@ def _latest_user_message(state: AgentState) -> str:
     return str(getattr(message, "content", "") or "").strip()
 
 
-def _has_unanswered_human_message(state: AgentState) -> bool:
-    messages = list(state.get("messages", []))
-    if not messages:
-        return False
-    last_human_index = -1
-    last_ai_index = -1
-    for idx, message in enumerate(messages):
-        message_type = getattr(message, "type", None)
-        if message_type == "human":
-            last_human_index = idx
-        elif message_type == "ai":
-            last_ai_index = idx
-    return last_human_index > last_ai_index
-
-
-def _should_end_now(state: AgentState) -> bool:
-    if (state.get("meta") or {}).get(MetaKeys.AWAITING_USER_CLARIFICATION):
-        return True
-    if state.get("last_action") == "qa" and not _has_unanswered_human_message(state):
-        return True
-    if state.get("last_action") == "terminal_execution_error" and not _has_unanswered_human_message(state):
-        return True
-    return False
-
-
 def _user_message_hash(state: AgentState) -> str | None:
     message = _latest_user_message_obj(state)
     if message is None:

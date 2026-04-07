@@ -369,7 +369,7 @@ def test_orchestrator_routes_sample_code_request_to_qa_without_execution_flow() 
     assert fallback["next_action"] == "qa"
 
 
-def test_orchestrator_prefers_terminal_execution_error_for_terminal_category() -> None:
+def test_orchestrator_uses_planner_for_terminal_execution_error_after_resume_handling() -> None:
     _install_langchain_and_langgraph_stubs()
     for mod in (
         "graph.state",
@@ -408,7 +408,7 @@ def test_orchestrator_prefers_terminal_execution_error_for_terminal_category() -
 
     updated = orchestrator.orchestrator_node(
         state,
-        _LLM("not-json"),
+        _LLM('{"action":"terminal_execution_error","thought":"terminal error"}'),
         ["error_handler", "terminal_execution_error", "human_review_after_error", "end"],
     )
 
@@ -906,7 +906,7 @@ def test_orchestrator_keeps_generated_code_for_execute_followup_new_turn() -> No
 
     updated = orchestrator.orchestrator_node(
         state,
-        _LLM("not-json"),
+        _LLM('{"action":"human_review_before_run","thought":"user wants to run existing code"}'),
         ["qa", "generate_code", "human_review_before_run", "execute_code", "end"],
     )
 
@@ -942,7 +942,7 @@ def test_orchestrator_semantically_preserves_generated_code_for_execute_followup
 
     updated = orchestrator.orchestrator_node(
         state,
-        _LLM("not-json"),
+        _LLM('{"action":"human_review_before_run","thought":"execution follow-up"}'),
         ["qa", "generate_code", "human_review_before_run", "execute_code", "end"],
     )
 
@@ -982,7 +982,7 @@ def test_orchestrator_keeps_generated_code_on_unrelated_new_turn_without_reset()
         ["qa", "generate_code", "human_review_before_run", "execute_code", "end"],
     )
 
-    assert updated["next_action"] == "human_review_before_run"
+    assert updated["next_action"] == "qa"
     assert updated["output"].get("generated_code") == "print('stale')"
     assert updated["meta"].get("current_code_hash") == "stale-hash"
 
