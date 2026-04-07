@@ -52,3 +52,6 @@ class MetaKeys:
     REPEATED_FAILURE_SIGNATURE = "repeated_failure_signature"
     EXECUTION_TICKET_HASH = "execution_ticket_hash"
     ERROR_RECOVERY_ACTIVE = "error_recovery_active"
+    WORKFLOW_MILESTONE = "workflow_milestone"
+    COMPLETION_STATUS = "completion_status"
+    BLOCKER_SIGNATURE = "blocker_signature"
