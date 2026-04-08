@@ -111,6 +111,34 @@ def test_qa_node_includes_context_in_prompt() -> None:
     assert "- sex" in rendered
 
 
+def test_qa_node_prompt_template_escapes_literal_json_braces() -> None:
+    original_format_prompt = _PromptTemplate.format_prompt
+
+    def _strict_format_prompt(self, **kwargs):
+        rendered = []
+        for role, template in self._messages:
+            rendered.append({"role": role, "content": template.format(**kwargs)})
+        return _FormattedPrompt(rendered)
+
+    _PromptTemplate.format_prompt = _strict_format_prompt
+    try:
+        qa = _fresh_qa_module()
+
+        state = {
+            "messages": [_HumanMessage("who are you")],
+            "output": {},
+            "meta": {},
+            "observations": [],
+            "agents": {"qa": {"tool_requests": [], "tool_results": []}},
+        }
+
+        result = qa.qa_node(state, _LLM(), context="")
+
+        assert result["output"]["qa_response"] == "ok"
+    finally:
+        _PromptTemplate.format_prompt = original_format_prompt
+
+
 def test_qa_node_routes_tools_after_clarification_followup() -> None:
     qa = _fresh_qa_module()
 

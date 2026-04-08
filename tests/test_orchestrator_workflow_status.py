@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 from types import ModuleType
+from types import SimpleNamespace
 
 langchain_core_mod = ModuleType("langchain_core")
 messages_mod = ModuleType("langchain_core.messages")
@@ -64,6 +65,29 @@ def test_generated_code_without_ticket_is_awaiting_run_review() -> None:
     assert status["milestone"] == "awaiting_run_review"
     assert status["completion_status"] == "blocked_waiting"
     assert status["blocker_signature"] == "waiting_for_before_run_review"
+
+
+def test_stale_qa_response_with_new_unanswered_human_message_is_not_complete() -> None:
+    state = {
+        "messages": [
+            SimpleNamespace(type="human", content="who are you"),
+            SimpleNamespace(type="ai", content="I am a data-analysis assistant."),
+            SimpleNamespace(type="human", content="what's the weather today?"),
+        ],
+        "output": {"qa_response": "I am a data-analysis assistant."},
+        "agents": {
+            "executor": {"run_status": "idle"},
+            "human_review": {"before_run_decision": None, "final_decision": None},
+        },
+        "meta": {"workflow_trace": ["orchestrator", "qa", "orchestrator"]},
+        "last_action": "qa",
+    }
+
+    status = derive_workflow_status(state)
+
+    assert status["milestone"] == "needs_code"
+    assert status["completion_status"] == "incomplete"
+    assert status["blocker_signature"] == "missing_next_step"
 
 
 def test_active_retry_recovery_with_ticket_does_not_fall_through_to_ready_to_execute() -> None:

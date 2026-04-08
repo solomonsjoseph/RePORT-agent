@@ -17,6 +17,7 @@ from .state_logic import (
     _consume_final_review_regenerate,
     _consume_final_review_approval,
     _consume_regenerate_before_run,
+    _has_unanswered_human_message,
     _user_message_hash,
 )
 from .workflow_status import derive_workflow_status
@@ -75,6 +76,8 @@ def _should_end_for_completion(state: AgentState) -> bool:
         return True
     if completion != "blocked_waiting":
         return False
+    if meta.get(MetaKeys.AWAITING_USER_CLARIFICATION) and not _has_unanswered_human_message(state):
+        return True
     return state.get("last_action") in {
         "clarification",
         "human_review_before_run",
@@ -91,6 +94,7 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
     next_action = orchestrator_state.get("next_action")
     thought = orchestrator_state.get("thought", "")
     meta = dict(state.get("meta") or {})
+    transition_selected_from_resume = False
 
     output = dict(state.get("output") or {})
     agents = dict(state.get("agents") or {})
@@ -98,6 +102,7 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
         output, agents, meta, regenerated = _consume_regenerate_before_run(output, agents, meta)
         if regenerated:
             next_action = "generate_code"
+            transition_selected_from_resume = True
             orchestrator_state.pop("next_action", None)
             observations = list(state.get("observations", []))
             observations.append(
@@ -108,6 +113,7 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
         output, agents, meta, approved_before_run = _consume_before_run_approval(output, agents, meta)
         if approved_before_run:
             next_action = "execute_code"
+            transition_selected_from_resume = True
             orchestrator_state.pop("next_action", None)
             observations = list(state.get("observations", []))
             observations.append("orchestrator: consumed before-run approval; routing to execute_code")
@@ -117,6 +123,7 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
         output, agents, meta, after_error_action = _consume_after_error_decision(output, agents, meta)
         if after_error_action:
             next_action = after_error_action
+            transition_selected_from_resume = True
             orchestrator_state.pop("next_action", None)
             observations = list(state.get("observations", []))
             observations.append(
@@ -128,6 +135,7 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
         output, agents, meta, regenerated_final = _consume_final_review_regenerate(output, agents, meta)
         if regenerated_final:
             next_action = "generate_code"
+            transition_selected_from_resume = True
             orchestrator_state.pop("next_action", None)
             observations = list(state.get("observations", []))
             observations.append(
@@ -138,13 +146,14 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
         output, agents, meta, approved_final = _consume_final_review_approval(output, agents, meta)
         if approved_final:
             next_action = "end"
+            transition_selected_from_resume = True
             orchestrator_state.pop("next_action", None)
             observations = list(state.get("observations", []))
             observations.append("orchestrator: consumed final approval; routing to end")
             state = {**state, "observations": observations}
 
     current_hash = _user_message_hash(state)
-    if current_hash and next_action in {"generate_code", "execute_code", "end"}:
+    if current_hash and transition_selected_from_resume and next_action in {"generate_code", "execute_code", "end"}:
         meta[MetaKeys.LAST_USER_MESSAGE_HASH] = current_hash
 
     was_awaiting_clarification = bool(meta.get(MetaKeys.AWAITING_USER_CLARIFICATION))
@@ -156,6 +165,7 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
 
     if (
         current_hash
+        and _has_unanswered_human_message(state)
         and current_hash != meta.get(MetaKeys.LAST_USER_MESSAGE_HASH)
         and not has_pending_regenerate
     ):

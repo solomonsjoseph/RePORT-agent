@@ -684,7 +684,10 @@ def test_orchestrator_ends_deterministically_after_completed_qa_answer() -> None
 
     llm = _LLM('{"action":"qa","thought":"keep answering"}')
     state = {
-        "messages": [SimpleNamespace(type="human", content="who are you")],
+        "messages": [
+            SimpleNamespace(type="human", content="who are you"),
+            SimpleNamespace(type="ai", content="I am a data-analysis assistant."),
+        ],
         "output": {"qa_response": "I am a data-analysis assistant."},
         "observations": [],
         "last_action": "qa",
@@ -701,6 +704,81 @@ def test_orchestrator_ends_deterministically_after_completed_qa_answer() -> None
     assert updated["next_action"] == "end"
     assert updated["meta"]["workflow_milestone"] == "answered"
     assert updated["meta"]["completion_status"] == "complete"
+    assert len(llm.calls) == 0
+
+
+def test_orchestrator_clears_stale_completed_qa_state_on_new_user_turn() -> None:
+    _install_langchain_and_langgraph_stubs()
+    orchestrator = importlib.import_module("graph.nodes.orchestrator")
+
+    old_hash = hashlib.sha256("who are you".encode()).hexdigest()[:16]
+    llm = _LLM('{"action":"qa","thought":"new user turn"}')
+    state = {
+        "messages": [
+            SimpleNamespace(type="human", content="who are you"),
+            SimpleNamespace(type="ai", content="I am a data-analysis assistant."),
+            SimpleNamespace(type="human", content="what's the weather today?"),
+        ],
+        "output": {"qa_response": "I am a data-analysis assistant."},
+        "observations": ["orchestrator: next_action=qa", "qa: responded to user question"],
+        "last_action": "qa",
+        "orchestrator": {"next_action": "end"},
+        "agents": {
+            "executor": {"run_status": "idle"},
+            "human_review": {"before_run_decision": None, "after_error_decision": None, "final_decision": None},
+            "qa": {"status": "done", "response": "I am a data-analysis assistant."},
+        },
+        "meta": {
+            "workflow_trace": ["orchestrator", "qa", "orchestrator"],
+            "last_user_message_hash": old_hash,
+            "workflow_milestone": "answered",
+            "completion_status": "complete",
+            "blocker_signature": None,
+        },
+    }
+
+    updated = orchestrator.orchestrator_node(state, llm, ["qa", "generate_code", "end"])
+
+    assert updated["next_action"] == "qa"
+    assert updated["meta"]["completion_status"] == "incomplete"
+    assert updated["meta"]["workflow_milestone"] == "needs_code"
+    assert len(llm.calls) == 1
+
+
+def test_orchestrator_pauses_after_qa_opens_tool_clarification_loop() -> None:
+    _install_langchain_and_langgraph_stubs()
+    orchestrator = importlib.import_module("graph.nodes.orchestrator")
+
+    llm = _LLM('{"action":"clarification","thought":"resume clarification"}')
+    state = {
+        "messages": [
+            SimpleNamespace(type="human", content="What's weather today"),
+            SimpleNamespace(type="ai", content="Which city would you like weather for?"),
+        ],
+        "output": {"qa_response": "Which city would you like weather for?"},
+        "observations": ["qa: asked clarification for missing required tool field"],
+        "last_action": "qa",
+        "orchestrator": {},
+        "agents": {
+            "executor": {"run_status": "idle"},
+            "human_review": {"before_run_decision": None, "after_error_decision": None, "final_decision": None},
+            "qa": {"status": "done", "awaiting_tool_clarification": True},
+        },
+        "meta": {
+            "workflow_trace": ["orchestrator", "qa"],
+            "awaiting_user_clarification": True,
+            "clarification_return_node": "qa",
+            "clarification_kind": "qa_tool",
+            "pending_question": "What's weather today",
+            "last_user_message_hash": hashlib.sha256("What's weather today".encode()).hexdigest()[:16],
+        },
+    }
+
+    updated = orchestrator.orchestrator_node(state, llm, ["qa", "clarification", "end"])
+
+    assert updated["next_action"] == "end"
+    assert updated["meta"]["completion_status"] == "blocked_waiting"
+    assert updated["meta"]["workflow_milestone"] == "awaiting_clarification"
     assert len(llm.calls) == 0
 
 

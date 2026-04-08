@@ -150,7 +150,7 @@ def qa_node(
                 "directly and clearly. If the question requires analysis, explain the "
                 "recommended steps without writing code unless requested.\n"
                 "Return valid JSON with exactly these keys: "
-                '{"answer": string, "needs_clarification": boolean, "clarification_question": string|null}.\n'
+                '{{"answer": string, "needs_clarification": boolean, "clarification_question": string|null}}.\n'
                 'Set "needs_clarification" to true only when the request is blocked by one '
                 "specific missing piece of required information. Do not use clarification for "
                 "optional next steps or offers like asking whether the user wants code.\n"

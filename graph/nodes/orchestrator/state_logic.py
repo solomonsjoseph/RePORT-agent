@@ -20,6 +20,21 @@ def _latest_user_message(state: AgentState) -> str:
     return str(getattr(message, "content", "") or "").strip()
 
 
+def _has_unanswered_human_message(state: AgentState) -> bool:
+    messages = list(state.get("messages", []))
+    if not messages:
+        return False
+    last_human_index = -1
+    last_ai_index = -1
+    for idx, message in enumerate(messages):
+        message_type = getattr(message, "type", None)
+        if message_type == "human":
+            last_human_index = idx
+        elif message_type == "ai":
+            last_ai_index = idx
+    return last_human_index > last_ai_index
+
+
 def _user_message_hash(state: AgentState) -> str | None:
     message = _latest_user_message_obj(state)
     if message is None:
@@ -32,6 +47,8 @@ def _user_message_hash(state: AgentState) -> str | None:
     if not hash_basis:
         return None
     return hashlib.sha256(hash_basis.encode()).hexdigest()[:16]
+
+
 
 
 def _consume_regenerate_before_run(output: dict, agents: dict, meta: dict) -> tuple[dict, dict, dict, bool]:

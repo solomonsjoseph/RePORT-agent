@@ -5,6 +5,7 @@ from hashlib import sha256
 from ...state import MetaKeys
 from ...state_views import get_artifacts, get_node_data
 from ..node_registry import MAX_ERROR_ITERATIONS
+from .state_logic import _has_unanswered_human_message
 
 TERMINAL_EXECUTION_ERROR_CATEGORIES = frozenset(
     {
@@ -102,7 +103,12 @@ def derive_workflow_status(state: dict) -> dict:
             "blocker_signature": "waiting_for_final_review",
         }
 
-    if output.get("qa_response") and not has_code and state.get("last_action") == "qa":
+    if (
+        output.get("qa_response")
+        and not has_code
+        and state.get("last_action") == "qa"
+        and not _has_unanswered_human_message(state)
+    ):
         return {
             "milestone": "answered",
             "completion_status": "complete",
