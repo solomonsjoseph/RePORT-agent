@@ -4,6 +4,7 @@ from typing import Iterable
 
 from ...state import AgentState, MetaKeys
 from ...state_views import get_planner_state, merge_state_patch
+from ..tool_routing import is_tool_requested
 from .action_mask import mask_actions
 from .planner import llm_plan_next_action
 from .policy import (
@@ -79,7 +80,6 @@ def _should_end_for_completion(state: AgentState) -> bool:
     if meta.get(MetaKeys.AWAITING_USER_CLARIFICATION) and not _has_unanswered_human_message(state):
         return True
     return state.get("last_action") in {
-        "clarification",
         "human_review_before_run",
         "human_review_after_error",
         "human_review_final",
@@ -197,7 +197,9 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
     }
 
     if not next_action:
-        if state.get("last_action") == "tool_handler":
+        if "tool_handler" in available_action_set and is_tool_requested(routing_state):
+            next_action = "tool_handler"
+        elif state.get("last_action") == "tool_handler":
             requester = _next_tool_requester(routing_state)
             if requester and requester in available_action_set:
                 next_action = requester

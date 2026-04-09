@@ -485,6 +485,50 @@ def test_orchestrator_keeps_qa_tool_clarification_path_unchanged() -> None:
     assert updated["next_action"] == "clarification"
 
 
+def test_orchestrator_does_not_end_after_clarification_when_tool_request_is_pending() -> None:
+    _install_langchain_and_langgraph_stubs()
+    orchestrator = importlib.import_module("graph.nodes.orchestrator")
+
+    state = {
+        "messages": [
+            SimpleNamespace(type="human", content="What's the weather for today?"),
+            SimpleNamespace(type="ai", content="Which city would you like weather for?"),
+            SimpleNamespace(type="human", content="Boston"),
+        ],
+        "output": {"qa_response": "Which city would you like weather for?"},
+        "observations": ["clarification: resolved qa tool clarification"],
+        "last_action": "clarification",
+        "orchestrator": {},
+        "planner": {"decision_trace": []},
+        "agents": {
+            "qa": {
+                "status": "pending",
+                "tool_requests": [
+                    {
+                        "tool_name": "query_weather",
+                        "payload": {"server": "weather", "city": "Boston"},
+                    }
+                ],
+                "tool_results": [],
+            },
+            "executor": {"run_status": "idle"},
+            "human_review": {"before_run_decision": None, "final_decision": None},
+        },
+        "meta": {
+            "tool_request_queue": ["qa"],
+            "workflow_trace": ["orchestrator", "qa", "orchestrator", "clarification"],
+        },
+    }
+
+    updated = orchestrator.orchestrator_node(
+        state,
+        _LLM('{"action":"qa","thought":"weather questions should go to qa"}'),
+        ["qa", "clarification", "tool_handler", "end"],
+    )
+
+    assert updated["next_action"] == "tool_handler"
+
+
 def test_orchestrator_does_not_force_qa_for_non_qa_clarification_followup() -> None:
     _install_langchain_and_langgraph_stubs()
     orchestrator = importlib.import_module("graph.nodes.orchestrator")
