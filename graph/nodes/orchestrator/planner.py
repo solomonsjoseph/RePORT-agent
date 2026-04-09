@@ -64,6 +64,9 @@ def llm_plan_next_action(
     planner_prompt = make_planner_prompt().format_prompt(
         actions=", ".join(masked_actions) if masked_actions else "none",
         environment_summary=planner_context["environment_summary"],
+        planner_memory=json.dumps(
+            planner_context["planner_memory"], default=str, ensure_ascii=False
+        ),
         recent_observations=json.dumps(
             planner_context["recent_observations"], default=str, ensure_ascii=False
         ),
@@ -72,6 +75,13 @@ def llm_plan_next_action(
         ),
         node_capabilities=planner_context["node_capabilities"],
         blocked_actions="\n".join(f"- {a}" for a in blocked_actions) if blocked_actions else "none",
+        recent_turns_for_planner=(
+            json.dumps(
+                planner_context["recent_turns_for_planner"], default=str, ensure_ascii=False
+            )
+            if planner_context["recent_turns_for_planner"]
+            else "none"
+        ),
     )
     planner_response = llm.invoke(planner_prompt.to_messages())
     planner_action, thought, ranked_actions = _parse_planner_response(

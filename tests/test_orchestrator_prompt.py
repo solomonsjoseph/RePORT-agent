@@ -87,10 +87,12 @@ def test_planner_prompt_formats_with_node_capabilities() -> None:
     prompt = planner_prompt.make_planner_prompt().format_prompt(
         actions="qa, generate_code",
         environment_summary="generated_code_present=False",
+        planner_memory='{"active_user_goal":"Explain planner memory"}',
         recent_observations='["obs"]',
         planner_decision_trace='["thought"]',
         node_capabilities="- qa: answer directly",
         blocked_actions="- generate_code",
+        recent_turns_for_planner="none",
     )
     rendered = prompt.to_messages()
 
@@ -99,6 +101,65 @@ def test_planner_prompt_formats_with_node_capabilities() -> None:
     assert 'Recent observations:\n["obs"]' in rendered[1]["content"]
     assert 'Planner decision trace:\n["thought"]' in rendered[1]["content"]
     assert "Blocked actions:\n- generate_code" in rendered[1]["content"]
+
+
+def test_planner_prompt_formats_with_memory_and_recent_turns() -> None:
+    _install_langchain_and_langgraph_stubs()
+    planner_prompt = importlib.import_module("prompts.planner_prompt")
+
+    prompt = planner_prompt.make_planner_prompt().format_prompt(
+        actions="qa, generate_code",
+        environment_summary="latest_user_message=run it",
+        planner_memory='{"active_user_goal":"Explain planner memory"}',
+        recent_observations='["obs"]',
+        planner_decision_trace='["thought"]',
+        node_capabilities="- qa: answer directly",
+        blocked_actions="none",
+        recent_turns_for_planner='[{"role":"ai","content":"Which option do you want?"},{"role":"human","content":"the second option"}]',
+    )
+    rendered = prompt.to_messages()
+
+    assert "Planner memory:" in rendered[1]["content"]
+    assert "Recent conversation turns:" in rendered[1]["content"]
+
+
+def test_planner_serializes_memory_and_omits_recent_turns_when_empty() -> None:
+    _install_langchain_and_langgraph_stubs()
+    planner_mod = importlib.import_module("graph.nodes.orchestrator.planner")
+
+    class _PromptLLM:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def invoke(self, messages):
+            self.calls.append(messages)
+            return SimpleNamespace(content='{"action":"qa","thought":"default"}')
+
+    llm = _PromptLLM()
+    state = {
+        "messages": [
+            SimpleNamespace(type="human", content="What is PCA?"),
+            SimpleNamespace(type="ai", content="PCA is a dimensionality reduction technique."),
+        ],
+        "output": {},
+        "observations": [],
+        "planner": {
+            "memory": {
+                "active_user_goal": "What is PCA?",
+                "conversation_intent_summary": "User asked a concept question.",
+                "unresolved_user_constraints": [],
+            },
+            "decision_trace": [],
+        },
+        "agents": {"executor": {"run_status": "idle"}, "human_review": {}},
+        "meta": {"workflow_trace": []},
+    }
+
+    planner_mod.llm_plan_next_action(state, llm, ["qa", "end"])
+
+    rendered = llm.calls[0][1]["content"]
+    assert "Planner memory:" in rendered
+    assert "Recent conversation turns:\nnone" in rendered
 
 
 def test_choose_next_action_no_longer_uses_registry_readiness() -> None:

@@ -20,6 +20,7 @@ from .state_logic import (
     _consume_regenerate_before_run,
     _has_unanswered_human_message,
     _user_message_hash,
+    derive_planner_memory,
 )
 from .workflow_status import derive_workflow_status
 
@@ -68,6 +69,12 @@ def _store_workflow_status(state: AgentState) -> AgentState:
     meta[MetaKeys.COMPLETION_STATUS] = status["completion_status"]
     meta[MetaKeys.BLOCKER_SIGNATURE] = status["blocker_signature"]
     return {**state, "meta": meta}
+
+
+def _refresh_planner_memory(state: AgentState) -> AgentState:
+    planner = get_planner_state(state)
+    planner["memory"] = derive_planner_memory(state)
+    return merge_state_patch(state, {"planner": planner})
 
 
 def _should_end_for_completion(state: AgentState) -> bool:
@@ -207,6 +214,7 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
                 meta[MetaKeys.TOOL_REQUEST_QUEUE] = [n for n in queue if n != requester]
                 routing_state["meta"] = meta
 
+    routing_state = _refresh_planner_memory(routing_state)
     routing_state = _store_workflow_status(routing_state)
     routing_state = update_recurrence_state(routing_state)
 

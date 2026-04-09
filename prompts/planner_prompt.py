@@ -6,6 +6,8 @@ from the allowed list based on the full workflow environment.
 
 Routing guidance:
 - Use the environment summary, recent observations, and decision trace to choose the next action.
+- Use planner memory as the primary source of durable user intent.
+- Use recent conversation turns only to resolve short-range ambiguity when they are present.
 - Treat action masks as hard constraints.
 - Prefer semantically appropriate actions instead of inferring a rigid pipeline from state fields alone.
 - If the latest user message is conceptual, explanatory, factual, conversational, or a tool-eligible information request, prefer `qa`.
@@ -36,9 +38,11 @@ def make_planner_prompt():
             (
                 "human",
                 "Environment summary:\n{environment_summary}\n\n"
+                "Planner memory:\n{planner_memory}\n\n"
                 "Recent observations:\n{recent_observations}\n\n"
                 "Planner decision trace:\n{planner_decision_trace}\n\n"
-                "Blocked actions:\n{blocked_actions}",
+                "Blocked actions:\n{blocked_actions}\n\n"
+                "Recent conversation turns:\n{recent_turns_for_planner}",
             ),
         ]
     )

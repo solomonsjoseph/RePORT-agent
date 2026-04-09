@@ -49,6 +49,46 @@ def _user_message_hash(state: AgentState) -> str | None:
     return hashlib.sha256(hash_basis.encode()).hexdigest()[:16]
 
 
+def _recent_messages_for_planner(state: AgentState, limit: int = 4) -> list:
+    messages = list(state.get("messages", []))
+    if limit <= 0:
+        return []
+    return messages[-limit:]
+
+
+def build_planner_recent_turns(state: AgentState) -> list[dict[str, str]]:
+    meta = dict(state.get("meta") or {})
+    if not (
+        _has_unanswered_human_message(state)
+        or meta.get(MetaKeys.AWAITING_USER_CLARIFICATION)
+    ):
+        return []
+
+    turns: list[dict[str, str]] = []
+    for message in _recent_messages_for_planner(state):
+        role = getattr(message, "type", None)
+        if role not in {"human", "ai"}:
+            continue
+        content = str(getattr(message, "content", "") or "").strip()
+        if not content:
+            continue
+        turns.append({"role": role, "content": content})
+    return turns
+
+
+def derive_planner_memory(state: AgentState) -> dict:
+    latest = _latest_user_message(state)
+    planner = dict(state.get("planner") or {})
+    previous_memory = dict(planner.get("memory") or {})
+    summary = str(previous_memory.get("conversation_intent_summary") or latest).strip()
+
+    return {
+        "active_user_goal": latest,
+        "conversation_intent_summary": summary,
+        "unresolved_user_constraints": list(
+            previous_memory.get("unresolved_user_constraints") or []
+        ),
+    }
 
 
 def _consume_regenerate_before_run(output: dict, agents: dict, meta: dict) -> tuple[dict, dict, dict, bool]:

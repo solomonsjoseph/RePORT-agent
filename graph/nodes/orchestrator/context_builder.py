@@ -5,7 +5,7 @@ import json
 from ...state import MetaKeys
 from ...state_views import get_artifacts, get_node_data, get_planner_state, merge_state_patch
 from ..action_metadata import ACTION_CAPABILITIES
-from .state_logic import _latest_user_message
+from .state_logic import _latest_user_message, build_planner_recent_turns
 
 
 def build_planner_runtime_state(state: dict, available_actions: list[str]) -> dict:
@@ -27,11 +27,13 @@ def build_planner_runtime_state(state: dict, available_actions: list[str]) -> di
 def build_planner_context(state: dict, available_actions: list[str]) -> dict:
     artifacts = get_artifacts(state)
     planner_state = get_planner_state(state)
+    planner_memory = dict(planner_state.get("memory") or {})
     meta = dict(state.get("meta") or {})
     observations = list(state.get("observations") or [])
     workflow_trace = list(meta.get(MetaKeys.WORKFLOW_TRACE, []))
     executor = get_node_data(state, "executor")
     review = get_node_data(state, "human_review")
+    recent_turns_for_planner = build_planner_recent_turns(state)
     summary_lines = [
         f"latest_user_message={_latest_user_message(state)}",
         f"last_action={state.get('last_action')}",
@@ -59,5 +61,7 @@ def build_planner_context(state: dict, available_actions: list[str]) -> dict:
         "node_capabilities": node_caps,
         "recent_observations": observations[-6:],
         "planner_decision_trace": list(planner_state.get("decision_trace") or [])[-5:],
+        "planner_memory": planner_memory,
+        "recent_turns_for_planner": recent_turns_for_planner,
         "artifacts": artifacts,
     }
