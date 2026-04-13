@@ -1,5 +1,7 @@
 import streamlit as st
 
+from utils.openai_models import OpenAIModelProbeError
+
 
 def _stop_or_raise(message):
     if st.runtime.exists():
@@ -61,8 +63,11 @@ def load_provider(
             st.sidebar.error("API key was accepted but no models were returned.")
             _stop_or_raise(f"{provider_label} returned no models for the provided API key.")
     except Exception as e:
-        st.sidebar.error(f"Invalid {provider_label} API key (or unable to reach {provider_label}).")
-        st.sidebar.caption(f"Details: {e}")
+        if isinstance(e, OpenAIModelProbeError):
+            st.sidebar.error(str(e))
+        else:
+            st.sidebar.error(f"Invalid {provider_label} API key (or unable to reach {provider_label}).")
+            st.sidebar.caption(f"Details: {e}")
         st.info(f"Please enter a valid {provider_label} API key in the sidebar to continue.")
         _stop_or_raise(
             f"Failed to load {provider_label} models. Run via Streamlit or check the API key/network. Details: {e}"

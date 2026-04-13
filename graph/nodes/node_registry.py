@@ -20,12 +20,10 @@ from dataclasses import dataclass
 from typing import Callable
 
 from ..state import AgentState, MetaKeys
+from ..workflow_config import MAX_ERROR_ITERATIONS
 from .action_metadata import ACTION_CAPABILITIES
 from .state_helpers import get_agent_state
 from .tool_routing import is_tool_requested
-
-
-MAX_ERROR_ITERATIONS = 5
 
 
 # ---------------------------------------------------------------------------
@@ -190,7 +188,9 @@ NODE_REGISTRY: list[NodeDefinition] = [
         priority=80,
         is_ready=lambda s: (
             get_agent_state(s, "executor").get("run_status") == "ok"
-            and get_agent_state(s, "human_review").get("final_decision") is None
+            and bool((s.get("meta") or {}).get(MetaKeys.CURRENT_CODE_HASH))
+            and (s.get("meta") or {}).get(MetaKeys.FINAL_APPROVED_CODE_HASH)
+            != (s.get("meta") or {}).get(MetaKeys.CURRENT_CODE_HASH)
         ),
     ),
 ]

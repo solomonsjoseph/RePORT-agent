@@ -100,7 +100,7 @@ def test_mask_actions_explain_execute_code_block_when_final_review_is_pending() 
             "executor": {"run_status": "ok"},
             "human_review": {"final_decision": None},
         },
-        "meta": {},
+        "meta": {"current_code_hash": "h1"},
     }
 
     allowed, blocked = mask_actions(state, ["qa", "execute_code", "human_review_final"])

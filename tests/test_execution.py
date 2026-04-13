@@ -353,6 +353,22 @@ def test_run_python_user_trusted_local_mode_executes_inline(monkeypatch) -> None
     assert error is None
 
 
+def test_run_python_user_defaults_to_trusted_local_mode(monkeypatch) -> None:
+    execution = _load_execution_module()
+
+    monkeypatch.delenv("EXECUTION_MODE", raising=False)
+
+    result, stdout, figure_png, error = execution.run_python_user(
+        "result = 3 + 4\nprint('default local')",
+        pd.DataFrame({"a": [1]}),
+    )
+
+    assert result == 7
+    assert stdout == "default local\n"
+    assert figure_png == b""
+    assert error is None
+
+
 def test_run_python_user_trusted_local_mode_maps_missing_package_to_unsupported_runtime(
     monkeypatch,
 ) -> None:

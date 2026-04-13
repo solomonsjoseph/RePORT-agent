@@ -53,6 +53,7 @@ class MetaKeys:
     WEAK_PROGRESS_COUNT = "weak_progress_count"
     REPEATED_FAILURE_SIGNATURE = "repeated_failure_signature"
     EXECUTION_TICKET_HASH = "execution_ticket_hash"
+    FINAL_APPROVED_CODE_HASH = "final_approved_code_hash"
     ERROR_RECOVERY_ACTIVE = "error_recovery_active"
     WORKFLOW_MILESTONE = "workflow_milestone"
     COMPLETION_STATUS = "completion_status"

@@ -26,6 +26,7 @@ def human_review_after_error_node(state):
     meta = dict(state.get("meta", {}))
     meta[MetaKeys.ERROR_ITERATIONS] = 0
     meta.pop(MetaKeys.CURRENT_CODE_HASH, None)
+    meta.pop(MetaKeys.FINAL_APPROVED_CODE_HASH, None)
     meta.pop(MetaKeys.EXECUTION_TICKET_HASH, None)
     meta.pop(MetaKeys.ERROR_RECOVERY_ACTIVE, None)
 

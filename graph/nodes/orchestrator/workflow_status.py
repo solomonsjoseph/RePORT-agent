@@ -4,7 +4,7 @@ from hashlib import sha256
 
 from ...state import MetaKeys
 from ...state_views import get_artifacts, get_node_data
-from ..node_registry import MAX_ERROR_ITERATIONS
+from ...workflow_config import MAX_ERROR_ITERATIONS
 from .state_logic import _has_unanswered_human_message
 
 TERMINAL_EXECUTION_ERROR_CATEGORIES = frozenset(
@@ -32,7 +32,11 @@ def derive_workflow_status(state: dict) -> dict:
     has_code = bool(artifacts.get("generated_code"))
     current_hash = meta.get(MetaKeys.CURRENT_CODE_HASH)
     ticket_hash = meta.get(MetaKeys.EXECUTION_TICKET_HASH)
+    final_approved_hash = meta.get(MetaKeys.FINAL_APPROVED_CODE_HASH)
     has_ticket = bool(current_hash and ticket_hash and current_hash == ticket_hash)
+    is_current_code_final_approved = bool(
+        current_hash and final_approved_hash and current_hash == final_approved_hash
+    )
     terminal_error_category = error.get("category") if executor.get("run_status") == "error" else None
     if meta.get(MetaKeys.AWAITING_USER_CLARIFICATION):
         kind = meta.get(MetaKeys.CLARIFICATION_KIND, "unknown")
@@ -96,11 +100,22 @@ def derive_workflow_status(state: dict) -> dict:
             "blocker_signature": "ready_for_execution",
         }
 
-    if executor.get("run_status") == "ok" and review.get("final_decision") is None:
+    if executor.get("run_status") == "ok" and not is_current_code_final_approved:
         return {
             "milestone": "awaiting_final_review",
             "completion_status": "blocked_waiting",
             "blocker_signature": "waiting_for_final_review",
+        }
+
+    if (
+        executor.get("run_status") == "ok"
+        and is_current_code_final_approved
+        and not _has_unanswered_human_message(state)
+    ):
+        return {
+            "milestone": "analysis_complete",
+            "completion_status": "complete",
+            "blocker_signature": None,
         }
 
     if (

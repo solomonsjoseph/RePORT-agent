@@ -6,6 +6,7 @@ from langchain_core.messages import AIMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 from ..state import AgentState, MetaKeys
+from ..workflow_config import QA_RECENT_TURNS, TOOL_ROUTER_RECENT_TURNS
 from utils.code_parser import extract_python_code
 from .code_guardrails import code_fingerprint, is_executable_python
 from .state_helpers import (
@@ -85,7 +86,7 @@ def qa_node(
 
     if question and not tool_results and not tool_requests and should_attempt_tool_routing:
         effective_question = question
-        recent_msgs = window_messages(prompt_messages, max_turns=3)
+        recent_msgs = window_messages(prompt_messages, max_turns=TOOL_ROUTER_RECENT_TURNS)
 
         routing_result = request_tools_for_question(llm, effective_question, recent_messages=recent_msgs)
         # Clarification needed — required tool field is missing and can't be inferred.
@@ -141,7 +142,7 @@ def qa_node(
                 },
             )
 
-    windowed = window_messages(prompt_messages, max_turns=10)
+    windowed = window_messages(prompt_messages, max_turns=QA_RECENT_TURNS)
     prompt = ChatPromptTemplate.from_messages(
         [
             (
@@ -216,6 +217,7 @@ def qa_node(
     if is_executable_python(code):
         output["generated_code"] = code
         meta[MetaKeys.CURRENT_CODE_HASH] = code_fingerprint(code)
+        meta.pop(MetaKeys.FINAL_APPROVED_CODE_HASH, None)
         meta.pop(MetaKeys.EXECUTION_TICKET_HASH, None)
         meta.pop(MetaKeys.ERROR_RECOVERY_ACTIVE, None)
         agents = dict(updated_state.get("agents", {}))

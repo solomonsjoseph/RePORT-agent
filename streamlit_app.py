@@ -25,6 +25,27 @@ from utils.execution_mode import (
     current_execution_mode,
     docker_available,
 )
+from utils.streamlit_config import (
+    ANTHROPIC_API_VERSION,
+    DEFAULT_ANTHROPIC_MODEL,
+    DEFAULT_API_KEY,
+    DEFAULT_BASE_URL,
+    DEFAULT_EXECUTION_TIMEOUT_SEC,
+    DEFAULT_MAX_AUTO_STEPS,
+    DEFAULT_OPENAI_MODEL,
+    DEFAULT_PROVIDER,
+    DEFAULT_TEMPERATURE,
+    DEFAULT_TOP_P,
+    EXECUTION_MODE_OPTIONS,
+    EXECUTION_TIMEOUT_RANGE,
+    EXECUTION_TIMEOUT_STEP,
+    MAX_AUTO_STEPS_RANGE,
+    PROVIDER_OPTIONS,
+    TEMPERATURE_RANGE,
+    TEMPERATURE_STEP,
+    TOP_P_RANGE,
+    TOP_P_STEP,
+)
 from utils.run_manager import GraphRunManager
 from utils.export_thread import build_thread_export
 # --------------------------
@@ -45,21 +66,20 @@ st.title(title)
 # ============================================================
 
 st.sidebar.header("⚙️ Model Settings")
-base_url = "http://localhost:8000/v1"
+base_url = DEFAULT_BASE_URL
 
 # default_model = 'meta-llama/Llama-3.1-8B-Instruct'
-default_temp = 0.1
-default_api_key = ""
-default_openai_model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-default_anthropic_model = os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20240620")
+default_temp = DEFAULT_TEMPERATURE
+default_api_key = DEFAULT_API_KEY
+default_openai_model = os.getenv("OPENAI_MODEL", DEFAULT_OPENAI_MODEL)
+default_anthropic_model = os.getenv("ANTHROPIC_MODEL", DEFAULT_ANTHROPIC_MODEL)
 openai_env_key = os.getenv("OPENAI_API_KEY", "")
 anthropic_env_key = os.getenv("ANTHROPIC_API_KEY", "")
-ANTHROPIC_API_VERSION = "2023-06-01"
 
 provider = st.sidebar.selectbox(
     "Provider",
-    ["openai", "anthropic", "vllm"],
-    index=0,
+    list(PROVIDER_OPTIONS),
+    index=PROVIDER_OPTIONS.index(DEFAULT_PROVIDER),
     help="Choose the model provider to use."
 )
 
@@ -69,23 +89,23 @@ show_debug_state = st.sidebar.toggle(
 )
 max_auto_steps = st.sidebar.slider(
     "Auto-run steps per refresh",
-    min_value=1,
-    max_value=8,
-    value=4,
+    min_value=MAX_AUTO_STEPS_RANGE[0],
+    max_value=MAX_AUTO_STEPS_RANGE[1],
+    value=DEFAULT_MAX_AUTO_STEPS,
     help="Number of workflow nodes the app runs in the background before the next UI refresh. Higher values feel faster but intermediate steps may be less visible.",
 )
 execution_timeout = st.sidebar.slider(
     "Execution timeout (seconds)",
-    min_value=5,
-    max_value=120,
-    value=60,
-    step=5,
+    min_value=EXECUTION_TIMEOUT_RANGE[0],
+    max_value=EXECUTION_TIMEOUT_RANGE[1],
+    value=DEFAULT_EXECUTION_TIMEOUT_SEC,
+    step=EXECUTION_TIMEOUT_STEP,
 )
 
 execution_mode = st.sidebar.selectbox(
     "Execution mode",
-    ["docker", "trusted_local"],
-    index=["docker", "trusted_local"].index(current_execution_mode()),
+    list(EXECUTION_MODE_OPTIONS),
+    index=EXECUTION_MODE_OPTIONS.index(current_execution_mode()),
     help="Choose how approved Python code is executed.",
 )
 
@@ -146,19 +166,19 @@ elif provider == "anthropic":
 
 temperature = st.sidebar.slider(
     "Temperature",
-    min_value=0.0,
-    max_value=1.0,
+    min_value=TEMPERATURE_RANGE[0],
+    max_value=TEMPERATURE_RANGE[1],
     value=default_temp,
-    step=0.05,
+    step=TEMPERATURE_STEP,
     help="Higher temperature = more creative code."
 )
 
 top_p = st.sidebar.slider(
     "Top probability",
-    min_value=0.5,
-    max_value=1.0,
-    value=0.9,
-    step=0.05,
+    min_value=TOP_P_RANGE[0],
+    max_value=TOP_P_RANGE[1],
+    value=DEFAULT_TOP_P,
+    step=TOP_P_STEP,
     help="Set the top-p value, lowering it increases creativity."
 )
 if provider == "anthropic":
@@ -387,7 +407,14 @@ export_bytes = build_thread_export(
     output=output,
 )
 executor_ok = state.get("agents", {}).get("executor", {}).get("run_status") == "ok" if state else False
-final_approved = state.get("agents", {}).get("human_review", {}).get("final_decision") == "approve" if state else False
+meta = state.get("meta", {}) if state else {}
+current_code_hash = meta.get("current_code_hash")
+final_approved_code_hash = meta.get("final_approved_code_hash")
+final_approved = bool(
+    current_code_hash
+    and final_approved_code_hash
+    and current_code_hash == final_approved_code_hash
+) if state else False
 qa_ready = bool(output.get("qa_response"))
 analysis_ready = executor_ok and final_approved
 

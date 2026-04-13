@@ -163,3 +163,21 @@ def test_terminal_error_is_complete_after_terminal_response_node_runs() -> None:
     assert status["milestone"] == "terminal_error"
     assert status["completion_status"] == "complete"
     assert status["blocker_signature"] == "terminal_error:timeout"
+
+
+def test_successful_execution_with_approved_final_review_is_not_awaiting_final_review() -> None:
+    state = {
+        "output": {"generated_code": "print(1)", "text": "ok"},
+        "agents": {
+            "executor": {"run_status": "ok"},
+            "human_review": {"final_decision": None},
+        },
+        "meta": {"current_code_hash": "h1", "final_approved_code_hash": "h1"},
+        "last_action": "human_review_final",
+    }
+
+    status = derive_workflow_status(state)
+
+    assert status["milestone"] == "analysis_complete"
+    assert status["completion_status"] == "complete"
+    assert status["blocker_signature"] is None

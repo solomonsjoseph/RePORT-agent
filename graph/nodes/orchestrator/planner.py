@@ -6,30 +6,64 @@ from typing import Iterable
 from prompts.planner_prompt import make_planner_prompt
 
 from ...state import AgentState
+from ...workflow_config import PLANNER_RAW_RESPONSE_PREVIEW_CHARS
 from .action_mask import mask_actions
 from .context_builder import build_planner_context, build_planner_runtime_state
 from utils.llm_response import coerce_text_content
 
+
+def _raw_response_preview(content: str) -> str:
+    return content.strip()[:PLANNER_RAW_RESPONSE_PREVIEW_CHARS]
+
+
 def _parse_planner_response(
     content: str,
     available_actions: Iterable[str],
-) -> tuple[str, str, list[str]]:
+) -> tuple[str, str, list[str], dict[str, str]]:
+    raw_content = content
     content = content.strip()
     available = set(available_actions)
     if not content:
-        return "end", "", []
+        return "end", "", [], {"parse_status": "empty_response"}
 
     try:
         payload = json.loads(content)
     except json.JSONDecodeError:
         action = content
-        return (action if action in available else "end"), "", []
+        if action in available:
+            return (
+                action,
+                "",
+                [],
+                {
+                    "parse_status": "plain_action",
+                    "raw_response_preview": _raw_response_preview(raw_content),
+                },
+            )
+        return (
+            "end",
+            "",
+            [],
+            {
+                "parse_status": "invalid_json",
+                "raw_response_preview": _raw_response_preview(raw_content),
+            },
+        )
 
     if not isinstance(payload, dict):
-        return "end", "", []
+        return (
+            "end",
+            "",
+            [],
+            {
+                "parse_status": "non_object_json",
+                "raw_response_preview": _raw_response_preview(raw_content),
+            },
+        )
 
     action = payload.get("action", "")
     thought = str(payload.get("thought", "") or "")
+    parse_status = "ok"
 
     ranked_raw = payload.get("ranked_actions", [])
     ranked_actions: list[str] = []
@@ -42,7 +76,13 @@ def _parse_planner_response(
                 break
 
     parsed_action = action if action in available else "end"
-    return parsed_action, thought, ranked_actions
+    diagnostics: dict[str, str] = {"parse_status": parse_status}
+    if not thought:
+        diagnostics["parse_status"] = "missing_thought"
+    if action and action not in available:
+        diagnostics["parse_status"] = "invalid_action"
+        diagnostics["raw_response_preview"] = _raw_response_preview(raw_content)
+    return parsed_action, thought, ranked_actions, diagnostics
 
 
 def llm_plan_next_action(
@@ -84,7 +124,7 @@ def llm_plan_next_action(
         ),
     )
     planner_response = llm.invoke(planner_prompt.to_messages())
-    planner_action, thought, ranked_actions = _parse_planner_response(
+    planner_action, thought, ranked_actions, diagnostics = _parse_planner_response(
         coerce_text_content(getattr(planner_response, "content", "")),
         available_action_list,
     )
@@ -100,7 +140,7 @@ def llm_plan_next_action(
         suffix = f"ranked={masked_ranked_actions}"
         thought = f"{thought} {suffix}".strip() if thought else suffix
 
-    return final_action, thought, trace_action
+    return final_action, thought, trace_action, diagnostics
 
 
 def llm_select_next_action(
@@ -108,5 +148,9 @@ def llm_select_next_action(
     llm,
     available_actions: Iterable[str],
 ) -> tuple[str, str]:
-    final_action, thought, _planner_action = llm_plan_next_action(state, llm, available_actions)
+    final_action, thought, _planner_action, _diagnostics = llm_plan_next_action(
+        state,
+        llm,
+        available_actions,
+    )
     return final_action, thought

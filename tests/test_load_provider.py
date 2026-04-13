@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from UI import load_provider as load_provider_module
+from utils.openai_models import OpenAIModelProbeError
 
 
 class _FakeForm:
@@ -121,3 +122,31 @@ def test_load_provider_stops_when_no_key_available(monkeypatch):
     assert fake_st.sidebar.info_messages == [
         "Enter API key and press Enter or click Submit to continue."
     ]
+
+
+def test_load_provider_surfaces_loader_error_details(monkeypatch):
+    fake_st = _FakeStreamlit()
+    fake_st.session_state["openai_api_key"] = "env-key"
+    monkeypatch.setattr(load_provider_module, "st", fake_st)
+
+    def load_models_fn(_api_key):
+        raise OpenAIModelProbeError(
+            "No supported OpenAI chat models passed the availability probe: gpt-5: Quota exceeded"
+        )
+
+    with pytest.raises(RuntimeError, match="Failed to load OpenAI models"):
+        load_provider_module.load_provider(
+            provider_label="OpenAI",
+            session_state_key="openai_api_key",
+            input_label="OpenAI API Key",
+            default_api_key="",
+            env_api_key="env-key",
+            default_model="gpt-4o-mini",
+            load_models_fn=load_models_fn,
+            model_help="Choose model.",
+        )
+
+    assert fake_st.sidebar.error_messages == [
+        "No supported OpenAI chat models passed the availability probe: gpt-5: Quota exceeded"
+    ]
+    assert fake_st.sidebar.caption_messages == []

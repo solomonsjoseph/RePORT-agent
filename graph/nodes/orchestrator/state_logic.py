@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 
 from ...state import AgentState, MetaKeys
+from ...workflow_config import PLANNER_RECENT_TURNS
 
 
 def _latest_user_message_obj(state: AgentState):
@@ -49,11 +50,26 @@ def _user_message_hash(state: AgentState) -> str | None:
     return hashlib.sha256(hash_basis.encode()).hexdigest()[:16]
 
 
-def _recent_messages_for_planner(state: AgentState, limit: int = 4) -> list:
+def _recent_messages_for_planner(
+    state: AgentState,
+    max_turns: int = PLANNER_RECENT_TURNS,
+) -> list:
     messages = list(state.get("messages", []))
-    if limit <= 0:
+    if max_turns <= 0:
         return []
-    return messages[-limit:]
+
+    turns: list[list] = []
+    current_turn: list = []
+    for message in messages:
+        current_turn.append(message)
+        if getattr(message, "type", None) == "ai":
+            turns.append(current_turn)
+            current_turn = []
+
+    if current_turn:
+        turns.append(current_turn)
+
+    return [message for turn in turns[-max_turns:] for message in turn]
 
 
 def build_planner_recent_turns(state: AgentState) -> list[dict[str, str]]:
@@ -228,10 +244,15 @@ def _consume_final_review_approval(
     updated_agents = dict(agents)
     updated_review = dict(review)
     updated_meta = dict(meta)
+    current_hash = updated_meta.get(MetaKeys.CURRENT_CODE_HASH)
     updated_review["final_decision"] = None
     updated_review["before_run_decision"] = None
     updated_review["approved_code_hash"] = None
     updated_agents["human_review"] = updated_review
+    if current_hash:
+        updated_meta[MetaKeys.FINAL_APPROVED_CODE_HASH] = current_hash
+    else:
+        updated_meta.pop(MetaKeys.FINAL_APPROVED_CODE_HASH, None)
     updated_meta.pop(MetaKeys.EXECUTION_TICKET_HASH, None)
     updated_meta.pop(MetaKeys.ERROR_RECOVERY_ACTIVE, None)
 

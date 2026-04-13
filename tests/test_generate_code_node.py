@@ -133,7 +133,11 @@ def test_generate_code_resets_approval_and_sets_current_code_hash() -> None:
         "meta": {"execution_ticket_hash": "old", "error_recovery_active": True},
         "agents": {
             "generate_code": {"tool_requests": [], "tool_results": []},
-            "human_review": {"before_run_decision": "approve", "approved_code_hash": "old"},
+            "human_review": {
+                "before_run_decision": "approve",
+                "final_decision": "approve",
+                "approved_code_hash": "old",
+            },
         },
     }
 
@@ -142,10 +146,45 @@ def test_generate_code_resets_approval_and_sets_current_code_hash() -> None:
 
     assert updated["output"]["generated_code"] == "print(123)"
     assert updated["agents"]["human_review"]["before_run_decision"] is None
+    assert updated["agents"]["human_review"]["final_decision"] is None
     assert updated["agents"]["human_review"]["approved_code_hash"] is None
     assert updated["meta"].get("current_code_hash")
     assert updated["meta"].get("execution_ticket_hash") is None
     assert updated["meta"].get("error_recovery_active") is None
+
+
+def test_generate_code_after_error_review_resets_failed_execution_state() -> None:
+    generate_code = _fresh_generate_code()
+
+    state = {
+        "messages": [_HumanMessage("regenerate the analysis")],
+        "output": {
+            "generated_code": "print('old')",
+            "error": {"category": "retryable_code", "type": "NameError", "message": "bad"},
+            "text": "old output",
+        },
+        "observations": [],
+        "meta": {
+            "error_iterations": 5,
+            "execution_ticket_hash": "old",
+            "error_recovery_active": True,
+        },
+        "agents": {
+            "generate_code": {"tool_requests": [], "tool_results": []},
+            "human_review": {"before_run_decision": "approve", "approved_code_hash": "old"},
+            "executor": {"run_status": "error", "status": "error"},
+        },
+    }
+
+    llm = _LLM("```python\nprint('new')\n```")
+    updated = generate_code.generate_code_node(state, llm, context="")
+
+    assert updated["output"]["generated_code"] == "print('new')"
+    assert "error" not in updated["output"]
+    assert "text" not in updated["output"]
+    assert updated["meta"]["error_iterations"] == 0
+    assert updated["agents"]["executor"]["run_status"] == "idle"
+    assert updated["agents"]["executor"]["status"] == "idle"
 
 
 def test_generate_code_does_not_run_tool_routing_clarification_path() -> None:

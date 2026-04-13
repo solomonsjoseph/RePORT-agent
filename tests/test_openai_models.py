@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import pytest
+
 from utils.openai_models import (
+    OpenAIModelProbeError,
     is_openai_chat_candidate,
     is_openai_gpt5_family,
     list_supported_openai_chat_models,
@@ -85,3 +88,38 @@ def test_list_supported_openai_chat_models_probes_and_filters() -> None:
     assert models == ["gpt-4o", "gpt-5"]
     assert http_client.post_payloads["gpt-4o"]["max_tokens"] == 8
     assert http_client.post_payloads["gpt-5"]["max_completion_tokens"] == 8
+
+
+class _AllProbeFailuresHTTPClient:
+    def get(self, _url, headers=None, timeout=None):
+        assert headers is not None
+        assert timeout == 10
+        return _FakeResponse(
+            200,
+            {
+                "data": [
+                    {"id": "gpt-4o"},
+                    {"id": "gpt-5"},
+                ]
+            },
+        )
+
+    def post(self, _url, headers=None, json=None, timeout=None):
+        assert headers is not None
+        assert json is not None
+        assert timeout == 15
+        if json["model"] == "gpt-4o":
+            return _FakeResponse(403, {"error": {"message": "Project does not have access to gpt-4o"}})
+        return _FakeResponse(429, {"error": {"message": "Quota exceeded for gpt-5"}})
+
+
+def test_list_supported_openai_chat_models_raises_probe_error_when_all_candidates_fail() -> None:
+    http_client = _AllProbeFailuresHTTPClient()
+
+    with pytest.raises(OpenAIModelProbeError) as excinfo:
+        list_supported_openai_chat_models("secret", http_client=http_client)
+
+    message = str(excinfo.value)
+    assert "No supported OpenAI chat models passed the availability probe" in message
+    assert "gpt-4o: Project does not have access to gpt-4o" in message
+    assert "gpt-5: Quota exceeded for gpt-5" in message

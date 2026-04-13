@@ -3,6 +3,10 @@ from __future__ import annotations
 from langchain_core.messages import AIMessage
 
 from ..state import AgentState, MetaKeys
+from ..workflow_config import (
+    CLARIFICATION_RECENT_TURNS,
+    CLARIFICATION_WITH_PENDING_RECENT_TURNS,
+)
 from .qa import qa_node
 from .state_helpers import (
     clear_clarification_meta,
@@ -25,10 +29,16 @@ def _resume_qa_tool_clarification(state: AgentState, llm) -> AgentState:
     pending_question = (state.get("meta") or {}).get(MetaKeys.PENDING_QUESTION)
     if pending_question:
         effective_question = f"{pending_question}\n\nUser clarification: {question}"
-        recent_msgs = window_messages(state.get("messages", []), max_turns=5)
+        recent_msgs = window_messages(
+            state.get("messages", []),
+            max_turns=CLARIFICATION_WITH_PENDING_RECENT_TURNS,
+        )
     else:
         effective_question = question
-        recent_msgs = window_messages(state.get("messages", []), max_turns=3)
+        recent_msgs = window_messages(
+            state.get("messages", []),
+            max_turns=CLARIFICATION_RECENT_TURNS,
+        )
 
     routing_result = request_tools_for_question(llm, effective_question, recent_messages=recent_msgs)
     if routing_result.clarification_question:

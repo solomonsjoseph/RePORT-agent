@@ -121,6 +121,8 @@ def test_planner_prompt_formats_with_memory_and_recent_turns() -> None:
 
     assert "Planner memory:" in rendered[1]["content"]
     assert "Recent conversation turns:" in rendered[1]["content"]
+    assert '"action": "qa"' in rendered[0]["content"]
+    assert '"thought": "The latest request is a conceptual question, so QA should answer."' in rendered[0]["content"]
 
 
 def test_planner_serializes_memory_and_omits_recent_turns_when_empty() -> None:
@@ -272,7 +274,69 @@ def test_orchestrator_records_planner_decision_trace_and_progress() -> None:
 
     assert updated["next_action"] == "qa"
     assert updated["planner"]["decision_trace"][-1]["action"] == "qa"
+    assert updated["planner"]["decision_trace"][-1]["parse_status"] == "ok"
     assert "progress_made_last_step" in updated["meta"]
+
+
+def test_orchestrator_records_invalid_planner_parse_diagnostics() -> None:
+    _install_langchain_and_langgraph_stubs()
+    orchestrator = importlib.import_module("graph.nodes.orchestrator")
+
+    state = {
+        "messages": [SimpleNamespace(type="human", content="Explain PCA")],
+        "output": {},
+        "observations": [],
+        "last_action": None,
+        "orchestrator": {},
+        "planner": {"decision_trace": []},
+        "agents": {
+            "executor": {"run_status": "idle"},
+            "human_review": {"before_run_decision": None, "final_decision": None},
+        },
+        "meta": {"workflow_trace": []},
+    }
+
+    updated = orchestrator.orchestrator_node(
+        state,
+        _LLM("I would answer this with QA."),
+        ["qa", "generate_code", "end"],
+    )
+
+    decision = updated["planner"]["decision_trace"][-1]
+    assert decision["action"] == "end"
+    assert decision["thought"] == ""
+    assert decision["routed_action"] == "qa"
+    assert decision["parse_status"] == "invalid_json"
+    assert decision["raw_response_preview"] == "I would answer this with QA."
+
+
+def test_orchestrator_records_empty_planner_parse_diagnostics() -> None:
+    _install_langchain_and_langgraph_stubs()
+    orchestrator = importlib.import_module("graph.nodes.orchestrator")
+
+    state = {
+        "messages": [SimpleNamespace(type="human", content="Explain PCA")],
+        "output": {},
+        "observations": [],
+        "last_action": None,
+        "orchestrator": {},
+        "planner": {"decision_trace": []},
+        "agents": {
+            "executor": {"run_status": "idle"},
+            "human_review": {"before_run_decision": None, "final_decision": None},
+        },
+        "meta": {"workflow_trace": []},
+    }
+
+    updated = orchestrator.orchestrator_node(
+        state,
+        _LLM(""),
+        ["qa", "generate_code", "end"],
+    )
+
+    decision = updated["planner"]["decision_trace"][-1]
+    assert decision["parse_status"] == "empty_response"
+    assert "raw_response_preview" not in decision
 
 
 def test_orchestrator_records_masked_planner_choice_separately_from_routed_action() -> None:
@@ -966,6 +1030,7 @@ def test_orchestrator_consumes_final_review_approval_and_ends() -> None:
 
     assert updated["next_action"] == "end"
     assert (updated["agents"].get("human_review") or {}).get("final_decision") is None
+    assert updated["meta"].get("final_approved_code_hash") == "abc"
     assert updated["meta"].get("execution_ticket_hash") is None
 
 
@@ -1001,6 +1066,110 @@ def test_orchestrator_consumes_after_error_feedback_and_routes_to_generate_code(
 
     assert updated["next_action"] == "generate_code"
     assert (updated["agents"].get("human_review") or {}).get("after_error_decision") is None
+
+
+def test_orchestrator_retries_execution_deterministically_after_error_handler() -> None:
+    _install_langchain_and_langgraph_stubs()
+    orchestrator = importlib.import_module("graph.nodes.orchestrator")
+
+    state = {
+        "messages": [SimpleNamespace(type="human", content="analyze tb and smoking")],
+        "output": {
+            "generated_code": "print('fixed')",
+            "error": {"category": "retryable_code", "type": "NameError", "message": "bad"},
+        },
+        "observations": ["error_handler: code_fixed"],
+        "last_action": "error_handler",
+        "orchestrator": {},
+        "agents": {
+            "executor": {"run_status": "pending"},
+            "human_review": {"before_run_decision": None, "after_error_decision": None},
+        },
+        "meta": {
+            "workflow_trace": ["orchestrator", "execute_code", "orchestrator", "error_handler"],
+            "current_code_hash": "fixed-hash",
+            "execution_ticket_hash": "fixed-hash",
+            "error_recovery_active": True,
+            "error_iterations": 1,
+        },
+    }
+    llm = _LLM("")
+
+    updated = orchestrator.orchestrator_node(
+        state,
+        llm,
+        ["qa", "generate_code", "error_handler", "execute_code", "human_review_after_error", "end"],
+    )
+
+    assert updated["next_action"] == "execute_code"
+    assert len(llm.calls) == 0
+
+
+def test_orchestrator_routes_to_after_error_review_when_retry_budget_is_exhausted() -> None:
+    _install_langchain_and_langgraph_stubs()
+    orchestrator = importlib.import_module("graph.nodes.orchestrator")
+    registry = importlib.import_module("graph.nodes.node_registry")
+
+    state = {
+        "messages": [SimpleNamespace(type="human", content="analyze tb and smoking")],
+        "output": {
+            "generated_code": "print('still broken')",
+            "error": {"category": "retryable_code", "type": "NameError", "message": "bad"},
+        },
+        "observations": ["execute_code: execution_failed_retryable"],
+        "last_action": "execute_code",
+        "orchestrator": {},
+        "agents": {
+            "executor": {"run_status": "error"},
+            "human_review": {"after_error_decision": None},
+        },
+        "meta": {
+            "workflow_trace": ["orchestrator", "execute_code"],
+            "error_iterations": registry.MAX_ERROR_ITERATIONS,
+        },
+    }
+    llm = _LLM("")
+
+    updated = orchestrator.orchestrator_node(
+        state,
+        llm,
+        ["qa", "error_handler", "human_review_after_error", "execute_code", "end"],
+    )
+
+    assert updated["next_action"] == "human_review_after_error"
+    assert len(llm.calls) == 0
+
+
+def test_orchestrator_routes_successful_execution_to_final_review_without_planner() -> None:
+    _install_langchain_and_langgraph_stubs()
+    orchestrator = importlib.import_module("graph.nodes.orchestrator")
+
+    state = {
+        "messages": [SimpleNamespace(type="human", content="analyze tb and smoking")],
+        "output": {"generated_code": "print('ok')", "text": "ok"},
+        "observations": ["execute_code: run_succeeded"],
+        "last_action": "execute_code",
+        "orchestrator": {},
+        "agents": {
+            "executor": {"run_status": "ok"},
+            "human_review": {"final_decision": None},
+        },
+        "meta": {
+            "workflow_trace": ["orchestrator", "execute_code"],
+            "current_code_hash": "ok-hash",
+            "execution_ticket_hash": "ok-hash",
+        },
+    }
+    llm = _LLM("")
+
+    updated = orchestrator.orchestrator_node(
+        state,
+        llm,
+        ["qa", "generate_code", "execute_code", "human_review_final", "end"],
+    )
+
+    assert updated["next_action"] == "human_review_final"
+    assert len(llm.calls) == 0
 
 
 
@@ -1453,7 +1622,7 @@ def test_llm_select_next_action_explains_execute_code_block_when_final_review_is
         },
         "observations": ["execute_code: run_succeeded"],
         "planner": {"decision_trace": []},
-        "meta": {"workflow_trace": ["orchestrator", "execute_code"]},
+        "meta": {"workflow_trace": ["orchestrator", "execute_code"], "current_code_hash": "h1"},
         "last_action": "execute_code",
     }
 

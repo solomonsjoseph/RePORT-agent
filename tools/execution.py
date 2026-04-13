@@ -455,7 +455,7 @@ def run_python_user(code: str, df: pd.DataFrame):
     if policy_error is not None:
         return _policy_error(policy_error["message"])
 
-    execution_mode = os.getenv("EXECUTION_MODE", "docker").lower()
+    execution_mode = os.getenv("EXECUTION_MODE", "trusted_local").lower()
     if execution_mode in {"inline", "trusted_local"}:
         return _execute_user_code(code, df)
     if execution_mode == "docker":

@@ -1,5 +1,16 @@
 from __future__ import annotations
 
+import sys
+from types import ModuleType
+
+messages_mod = ModuleType("langchain_core.messages")
+messages_mod.BaseMessage = object
+sys.modules.setdefault("langchain_core.messages", messages_mod)
+
+graph_message_mod = ModuleType("langgraph.graph.message")
+graph_message_mod.add_messages = lambda current, new: (current or []) + (new or [])
+sys.modules.setdefault("langgraph.graph.message", graph_message_mod)
+
 from graph.nodes.orchestrator.progress_controller import (
     apply_recurrence_guard,
     classify_progress,
@@ -93,3 +104,39 @@ def test_apply_recurrence_guard_ends_after_repeated_weak_churn_in_same_milestone
     assert fired is True
     assert action == "end"
     assert observations and "weak-progress churn" in observations[-1]
+
+
+def test_apply_recurrence_guard_does_not_block_retry_loop_before_retry_budget() -> None:
+    state = {
+        "meta": {
+            "workflow_milestone": "retrying_after_error",
+            "blocker_signature": "retryable_error:PythonRuntimeError:deadbeef",
+            "stagnation_count": 4,
+            "weak_progress_count": 0,
+            "error_iterations": 2,
+        }
+    }
+
+    action, observations, fired = apply_recurrence_guard("error_handler", state, [])
+
+    assert fired is False
+    assert action == "error_handler"
+    assert observations and "retry budget controls" in observations[-1]
+
+
+def test_apply_recurrence_guard_preserves_after_error_review_handoff() -> None:
+    state = {
+        "meta": {
+            "workflow_milestone": "awaiting_after_error_review",
+            "blocker_signature": "waiting_for_after_error_review:retryable_code:PythonRuntimeError",
+            "stagnation_count": 4,
+            "weak_progress_count": 0,
+            "error_iterations": 5,
+        }
+    }
+
+    action, observations, fired = apply_recurrence_guard("human_review_after_error", state, [])
+
+    assert fired is False
+    assert action == "human_review_after_error"
+    assert observations and "preserving after-error human review" in observations[-1]

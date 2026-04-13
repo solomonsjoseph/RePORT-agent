@@ -4,6 +4,11 @@ import json
 
 from ...state import MetaKeys
 from ...state_views import get_artifacts, get_node_data, get_planner_state, merge_state_patch
+from ...workflow_config import (
+    PLANNER_DECISION_TRACE_LIMIT,
+    RECENT_OBSERVATIONS_LIMIT,
+    WORKFLOW_TRACE_TAIL,
+)
 from ..action_metadata import ACTION_CAPABILITIES
 from .state_logic import _latest_user_message, build_planner_recent_turns
 
@@ -37,8 +42,8 @@ def build_planner_context(state: dict, available_actions: list[str]) -> dict:
     summary_lines = [
         f"latest_user_message={_latest_user_message(state)}",
         f"last_action={state.get('last_action')}",
-        f"workflow_trace_tail={workflow_trace[-8:]}",
-        f"recent_observations={observations[-6:]}",
+        f"workflow_trace_tail={workflow_trace[-WORKFLOW_TRACE_TAIL:]}",
+        f"recent_observations={observations[-RECENT_OBSERVATIONS_LIMIT:]}",
         f"generated_code_present={bool(artifacts.get('generated_code'))}",
         f"executor_run_status={executor.get('run_status')}",
         f"review_state={json.dumps(review, default=str, sort_keys=True)}",
@@ -59,8 +64,10 @@ def build_planner_context(state: dict, available_actions: list[str]) -> dict:
     return {
         "environment_summary": "\n".join(summary_lines),
         "node_capabilities": node_caps,
-        "recent_observations": observations[-6:],
-        "planner_decision_trace": list(planner_state.get("decision_trace") or [])[-5:],
+        "recent_observations": observations[-RECENT_OBSERVATIONS_LIMIT:],
+        "planner_decision_trace": list(planner_state.get("decision_trace") or [])[
+            -PLANNER_DECISION_TRACE_LIMIT:
+        ],
         "planner_memory": planner_memory,
         "recent_turns_for_planner": recent_turns_for_planner,
         "artifacts": artifacts,

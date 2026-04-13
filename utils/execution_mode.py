@@ -5,13 +5,14 @@ import shutil
 
 
 EXECUTION_MODE_OPTIONS = ("docker", "trusted_local")
+DEFAULT_EXECUTION_MODE = "trusted_local"
 
 
 def current_execution_mode() -> str:
-    mode = os.getenv("EXECUTION_MODE", "docker").strip().lower()
+    mode = os.getenv("EXECUTION_MODE", DEFAULT_EXECUTION_MODE).strip().lower()
     if mode in EXECUTION_MODE_OPTIONS:
         return mode
-    return "docker"
+    return DEFAULT_EXECUTION_MODE
 
 
 def docker_available() -> bool:

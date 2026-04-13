@@ -26,6 +26,9 @@ Return ONLY a JSON object with:
 - "action": chosen action name from the allowed list
 - "ranked_actions": optional list of up to 3 candidate actions in order of preference
 
+Example:
+{{"thought": "The latest request is a conceptual question, so QA should answer.", "action": "qa", "ranked_actions": ["qa", "end"]}}
+
 Allowed actions:
 {actions}
 """

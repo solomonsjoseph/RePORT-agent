@@ -4,6 +4,7 @@ from prompts.fix_prompt import make_fix_code_prompt
 from .state_helpers import clear_clarification_meta, update_agent_state
 from .code_guardrails import code_fingerprint, is_executable_python
 from ..state import MetaKeys
+from ..workflow_config import ERROR_HANDLER_RECENT_TURNS
 
 NODE_NAME = "error_handler"
 NODE_CAPABILITY = (
@@ -25,7 +26,7 @@ def error_handler_node(state, llm, context):
         state = {**state, "agents": agents}
     meta["error_iterations"] = error_iterations + 1
 
-    windowed = window_messages(state.get("messages", []), max_turns=10)
+    windowed = window_messages(state.get("messages", []), max_turns=ERROR_HANDLER_RECENT_TURNS)
     prompt = make_fix_code_prompt().invoke(
         {
             "messages": windowed,
@@ -69,6 +70,7 @@ def error_handler_node(state, llm, context):
     new_hash = code_fingerprint(new_code)
     meta = clear_clarification_meta(meta)
     meta[MetaKeys.CURRENT_CODE_HASH] = new_hash
+    meta.pop(MetaKeys.FINAL_APPROVED_CODE_HASH, None)
     if meta.get(MetaKeys.ERROR_RECOVERY_ACTIVE) and meta.get(MetaKeys.EXECUTION_TICKET_HASH):
         review_state["approved_code_hash"] = new_hash
         meta[MetaKeys.EXECUTION_TICKET_HASH] = new_hash

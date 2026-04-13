@@ -4,10 +4,12 @@ from typing import Iterable
 
 from ...state import AgentState, MetaKeys
 from ...state_views import get_planner_state, merge_state_patch
+from ..node_registry import NODE_REGISTRY_MAP
 from ..tool_routing import is_tool_requested
 from .action_mask import mask_actions
 from .planner import llm_plan_next_action
 from .policy import (
+    DETERMINISTIC_CONTROL_ACTIONS,
     _next_tool_requester,
     _tool_request_queue,
 )
@@ -30,6 +32,7 @@ def _record_planner_decision(
     planner_action: str,
     thought: str,
     routed_action: str,
+    diagnostics: dict[str, str] | None = None,
 ) -> AgentState:
     planner = get_planner_state(state)
     trace = list(planner.get("decision_trace") or [])
@@ -39,6 +42,8 @@ def _record_planner_decision(
         "after": state.get("last_action"),
         "routed_action": routed_action,
     }
+    if diagnostics:
+        decision.update(diagnostics)
     trace.append(decision)
     planner["last_decision"] = decision
     planner["decision_trace"] = trace[-20:]
@@ -53,6 +58,24 @@ def _planner_fallback_action(available_actions: Iterable[str]) -> str:
     if "generate_code" in available:
         return "generate_code"
     return "end"
+
+def _ready_deterministic_action(
+    state: AgentState,
+    available_actions: Iterable[str],
+    *,
+    fresh_unanswered_user_turn: bool = False,
+) -> str | None:
+    """Return a ready control action that should not depend on planner output."""
+    available = set(available_actions)
+    for action in DETERMINISTIC_CONTROL_ACTIONS:
+        if action not in available:
+            continue
+        if action == "human_review_before_run" and fresh_unanswered_user_turn:
+            continue
+        node = NODE_REGISTRY_MAP.get(action)
+        if node and node.is_ready(state):
+            return action
+    return None
 
 
 def _resumed_from(state: AgentState, node_name: str) -> bool:
@@ -170,12 +193,14 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
         or review_state.get("final_decision") == "regenerate"
     )
 
-    if (
+    fresh_unanswered_user_turn = bool(
         current_hash
         and _has_unanswered_human_message(state)
         and current_hash != meta.get(MetaKeys.LAST_USER_MESSAGE_HASH)
         and not has_pending_regenerate
-    ):
+    )
+
+    if fresh_unanswered_user_turn:
         if was_awaiting_clarification:
             meta[MetaKeys.LAST_USER_MESSAGE_HASH] = current_hash
             if "clarification" in available_action_set:
@@ -218,11 +243,18 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
     routing_state = _store_workflow_status(routing_state)
     routing_state = update_recurrence_state(routing_state)
 
+    if not next_action:
+        next_action = _ready_deterministic_action(
+            routing_state,
+            available_action_list,
+            fresh_unanswered_user_turn=fresh_unanswered_user_turn,
+        )
+
     if not next_action and _should_end_for_completion(routing_state):
         next_action = "end"
 
     if not next_action:
-        llm_choice, thought, planner_action = llm_plan_next_action(
+        llm_choice, thought, planner_action, diagnostics = llm_plan_next_action(
             routing_state, llm, available_action_list
         )
         masked_actions, _blocked = mask_actions(routing_state, available_action_list)
@@ -235,6 +267,7 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
             planner_action,
             thought,
             next_action,
+            diagnostics,
         )
 
     state = routing_state

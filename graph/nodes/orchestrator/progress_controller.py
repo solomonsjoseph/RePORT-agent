@@ -4,10 +4,12 @@ import hashlib
 
 from ...state import AgentState, MetaKeys
 from ...state_views import get_artifacts
+from ...workflow_config import MAX_ERROR_ITERATIONS
 from .state_logic import _user_message_hash
 
 MAX_STAGNATION_STEPS = 4
 MAX_WEAK_PROGRESS_STEPS = 4
+ERROR_RECOVERY_ACTIONS = {"error_handler", "execute_code"}
 
 
 def _hash_text(value: object) -> str | None:
@@ -105,6 +107,21 @@ def apply_recurrence_guard(
 
     milestone = meta.get(MetaKeys.WORKFLOW_MILESTONE) or "unknown"
     blocker = meta.get(MetaKeys.BLOCKER_SIGNATURE) or "none"
+    error_iterations = int(meta.get(MetaKeys.ERROR_ITERATIONS, 0))
+    if (
+        milestone == "retrying_after_error"
+        and next_action in ERROR_RECOVERY_ACTIONS
+        and error_iterations < MAX_ERROR_ITERATIONS
+    ):
+        obs.append(
+            "orchestrator [recurrence]: retry budget controls "
+            f"'{next_action}' while recovering from execution error"
+        )
+        return next_action, obs, False
+
+    if milestone == "awaiting_after_error_review" and next_action == "human_review_after_error":
+        obs.append("orchestrator [recurrence]: preserving after-error human review")
+        return next_action, obs, False
 
     if int(meta.get(MetaKeys.STAGNATION_COUNT, 0)) >= MAX_STAGNATION_STEPS:
         obs.append(
