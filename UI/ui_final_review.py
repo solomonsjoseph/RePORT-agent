@@ -9,6 +9,12 @@ def ui_final_review(app, config, payload, interrupt_id, queue_resume):
     st.subheader("✅ Final Review")
 
     st.success("Execution succeeded")
+    if payload.get("code_summary"):
+        st.caption("What this code does:")
+        st.markdown(payload["code_summary"])
+    if payload.get("code_assumptions"):
+        st.caption("Assumptions:")
+        st.markdown(payload["code_assumptions"])
     if payload["generated_code"]:
         st.markdown("Generated Code:")
         st.code(payload["generated_code"], language="python")

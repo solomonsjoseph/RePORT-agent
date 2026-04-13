@@ -13,6 +13,8 @@ def human_review_final_node(state):
     output = dict(state.get("output") or {})
     feedback = interrupt({
         "type": "final_review",
+        "code_summary": output.get("code_summary", ""),
+        "code_assumptions": output.get("code_assumptions", ""),
         "generated_code": output.get("generated_code", ""),
         "output": output.get("text", ""),
         "figure_png": output.get("figure_png", ""),
@@ -23,12 +25,20 @@ def human_review_final_node(state):
 
     if decision == "approve":
         code = output.get("generated_code")
+        summary = str(output.get("code_summary", "") or "").strip()
+        assumptions = str(output.get("code_assumptions", "") or "").strip()
         extra = {}
         figure_png = output.get("figure_png", None)
         if figure_png:
             extra["figure_png"] = figure_png  # store raw bytes
+        body_parts = []
+        if summary:
+            body_parts.append(summary)
+        if assumptions:
+            body_parts.append(f"Assumptions: {assumptions}")
+        body_parts.append(f"Generated code:\n```python\n{code}\n```")
         ai_msg = AIMessage(
-            content=f"Generated code:\n```python\n{code}\n```",
+            content="\n\n".join(body_parts),
             additional_kwargs=extra,
         )
         if output_text:

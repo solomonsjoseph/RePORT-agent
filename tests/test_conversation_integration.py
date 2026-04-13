@@ -237,7 +237,9 @@ def _successful_analysis_state(mods) -> dict:
     state = orchestrator.orchestrator_node(state, planner_llm, available_actions)
     assert state["next_action"] == "generate_code"
 
-    code_llm = _SeqLLM(["```python\nprint(df.head())\n```"])
+    code_llm = _SeqLLM([
+        '{"response_type":"code_result","summary":"Shows the first rows of df.","assumptions":"","code":"print(df.head())"}'
+    ])
     state = _run_action(state, "generate_code", generate_code.generate_code_node, code_llm, "Available columns:\n- x")
 
     state = orchestrator.orchestrator_node(state, _SeqLLM([]), available_actions)

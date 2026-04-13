@@ -7,6 +7,12 @@ def _dismiss_interrupt(interrupt_id):
 def ui_before_run_review(app, config, payload, interrupt_id, queue_resume):
     ui_type = "before_run_review"
     st.subheader("🔍 Review Code Before Execution")
+    if payload.get("code_summary"):
+        st.caption("What this code does:")
+        st.markdown(payload["code_summary"])
+    if payload.get("code_assumptions"):
+        st.caption("Assumptions:")
+        st.markdown(payload["code_assumptions"])
     st.code(payload["generated_code"], language="python")
 
     confirm_key = f"confirm_approve_{ui_type}"

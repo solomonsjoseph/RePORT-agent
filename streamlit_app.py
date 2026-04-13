@@ -22,11 +22,13 @@ from UI.load_anthropic import load_anthropic
 from utils.openai_models import list_supported_openai_chat_models
 from utils.execution_mode import (
     apply_execution_mode,
+    allow_trusted_local_policy_blocked,
     current_execution_mode,
     docker_available,
 )
 from utils.streamlit_config import (
     ANTHROPIC_API_VERSION,
+    DEFAULT_ALLOW_TRUSTED_LOCAL_POLICY_BLOCKED,
     DEFAULT_ANTHROPIC_MODEL,
     DEFAULT_API_KEY,
     DEFAULT_BASE_URL,
@@ -48,6 +50,12 @@ from utils.streamlit_config import (
 )
 from utils.run_manager import GraphRunManager
 from utils.export_thread import build_thread_export
+from utils.message_window import compact_messages
+from utils.streamlit_interrupts import (
+    blocking_review_notice,
+    should_block_chat_submission,
+    should_render_review_interrupt,
+)
 # --------------------------
 # Streamlit Config
 # --------------------------
@@ -111,10 +119,24 @@ execution_mode = st.sidebar.selectbox(
 
 apply_execution_mode(execution_mode)
 
+allow_policy_blocked_trusted_local = st.sidebar.checkbox(
+    "Allow policy-blocked operations in trusted local",
+    value=allow_trusted_local_policy_blocked() if "ALLOW_TRUSTED_LOCAL_POLICY_BLOCKED" in os.environ else DEFAULT_ALLOW_TRUSTED_LOCAL_POLICY_BLOCKED,
+    help=(
+        "Only affects trusted local execution. When enabled, trusted-local runs "
+        "may proceed past filesystem-mutation policy checks instead of stopping "
+        "immediately."
+    ),
+    disabled=execution_mode != "trusted_local",
+)
+os.environ["ALLOW_TRUSTED_LOCAL_POLICY_BLOCKED"] = (
+    "1" if allow_policy_blocked_trusted_local else "0"
+)
+
 if docker_available():
     st.sidebar.caption("Docker detected on PATH.")
 else:
-    st.sidebar.warning("Docker is not available on PATH.")
+    st.sidebar.warning("Docker is not available on PATH. Stick to `trsusted_local`.")
     if execution_mode == "docker":
         st.sidebar.info("Switch to `trusted_local` to run code without Docker.")
 
@@ -393,7 +415,7 @@ if pending_resume:
 #     )
 
 if state and state.get("messages"):
-    st.session_state.chat_history = state["messages"]
+    st.session_state.chat_history = compact_messages(state["messages"])
 
 latest_chat_is_human = bool(st.session_state.chat_history) and isinstance(
     st.session_state.chat_history[-1], HumanMessage
@@ -451,19 +473,18 @@ if show_debug_state:
     if interrupt_event:
         st.write("Interrupt event is:", interrupt_event)
 
-should_render_interrupt = False
-if interrupt_event and str(interrupt_event.id) != dismissed_interrupt_id:
+should_render_interrupt = should_render_review_interrupt(
+    interrupt_event,
+    dismissed_interrupt_id=dismissed_interrupt_id,
+    review_state=review_state,
+)
+interrupt_id = None
+payload = None
+ui_type = None
+if should_render_interrupt:
     interrupt_id = interrupt_event.id
     payload = interrupt_event.value
     ui_type = payload["type"]
-    if ui_type == "before_run_review":
-        should_render_interrupt = review_state.get("before_run_decision") is None
-    elif ui_type == "after_error_review":
-        should_render_interrupt = review_state.get("after_error_decision") is None
-    elif ui_type == "final_review":
-        should_render_interrupt = review_state.get("final_decision") is None
-    else:
-        should_render_interrupt = True
 
     # --------------------------------------------------------
     # Review BEFORE execution
@@ -502,13 +523,26 @@ if analysis_ready:
     st.success("Analysis completed")
 
 with st.container():
+    chat_submission_blocked = should_block_chat_submission(
+        interrupt_event,
+        dismissed_interrupt_id=dismissed_interrupt_id,
+        review_state=review_state,
+    )
+    review_notice = blocking_review_notice(
+        interrupt_event,
+        dismissed_interrupt_id=dismissed_interrupt_id,
+        review_state=review_state,
+    )
+    if review_notice:
+        st.info(review_notice)
     with st.form("question_form", clear_on_submit=True):
         user_text = st.text_input(
             "Ask a question about your dataset!",
             placeholder="Ask a question about your dataset!",
             label_visibility="collapsed",
+            disabled=chat_submission_blocked,
         )
-        submitted_question = st.form_submit_button("Send")
+        submitted_question = st.form_submit_button("Send", disabled=chat_submission_blocked)
 
     action_col, save_col = st.columns([1, 1])
     with action_col:
@@ -526,7 +560,7 @@ with st.container():
             help="Download this thread's conversation, generated code, output text, and figure as a ZIP archive.",
         )
 
-if submitted_question and user_text:
+if submitted_question and user_text and not chat_submission_blocked:
     user_message = HumanMessage(content=user_text)
     st.session_state.chat_history.append(user_message)
 

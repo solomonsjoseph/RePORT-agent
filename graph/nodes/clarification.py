@@ -7,6 +7,7 @@ from ..workflow_config import (
     CLARIFICATION_RECENT_TURNS,
     CLARIFICATION_WITH_PENDING_RECENT_TURNS,
 )
+from .generate_code import generate_code_node
 from .qa import qa_node
 from .state_helpers import (
     clear_clarification_meta,
@@ -117,5 +118,8 @@ def clarification_node(state: AgentState, llm, context: str = "") -> AgentState:
         **state,
         "meta": clear_clarification_meta(meta),
     }
+
+    if meta.get(MetaKeys.CLARIFICATION_RETURN_NODE) == "generate_code":
+        return generate_code_node(resumed_state, llm, context)
 
     return qa_node(resumed_state, llm, context, question_override=effective_question)

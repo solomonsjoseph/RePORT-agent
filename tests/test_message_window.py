@@ -104,3 +104,10 @@ def test_single_turn_returns_that_turn() -> None:
     assert len(result) == 2
     assert result[0].content == "hello"
     assert result[1].content == "hi"
+
+
+def test_window_messages_drops_blank_ai_messages() -> None:
+    window_messages = _fresh_window_messages()
+    msgs = [_HumanMessage("q1"), _AIMessage(""), _HumanMessage("q2"), _AIMessage("a2")]
+    result = window_messages(msgs, max_turns=10)
+    assert [msg.content for msg in result] == ["q1", "q2", "a2"]

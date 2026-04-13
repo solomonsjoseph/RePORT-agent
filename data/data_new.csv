@@ -1,0 +1,1001 @@
+subject_id,sex,age,is_smoke,ever_had_active_tb,is_hiv_positive,has_diabetes,tb_status,tb_site,treatment_adherence,relapsed,event_relapse,time_to_relapse
+1,Male,51,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+2,Female,35,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+3,Male,52,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+4,Male,52,Yes,Yes,No,No,Active TB,Pulmonary,Good,No,0.0,35.1
+5,Male,18,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+6,Male,38,No,No,No,No,LTBI,N/A,N/A,N/A,,
+7,Male,39,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+8,Male,36,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+9,Male,29,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+10,Female,68,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+11,Male,43,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+12,Female,63,No,No,Yes,No,TB Negative,N/A,N/A,N/A,,
+13,Male,31,No,Yes,No,No,TB Negative,Pulmonary,Good,No,0.0,35.7
+14,Female,24,No,No,No,No,LTBI,N/A,N/A,N/A,,
+15,Male,42,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+16,Female,32,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+17,Male,76,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+18,Female,44,No,No,No,No,Active TB,N/A,N/A,N/A,,
+19,Male,57,No,No,No,No,Active TB,N/A,N/A,N/A,,
+20,Male,37,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+21,Female,35,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+22,Female,40,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+23,Male,45,Yes,Yes,No,No,Active TB,Extrapulmonary,Good,No,0.0,22.6
+24,Female,53,No,No,Yes,Yes,Active TB,N/A,N/A,N/A,,
+25,Female,38,No,Yes,No,No,LTBI,Extrapulmonary,Poor,No,0.0,33.2
+26,Female,30,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+27,Male,24,No,No,No,No,Active TB,N/A,N/A,N/A,,
+28,Male,39,No,No,No,No,Active TB,N/A,N/A,N/A,,
+29,Male,49,No,Yes,No,No,Active TB,Pulmonary,Moderate,No,0.0,21.2
+30,Female,47,Yes,No,No,No,Active TB,N/A,N/A,N/A,,
+31,Male,40,No,Yes,No,No,TB Negative,Pulmonary,Moderate,No,0.0,27.8
+32,Male,31,No,No,No,No,Active TB,N/A,N/A,N/A,,
+33,Female,42,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+34,Female,49,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+35,Female,39,No,No,No,No,LTBI,N/A,N/A,N/A,,
+36,Male,42,Yes,No,No,No,LTBI,N/A,N/A,N/A,,
+37,Female,38,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+38,Female,54,Yes,Yes,No,No,LTBI,Pulmonary,Good,Yes,1.0,26.6
+39,Male,33,No,No,No,No,LTBI,N/A,N/A,N/A,,
+40,Female,43,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+41,Female,46,No,Yes,No,No,Active TB,Pulmonary,Good,No,0.0,18.2
+42,Female,51,Yes,No,No,No,LTBI,N/A,N/A,N/A,,
+43,Male,62,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+44,Female,50,No,No,No,No,LTBI,N/A,N/A,N/A,,
+45,Male,49,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+46,Male,18,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+47,Female,49,No,Yes,No,No,LTBI,Pulmonary,Moderate,No,0.0,29.0
+48,Male,74,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+49,Male,28,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+50,Male,25,No,No,No,No,Active TB,N/A,N/A,N/A,,
+51,Male,37,No,No,No,No,LTBI,N/A,N/A,N/A,,
+52,Female,55,No,No,No,No,LTBI,N/A,N/A,N/A,,
+53,Male,48,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+54,Male,33,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+55,Male,39,No,Yes,No,Yes,Active TB,Pulmonary,Good,Yes,1.0,30.9
+56,Male,56,No,No,Yes,No,Active TB,N/A,N/A,N/A,,
+57,Female,50,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+58,Male,76,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+59,Female,55,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+60,Female,45,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+61,Male,49,No,No,No,No,Active TB,N/A,N/A,N/A,,
+62,Male,35,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+63,Female,25,Yes,No,No,No,LTBI,N/A,N/A,N/A,,
+64,Male,43,No,No,No,No,LTBI,N/A,N/A,N/A,,
+65,Male,47,Yes,No,No,No,LTBI,N/A,N/A,N/A,,
+66,Female,19,No,No,No,No,LTBI,N/A,N/A,N/A,,
+67,Female,32,No,No,No,Yes,TB Negative,N/A,N/A,N/A,,
+68,Female,34,No,No,No,No,LTBI,N/A,N/A,N/A,,
+69,Female,44,No,No,No,No,LTBI,N/A,N/A,N/A,,
+70,Female,36,No,Yes,No,No,LTBI,Pulmonary,Good,No,0.0,35.7
+71,Female,47,No,No,No,No,LTBI,N/A,N/A,N/A,,
+72,Male,41,No,No,Yes,No,TB Negative,N/A,N/A,N/A,,
+73,Male,56,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+74,Female,18,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+75,Male,65,No,Yes,No,No,TB Negative,Extrapulmonary,Moderate,No,0.0,22.1
+76,Male,61,No,Yes,No,Yes,TB Negative,Pulmonary,Good,No,0.0,30.3
+77,Female,41,No,No,No,No,LTBI,N/A,N/A,N/A,,
+78,Male,50,Yes,Yes,Yes,Yes,Active TB,Extrapulmonary,Good,No,0.0,24.6
+79,Female,49,Yes,Yes,No,No,TB Negative,Pulmonary,Poor,Yes,1.0,5.1
+80,Female,29,Yes,Yes,No,No,Active TB,Pulmonary,Poor,Yes,1.0,12.8
+81,Female,42,No,Yes,No,No,Active TB,Pulmonary,Good,No,0.0,29.4
+82,Female,52,Yes,Yes,No,No,Active TB,Pulmonary,Good,No,0.0,24.7
+83,Female,45,No,No,No,Yes,LTBI,N/A,N/A,N/A,,
+84,Male,56,Yes,No,No,Yes,LTBI,N/A,N/A,N/A,,
+85,Male,41,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+86,Female,41,No,No,Yes,No,TB Negative,N/A,N/A,N/A,,
+87,Male,28,Yes,No,No,No,LTBI,N/A,N/A,N/A,,
+88,Female,35,No,No,No,No,Active TB,N/A,N/A,N/A,,
+89,Female,33,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+90,Female,66,No,No,No,No,LTBI,N/A,N/A,N/A,,
+91,Male,44,No,Yes,No,Yes,TB Negative,Extrapulmonary,Moderate,No,0.0,18.8
+92,Female,25,No,Yes,No,No,LTBI,Pulmonary,Poor,No,0.0,23.9
+93,Male,46,Yes,Yes,No,No,LTBI,Pulmonary,Good,No,0.0,22.5
+94,Female,37,No,No,No,Yes,TB Negative,N/A,N/A,N/A,,
+95,Male,18,No,No,No,No,LTBI,N/A,N/A,N/A,,
+96,Male,47,No,No,No,No,LTBI,N/A,N/A,N/A,,
+97,Female,18,No,No,No,No,Active TB,N/A,N/A,N/A,,
+98,Female,49,No,No,No,Yes,LTBI,N/A,N/A,N/A,,
+99,Male,26,No,Yes,No,No,Active TB,Pulmonary,Moderate,No,0.0,30.3
+100,Female,18,Yes,Yes,No,No,LTBI,Pulmonary,Poor,Yes,1.0,14.9
+101,Male,47,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+102,Female,18,No,Yes,No,No,TB Negative,Pulmonary,Moderate,No,0.0,21.4
+103,Female,33,Yes,No,No,No,Active TB,N/A,N/A,N/A,,
+104,Male,43,No,No,Yes,No,TB Negative,N/A,N/A,N/A,,
+105,Female,49,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+106,Female,51,Yes,Yes,No,No,Active TB,Pulmonary,Good,No,0.0,31.3
+107,Male,39,Yes,No,No,No,Active TB,N/A,N/A,N/A,,
+108,Female,28,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+109,Female,69,No,No,No,No,LTBI,N/A,N/A,N/A,,
+110,Female,31,No,Yes,No,No,TB Negative,Pulmonary,Poor,No,0.0,32.1
+111,Male,67,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+112,Male,33,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+113,Female,57,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+114,Female,56,No,No,No,Yes,TB Negative,N/A,N/A,N/A,,
+115,Male,24,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+116,Female,45,No,No,No,No,LTBI,N/A,N/A,N/A,,
+117,Female,51,No,No,Yes,No,TB Negative,N/A,N/A,N/A,,
+118,Female,51,Yes,Yes,No,No,TB Negative,Pulmonary,Good,No,0.0,31.8
+119,Female,37,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+120,Male,45,No,No,No,No,LTBI,N/A,N/A,N/A,,
+121,Male,34,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+122,Male,22,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+123,Male,55,Yes,No,No,No,LTBI,N/A,N/A,N/A,,
+124,Male,32,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+125,Female,61,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+126,Female,49,Yes,Yes,No,No,Active TB,Pulmonary,Good,No,0.0,33.9
+127,Female,27,No,Yes,No,No,TB Negative,Pulmonary,Moderate,No,0.0,26.3
+128,Female,38,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+129,Male,36,Yes,Yes,Yes,No,Active TB,Extrapulmonary,Poor,Yes,1.0,5.4
+130,Male,27,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+131,Female,48,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+132,Female,33,No,No,No,No,LTBI,N/A,N/A,N/A,,
+133,Female,64,No,No,No,Yes,TB Negative,N/A,N/A,N/A,,
+134,Male,53,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+135,Female,27,Yes,Yes,No,No,Active TB,Pulmonary,Good,No,0.0,22.9
+136,Male,40,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+137,Female,37,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+138,Male,18,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+139,Female,54,No,No,Yes,No,TB Negative,N/A,N/A,N/A,,
+140,Female,54,No,No,No,Yes,TB Negative,N/A,N/A,N/A,,
+141,Female,54,Yes,Yes,No,No,Active TB,Pulmonary,Poor,No,0.0,20.8
+142,Male,33,Yes,Yes,No,Yes,TB Negative,Pulmonary,Good,No,0.0,28.7
+143,Male,56,No,No,No,No,LTBI,N/A,N/A,N/A,,
+144,Male,37,No,No,No,No,Active TB,N/A,N/A,N/A,,
+145,Male,54,No,No,No,No,LTBI,N/A,N/A,N/A,,
+146,Male,67,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+147,Male,42,Yes,No,Yes,No,Active TB,N/A,N/A,N/A,,
+148,Female,19,No,No,No,No,Active TB,N/A,N/A,N/A,,
+149,Female,35,Yes,Yes,No,Yes,LTBI,Extrapulmonary,Poor,No,0.0,31.1
+150,Male,50,Yes,Yes,No,No,Active TB,Pulmonary,Good,No,0.0,19.4
+151,Male,58,Yes,Yes,No,No,Active TB,Pulmonary,Moderate,No,0.0,31.7
+152,Female,23,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+153,Female,37,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+154,Male,44,No,No,Yes,No,Active TB,N/A,N/A,N/A,,
+155,Male,47,Yes,Yes,No,No,LTBI,Extrapulmonary,Good,No,0.0,27.0
+156,Female,54,Yes,No,No,No,Active TB,N/A,N/A,N/A,,
+157,Male,26,No,No,No,No,LTBI,N/A,N/A,N/A,,
+158,Female,34,No,No,No,No,LTBI,N/A,N/A,N/A,,
+159,Female,55,No,Yes,Yes,No,LTBI,Extrapulmonary,Poor,No,0.0,26.1
+160,Female,46,No,No,No,No,LTBI,N/A,N/A,N/A,,
+161,Male,47,No,No,No,No,LTBI,N/A,N/A,N/A,,
+162,Male,57,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+163,Female,42,Yes,No,No,Yes,LTBI,N/A,N/A,N/A,,
+164,Female,48,No,No,No,No,LTBI,N/A,N/A,N/A,,
+165,Male,35,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+166,Male,20,No,No,No,No,LTBI,N/A,N/A,N/A,,
+167,Male,21,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+168,Male,41,No,No,Yes,No,Active TB,N/A,N/A,N/A,,
+169,Female,37,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+170,Female,30,No,Yes,No,No,LTBI,Pulmonary,Poor,No,0.0,28.2
+171,Male,45,No,Yes,No,No,TB Negative,Pulmonary,Moderate,No,0.0,21.9
+172,Female,27,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+173,Female,42,Yes,No,No,No,Active TB,N/A,N/A,N/A,,
+174,Male,40,No,No,No,No,Active TB,N/A,N/A,N/A,,
+175,Female,27,Yes,Yes,Yes,No,Active TB,Extrapulmonary,Poor,Yes,1.0,3.4
+176,Female,18,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+177,Female,62,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+178,Male,45,No,Yes,No,No,TB Negative,Pulmonary,Good,No,0.0,25.1
+179,Male,18,No,No,No,No,LTBI,N/A,N/A,N/A,,
+180,Male,34,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+181,Female,46,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+182,Male,37,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+183,Female,49,No,No,No,No,Active TB,N/A,N/A,N/A,,
+184,Male,25,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+185,Male,43,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+186,Female,39,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+187,Male,37,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+188,Female,37,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+189,Female,43,Yes,Yes,No,No,TB Negative,Extrapulmonary,Good,No,0.0,28.4
+190,Female,54,No,No,No,No,LTBI,N/A,N/A,N/A,,
+191,Male,32,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+192,Male,34,No,No,No,No,LTBI,N/A,N/A,N/A,,
+193,Female,42,No,No,No,No,LTBI,N/A,N/A,N/A,,
+194,Female,38,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+195,Female,46,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+196,Female,51,Yes,Yes,No,No,LTBI,Pulmonary,Good,No,0.0,32.6
+197,Male,59,Yes,No,No,No,LTBI,N/A,N/A,N/A,,
+198,Male,38,No,No,No,No,LTBI,N/A,N/A,N/A,,
+199,Female,18,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+200,Female,39,Yes,No,No,No,LTBI,N/A,N/A,N/A,,
+201,Female,45,Yes,No,No,No,LTBI,N/A,N/A,N/A,,
+202,Female,37,No,No,No,No,LTBI,N/A,N/A,N/A,,
+203,Female,38,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+204,Female,18,Yes,Yes,No,No,TB Negative,Pulmonary,Moderate,No,0.0,33.0
+205,Male,48,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+206,Male,35,No,No,No,No,Active TB,N/A,N/A,N/A,,
+207,Female,18,No,Yes,No,No,TB Negative,Pulmonary,Moderate,No,0.0,20.6
+208,Female,27,No,No,Yes,No,Active TB,N/A,N/A,N/A,,
+209,Female,27,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+210,Female,49,No,No,No,No,Active TB,N/A,N/A,N/A,,
+211,Male,48,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+212,Female,63,No,Yes,No,No,Active TB,Pulmonary,Poor,No,0.0,35.9
+213,Male,50,No,No,No,No,LTBI,N/A,N/A,N/A,,
+214,Male,20,No,No,No,No,Active TB,N/A,N/A,N/A,,
+215,Male,19,Yes,Yes,Yes,No,Active TB,Pulmonary,Good,No,0.0,31.3
+216,Female,57,No,No,No,No,LTBI,N/A,N/A,N/A,,
+217,Male,64,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+218,Female,36,Yes,No,No,No,Active TB,N/A,N/A,N/A,,
+219,Female,48,No,No,No,No,LTBI,N/A,N/A,N/A,,
+220,Male,18,Yes,Yes,No,No,TB Negative,Pulmonary,Moderate,No,0.0,25.3
+221,Male,18,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+222,Male,22,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+223,Male,35,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+224,Female,32,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+225,Male,37,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+226,Female,33,Yes,No,No,No,LTBI,N/A,N/A,N/A,,
+227,Female,50,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+228,Female,61,No,No,No,Yes,TB Negative,N/A,N/A,N/A,,
+229,Female,41,No,No,No,No,LTBI,N/A,N/A,N/A,,
+230,Female,70,No,No,No,No,Active TB,N/A,N/A,N/A,,
+231,Male,30,No,Yes,Yes,No,Active TB,Extrapulmonary,Good,No,0.0,23.4
+232,Female,32,Yes,Yes,Yes,No,Active TB,Pulmonary,Poor,No,0.0,18.8
+233,Female,46,No,Yes,No,No,TB Negative,Pulmonary,Moderate,No,0.0,26.2
+234,Male,35,No,No,No,No,LTBI,N/A,N/A,N/A,,
+235,Male,58,Yes,No,No,No,Active TB,N/A,N/A,N/A,,
+236,Female,30,Yes,No,Yes,No,TB Negative,N/A,N/A,N/A,,
+237,Male,60,No,Yes,No,No,LTBI,Pulmonary,Good,No,0.0,31.0
+238,Female,43,No,Yes,No,No,TB Negative,Pulmonary,Good,No,0.0,22.5
+239,Male,78,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+240,Female,33,Yes,No,No,No,LTBI,N/A,N/A,N/A,,
+241,Male,37,Yes,Yes,No,No,TB Negative,Pulmonary,Good,No,0.0,30.1
+242,Female,42,No,No,No,No,Active TB,N/A,N/A,N/A,,
+243,Female,18,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+244,Male,49,No,No,Yes,No,Active TB,N/A,N/A,N/A,,
+245,Female,47,No,No,No,No,Active TB,N/A,N/A,N/A,,
+246,Female,42,Yes,Yes,No,No,Active TB,Extrapulmonary,Good,No,0.0,26.5
+247,Male,18,Yes,No,Yes,No,Active TB,N/A,N/A,N/A,,
+248,Male,18,Yes,Yes,No,No,Active TB,Pulmonary,Moderate,No,0.0,32.2
+249,Female,49,No,No,No,No,LTBI,N/A,N/A,N/A,,
+250,Female,58,No,No,No,No,LTBI,N/A,N/A,N/A,,
+251,Male,64,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+252,Female,27,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+253,Male,25,Yes,Yes,No,No,TB Negative,Pulmonary,Poor,No,0.0,33.4
+254,Female,36,No,No,No,Yes,LTBI,N/A,N/A,N/A,,
+255,Female,18,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+256,Female,31,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+257,Female,53,No,Yes,No,No,Active TB,Extrapulmonary,Good,No,0.0,32.0
+258,Female,65,No,No,No,No,LTBI,N/A,N/A,N/A,,
+259,Male,44,No,No,No,No,Active TB,N/A,N/A,N/A,,
+260,Female,65,Yes,No,No,Yes,TB Negative,N/A,N/A,N/A,,
+261,Female,46,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+262,Female,43,Yes,Yes,No,Yes,Active TB,Pulmonary,Good,Yes,1.0,26.0
+263,Female,37,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+264,Female,43,No,Yes,No,Yes,TB Negative,Pulmonary,Good,No,0.0,22.5
+265,Female,36,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+266,Male,38,No,No,No,Yes,TB Negative,N/A,N/A,N/A,,
+267,Female,30,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+268,Male,44,No,No,No,No,LTBI,N/A,N/A,N/A,,
+269,Male,40,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+270,Male,18,Yes,Yes,No,No,Active TB,Pulmonary,Good,Yes,1.0,25.2
+271,Male,36,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+272,Male,27,Yes,No,No,No,Active TB,N/A,N/A,N/A,,
+273,Female,18,No,No,No,No,LTBI,N/A,N/A,N/A,,
+274,Male,47,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+275,Female,63,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+276,Female,76,No,Yes,No,Yes,TB Negative,Pulmonary,Moderate,No,0.0,19.7
+277,Male,63,No,No,No,Yes,TB Negative,N/A,N/A,N/A,,
+278,Male,27,No,Yes,No,No,TB Negative,Pulmonary,Moderate,No,0.0,33.9
+279,Male,58,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+280,Female,57,Yes,No,No,Yes,LTBI,N/A,N/A,N/A,,
+281,Female,18,No,Yes,No,No,Active TB,Pulmonary,Good,No,0.0,35.8
+282,Female,53,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+283,Female,49,Yes,Yes,Yes,No,Active TB,Pulmonary,Good,No,0.0,28.5
+284,Male,42,No,No,No,No,Active TB,N/A,N/A,N/A,,
+285,Male,44,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+286,Female,41,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+287,Female,64,Yes,Yes,No,No,Active TB,Pulmonary,Poor,Yes,1.0,1.0
+288,Female,34,Yes,No,No,Yes,TB Negative,N/A,N/A,N/A,,
+289,Female,37,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+290,Female,40,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+291,Female,44,No,No,No,No,LTBI,N/A,N/A,N/A,,
+292,Female,18,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+293,Female,61,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+294,Male,43,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+295,Male,49,No,Yes,No,No,Active TB,Pulmonary,Good,No,0.0,31.7
+296,Male,43,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+297,Male,37,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+298,Male,35,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+299,Female,41,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+300,Male,42,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+301,Female,57,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+302,Female,45,Yes,Yes,No,Yes,TB Negative,Pulmonary,Good,Yes,1.0,28.7
+303,Female,38,No,No,No,No,LTBI,N/A,N/A,N/A,,
+304,Female,70,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+305,Male,21,No,No,No,Yes,TB Negative,N/A,N/A,N/A,,
+306,Male,20,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+307,Male,45,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+308,Male,37,Yes,Yes,No,No,LTBI,Extrapulmonary,Moderate,No,0.0,27.2
+309,Female,18,No,Yes,No,No,Active TB,Pulmonary,Poor,No,0.0,19.0
+310,Male,35,No,No,No,No,LTBI,N/A,N/A,N/A,,
+311,Female,29,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+312,Female,57,Yes,No,No,No,Active TB,N/A,N/A,N/A,,
+313,Male,31,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+314,Male,56,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+315,Male,47,No,No,Yes,No,TB Negative,N/A,N/A,N/A,,
+316,Male,37,No,No,No,Yes,LTBI,N/A,N/A,N/A,,
+317,Female,40,No,No,No,No,LTBI,N/A,N/A,N/A,,
+318,Male,46,No,No,No,No,LTBI,N/A,N/A,N/A,,
+319,Male,18,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+320,Female,45,Yes,No,Yes,No,Active TB,N/A,N/A,N/A,,
+321,Male,34,No,No,No,Yes,TB Negative,N/A,N/A,N/A,,
+322,Female,67,No,No,No,No,LTBI,N/A,N/A,N/A,,
+323,Male,30,Yes,Yes,No,No,TB Negative,Pulmonary,Good,No,0.0,32.6
+324,Male,57,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+325,Female,18,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+326,Male,52,Yes,Yes,No,Yes,LTBI,Pulmonary,Poor,Yes,1.0,9.0
+327,Male,44,No,No,No,No,LTBI,N/A,N/A,N/A,,
+328,Female,36,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+329,Female,38,No,No,No,No,LTBI,N/A,N/A,N/A,,
+330,Female,36,No,Yes,No,No,LTBI,Pulmonary,Moderate,No,0.0,18.7
+331,Male,46,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+332,Female,38,No,No,No,Yes,TB Negative,N/A,N/A,N/A,,
+333,Male,18,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+334,Female,37,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+335,Female,74,No,Yes,No,No,Active TB,Pulmonary,Poor,Yes,1.0,15.9
+336,Male,41,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+337,Male,44,No,Yes,No,No,TB Negative,Extrapulmonary,Good,No,0.0,28.8
+338,Female,33,No,No,No,No,Active TB,N/A,N/A,N/A,,
+339,Female,43,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+340,Female,43,No,Yes,No,No,Active TB,Pulmonary,Good,No,0.0,30.1
+341,Female,36,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+342,Female,53,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+343,Female,26,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+344,Female,38,No,No,No,No,LTBI,N/A,N/A,N/A,,
+345,Male,48,No,No,No,No,Active TB,N/A,N/A,N/A,,
+346,Female,36,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+347,Female,22,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+348,Female,48,No,Yes,No,No,TB Negative,Pulmonary,Moderate,No,0.0,20.7
+349,Female,25,No,No,No,Yes,LTBI,N/A,N/A,N/A,,
+350,Male,33,No,No,No,No,LTBI,N/A,N/A,N/A,,
+351,Female,28,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+352,Female,38,Yes,Yes,No,No,LTBI,Pulmonary,Good,No,0.0,34.0
+353,Male,34,No,No,No,No,LTBI,N/A,N/A,N/A,,
+354,Male,33,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+355,Female,50,Yes,Yes,No,No,LTBI,Extrapulmonary,Good,No,0.0,29.8
+356,Male,66,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+357,Female,35,No,No,No,No,LTBI,N/A,N/A,N/A,,
+358,Male,48,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+359,Female,35,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+360,Female,41,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+361,Male,57,Yes,No,Yes,Yes,Active TB,N/A,N/A,N/A,,
+362,Male,41,No,No,No,No,Active TB,N/A,N/A,N/A,,
+363,Female,28,Yes,Yes,No,No,TB Negative,Pulmonary,Moderate,No,0.0,22.7
+364,Female,29,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+365,Female,31,No,No,No,No,LTBI,N/A,N/A,N/A,,
+366,Female,40,No,No,No,No,LTBI,N/A,N/A,N/A,,
+367,Female,53,No,No,No,No,LTBI,N/A,N/A,N/A,,
+368,Female,20,Yes,Yes,No,No,TB Negative,Pulmonary,Poor,Yes,1.0,11.5
+369,Female,24,No,No,No,No,LTBI,N/A,N/A,N/A,,
+370,Male,26,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+371,Male,18,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+372,Male,60,No,Yes,No,No,TB Negative,Extrapulmonary,Moderate,No,0.0,34.8
+373,Male,39,No,No,No,No,LTBI,N/A,N/A,N/A,,
+374,Female,69,Yes,No,No,Yes,Active TB,N/A,N/A,N/A,,
+375,Male,19,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+376,Male,59,No,Yes,No,No,TB Negative,Pulmonary,Poor,No,0.0,19.4
+377,Female,29,No,Yes,No,No,TB Negative,Pulmonary,Moderate,No,0.0,26.8
+378,Female,34,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+379,Female,25,No,Yes,No,No,LTBI,Pulmonary,Good,No,0.0,23.2
+380,Male,26,No,No,No,No,LTBI,N/A,N/A,N/A,,
+381,Male,20,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+382,Female,43,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+383,Female,20,Yes,No,No,Yes,Active TB,N/A,N/A,N/A,,
+384,Male,36,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+385,Male,40,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+386,Male,50,Yes,Yes,No,Yes,Active TB,Pulmonary,Good,No,0.0,24.2
+387,Female,42,No,No,No,No,LTBI,N/A,N/A,N/A,,
+388,Male,45,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+389,Male,48,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+390,Female,40,Yes,No,No,No,Active TB,N/A,N/A,N/A,,
+391,Male,45,Yes,No,No,Yes,TB Negative,N/A,N/A,N/A,,
+392,Female,25,No,Yes,No,No,Active TB,Pulmonary,Moderate,No,0.0,24.2
+393,Male,28,No,No,No,No,LTBI,N/A,N/A,N/A,,
+394,Male,68,No,Yes,No,Yes,LTBI,Pulmonary,Moderate,No,0.0,21.3
+395,Female,40,Yes,Yes,No,No,TB Negative,Pulmonary,Good,No,0.0,28.3
+396,Female,29,No,No,No,No,Active TB,N/A,N/A,N/A,,
+397,Male,61,No,No,No,No,LTBI,N/A,N/A,N/A,,
+398,Female,38,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+399,Female,30,No,No,Yes,No,LTBI,N/A,N/A,N/A,,
+400,Female,18,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+401,Female,52,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+402,Female,24,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+403,Male,32,No,Yes,No,No,LTBI,Pulmonary,Moderate,No,0.0,25.9
+404,Female,50,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+405,Male,43,No,Yes,No,No,Active TB,Pulmonary,Good,No,0.0,35.8
+406,Female,39,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+407,Male,37,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+408,Male,57,No,No,No,Yes,LTBI,N/A,N/A,N/A,,
+409,Male,73,No,Yes,No,No,LTBI,Extrapulmonary,Good,No,0.0,31.6
+410,Male,32,No,No,No,No,LTBI,N/A,N/A,N/A,,
+411,Male,49,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+412,Female,69,No,No,No,No,Active TB,N/A,N/A,N/A,,
+413,Female,56,No,No,No,No,Active TB,N/A,N/A,N/A,,
+414,Female,30,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+415,Female,34,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+416,Male,31,No,No,No,No,Active TB,N/A,N/A,N/A,,
+417,Female,26,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+418,Male,31,Yes,Yes,No,No,Active TB,Pulmonary,Poor,No,0.0,32.6
+419,Female,44,No,Yes,Yes,No,Active TB,Extrapulmonary,Good,No,0.0,18.0
+420,Female,31,No,No,No,Yes,TB Negative,N/A,N/A,N/A,,
+421,Male,53,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+422,Male,42,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+423,Male,34,No,No,No,No,LTBI,N/A,N/A,N/A,,
+424,Male,53,No,No,No,No,Active TB,N/A,N/A,N/A,,
+425,Male,45,No,No,No,No,LTBI,N/A,N/A,N/A,,
+426,Male,44,No,Yes,No,No,TB Negative,Extrapulmonary,Poor,No,0.0,24.3
+427,Male,56,No,No,No,No,LTBI,N/A,N/A,N/A,,
+428,Female,49,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+429,Male,38,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+430,Female,54,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+431,Male,45,No,No,No,No,LTBI,N/A,N/A,N/A,,
+432,Male,84,No,Yes,No,No,Active TB,Pulmonary,Moderate,Yes,1.0,6.7
+433,Male,56,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+434,Male,57,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+435,Female,59,No,No,No,Yes,TB Negative,N/A,N/A,N/A,,
+436,Male,41,Yes,Yes,No,No,TB Negative,Pulmonary,Good,No,0.0,18.2
+437,Female,60,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+438,Male,40,No,No,Yes,Yes,Active TB,N/A,N/A,N/A,,
+439,Female,28,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+440,Male,32,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+441,Female,48,Yes,Yes,No,No,LTBI,Pulmonary,Good,No,0.0,27.6
+442,Male,18,Yes,Yes,No,No,Active TB,Pulmonary,Moderate,No,0.0,22.1
+443,Female,43,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+444,Male,29,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+445,Female,51,Yes,No,No,No,Active TB,N/A,N/A,N/A,,
+446,Female,29,No,Yes,No,No,Active TB,Pulmonary,Good,No,0.0,30.5
+447,Female,68,No,No,No,Yes,TB Negative,N/A,N/A,N/A,,
+448,Female,52,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+449,Male,21,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+450,Male,66,Yes,No,No,Yes,TB Negative,N/A,N/A,N/A,,
+451,Male,37,No,No,No,No,LTBI,N/A,N/A,N/A,,
+452,Female,29,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+453,Female,25,No,No,No,No,LTBI,N/A,N/A,N/A,,
+454,Female,49,No,Yes,No,No,TB Negative,Extrapulmonary,Good,No,0.0,29.4
+455,Female,63,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+456,Female,31,No,No,No,No,LTBI,N/A,N/A,N/A,,
+457,Female,25,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+458,Male,23,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+459,Male,62,No,No,No,No,LTBI,N/A,N/A,N/A,,
+460,Male,65,No,Yes,No,Yes,TB Negative,Pulmonary,Good,No,0.0,29.4
+461,Male,35,No,No,No,No,LTBI,N/A,N/A,N/A,,
+462,Female,48,Yes,No,No,No,Active TB,N/A,N/A,N/A,,
+463,Male,40,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+464,Male,39,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+465,Female,54,Yes,No,No,Yes,TB Negative,N/A,N/A,N/A,,
+466,Male,47,Yes,Yes,No,No,Active TB,Pulmonary,Good,No,0.0,35.9
+467,Female,45,No,Yes,No,No,LTBI,Pulmonary,Good,No,0.0,27.9
+468,Male,36,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+469,Female,52,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+470,Male,36,No,No,No,No,LTBI,N/A,N/A,N/A,,
+471,Female,41,Yes,No,No,No,LTBI,N/A,N/A,N/A,,
+472,Male,43,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+473,Male,22,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+474,Female,36,No,Yes,No,No,LTBI,Pulmonary,Moderate,No,0.0,31.8
+475,Female,35,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+476,Male,42,No,No,No,No,LTBI,N/A,N/A,N/A,,
+477,Female,23,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+478,Female,22,Yes,Yes,No,No,Active TB,Pulmonary,Moderate,No,0.0,20.0
+479,Male,64,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+480,Female,57,Yes,No,No,No,Active TB,N/A,N/A,N/A,,
+481,Male,53,No,Yes,No,No,TB Negative,Extrapulmonary,Poor,No,0.0,26.1
+482,Female,67,No,No,No,No,LTBI,N/A,N/A,N/A,,
+483,Female,46,Yes,Yes,No,No,Active TB,Pulmonary,Good,No,0.0,18.5
+484,Female,39,Yes,No,No,Yes,LTBI,N/A,N/A,N/A,,
+485,Male,47,No,No,No,Yes,Active TB,N/A,N/A,N/A,,
+486,Female,18,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+487,Male,24,No,No,No,Yes,TB Negative,N/A,N/A,N/A,,
+488,Male,51,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+489,Female,40,No,No,No,Yes,LTBI,N/A,N/A,N/A,,
+490,Male,21,Yes,No,No,No,LTBI,N/A,N/A,N/A,,
+491,Female,50,No,No,No,No,Active TB,N/A,N/A,N/A,,
+492,Female,55,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+493,Male,50,No,No,No,Yes,TB Negative,N/A,N/A,N/A,,
+494,Male,40,No,Yes,No,Yes,Active TB,Pulmonary,Good,Yes,1.0,23.5
+495,Male,27,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+496,Female,42,Yes,No,No,No,LTBI,N/A,N/A,N/A,,
+497,Female,46,Yes,No,No,No,LTBI,N/A,N/A,N/A,,
+498,Female,35,No,No,No,Yes,TB Negative,N/A,N/A,N/A,,
+499,Female,49,Yes,No,No,No,Active TB,N/A,N/A,N/A,,
+500,Male,45,No,No,No,No,Active TB,N/A,N/A,N/A,,
+501,Male,45,No,No,No,No,Active TB,N/A,N/A,N/A,,
+502,Male,18,Yes,Yes,No,No,TB Negative,Pulmonary,Moderate,No,0.0,34.4
+503,Male,56,No,No,No,No,Active TB,N/A,N/A,N/A,,
+504,Male,66,No,No,No,Yes,TB Negative,N/A,N/A,N/A,,
+505,Female,34,Yes,Yes,Yes,No,Active TB,Pulmonary,Moderate,Yes,1.0,15.6
+506,Male,18,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+507,Female,50,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+508,Male,33,Yes,No,No,No,Active TB,N/A,N/A,N/A,,
+509,Female,25,Yes,Yes,No,No,Active TB,Pulmonary,Poor,Yes,1.0,16.1
+510,Male,58,No,No,No,No,LTBI,N/A,N/A,N/A,,
+511,Female,19,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+512,Male,51,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+513,Male,21,No,No,No,No,LTBI,N/A,N/A,N/A,,
+514,Male,62,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+515,Female,48,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+516,Male,36,Yes,Yes,No,No,LTBI,Pulmonary,Moderate,No,0.0,26.5
+517,Female,42,No,No,No,No,LTBI,N/A,N/A,N/A,,
+518,Male,49,Yes,Yes,Yes,No,Active TB,Pulmonary,Moderate,Yes,1.0,19.4
+519,Female,52,No,No,No,No,LTBI,N/A,N/A,N/A,,
+520,Female,52,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+521,Female,48,No,No,No,Yes,TB Negative,N/A,N/A,N/A,,
+522,Female,33,Yes,No,No,No,Active TB,N/A,N/A,N/A,,
+523,Female,50,No,No,No,No,LTBI,N/A,N/A,N/A,,
+524,Female,20,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+525,Female,55,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+526,Male,53,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+527,Male,61,Yes,Yes,Yes,No,Active TB,Pulmonary,Good,No,0.0,18.8
+528,Male,31,No,No,No,No,Active TB,N/A,N/A,N/A,,
+529,Male,43,No,No,No,No,LTBI,N/A,N/A,N/A,,
+530,Male,53,No,No,No,No,LTBI,N/A,N/A,N/A,,
+531,Female,45,Yes,Yes,No,Yes,TB Negative,Pulmonary,Moderate,No,0.0,25.9
+532,Male,34,Yes,Yes,No,No,Active TB,Pulmonary,Good,No,0.0,29.0
+533,Female,45,Yes,No,Yes,No,Active TB,N/A,N/A,N/A,,
+534,Female,41,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+535,Female,55,No,No,No,Yes,TB Negative,N/A,N/A,N/A,,
+536,Female,31,No,No,No,No,Active TB,N/A,N/A,N/A,,
+537,Female,45,Yes,Yes,No,No,TB Negative,Pulmonary,Good,No,0.0,30.2
+538,Male,44,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+539,Male,51,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+540,Male,39,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+541,Male,42,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+542,Female,39,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+543,Male,41,Yes,No,Yes,No,Active TB,N/A,N/A,N/A,,
+544,Male,40,No,No,No,No,LTBI,N/A,N/A,N/A,,
+545,Male,35,No,No,No,No,LTBI,N/A,N/A,N/A,,
+546,Male,82,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+547,Female,27,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+548,Male,22,Yes,Yes,No,No,LTBI,Pulmonary,Moderate,No,0.0,35.8
+549,Female,28,No,No,Yes,No,TB Negative,N/A,N/A,N/A,,
+550,Male,29,No,No,No,No,LTBI,N/A,N/A,N/A,,
+551,Male,40,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+552,Female,61,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+553,Female,65,No,No,No,No,LTBI,N/A,N/A,N/A,,
+554,Male,44,No,No,No,No,Active TB,N/A,N/A,N/A,,
+555,Male,18,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+556,Male,46,No,No,No,No,Active TB,N/A,N/A,N/A,,
+557,Female,20,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+558,Female,32,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+559,Female,23,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+560,Male,46,No,No,Yes,No,Active TB,N/A,N/A,N/A,,
+561,Male,31,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+562,Female,52,Yes,Yes,No,No,TB Negative,Pulmonary,Good,No,0.0,18.9
+563,Female,47,No,No,No,No,LTBI,N/A,N/A,N/A,,
+564,Male,36,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+565,Female,41,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+566,Female,54,No,No,No,No,LTBI,N/A,N/A,N/A,,
+567,Male,34,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+568,Female,54,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+569,Female,40,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+570,Male,44,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+571,Male,52,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+572,Female,60,Yes,No,No,Yes,TB Negative,N/A,N/A,N/A,,
+573,Female,48,No,Yes,No,No,Active TB,Pulmonary,Moderate,No,0.0,19.5
+574,Female,41,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+575,Female,51,No,Yes,No,No,Active TB,Extrapulmonary,Moderate,No,0.0,34.0
+576,Female,18,No,No,No,No,LTBI,N/A,N/A,N/A,,
+577,Male,65,No,No,No,No,Active TB,N/A,N/A,N/A,,
+578,Female,20,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+579,Female,54,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+580,Male,32,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+581,Female,48,No,Yes,No,No,TB Negative,Pulmonary,Good,No,0.0,30.1
+582,Male,38,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+583,Female,45,No,No,No,Yes,TB Negative,N/A,N/A,N/A,,
+584,Male,28,No,No,No,No,LTBI,N/A,N/A,N/A,,
+585,Female,18,Yes,No,No,No,Active TB,N/A,N/A,N/A,,
+586,Male,46,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+587,Female,31,No,Yes,No,No,Active TB,Pulmonary,Good,No,0.0,24.2
+588,Male,30,No,No,No,No,LTBI,N/A,N/A,N/A,,
+589,Male,29,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+590,Female,70,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+591,Male,31,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+592,Female,45,No,No,No,No,LTBI,N/A,N/A,N/A,,
+593,Female,23,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+594,Male,63,No,No,No,Yes,TB Negative,N/A,N/A,N/A,,
+595,Male,32,No,No,No,No,LTBI,N/A,N/A,N/A,,
+596,Male,18,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+597,Male,81,No,No,No,No,LTBI,N/A,N/A,N/A,,
+598,Male,24,Yes,Yes,No,No,Active TB,Pulmonary,Moderate,No,0.0,32.7
+599,Male,60,No,No,No,No,Active TB,N/A,N/A,N/A,,
+600,Male,51,Yes,No,No,No,Active TB,N/A,N/A,N/A,,
+601,Female,50,Yes,No,No,No,Active TB,N/A,N/A,N/A,,
+602,Female,37,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+603,Male,43,No,No,No,Yes,TB Negative,N/A,N/A,N/A,,
+604,Male,58,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+605,Male,35,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+606,Female,44,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+607,Female,54,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+608,Female,41,Yes,No,No,Yes,Active TB,N/A,N/A,N/A,,
+609,Male,34,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+610,Female,62,No,No,Yes,Yes,TB Negative,N/A,N/A,N/A,,
+611,Male,45,Yes,No,Yes,No,LTBI,N/A,N/A,N/A,,
+612,Female,38,Yes,No,No,No,LTBI,N/A,N/A,N/A,,
+613,Female,28,No,No,No,No,LTBI,N/A,N/A,N/A,,
+614,Male,25,No,No,No,No,LTBI,N/A,N/A,N/A,,
+615,Male,53,No,No,No,No,LTBI,N/A,N/A,N/A,,
+616,Female,54,No,No,No,No,Active TB,N/A,N/A,N/A,,
+617,Male,18,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+618,Male,31,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+619,Male,54,Yes,No,No,No,Active TB,N/A,N/A,N/A,,
+620,Male,76,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+621,Male,72,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+622,Female,54,No,No,Yes,No,TB Negative,N/A,N/A,N/A,,
+623,Male,61,No,Yes,No,No,LTBI,Pulmonary,Good,No,0.0,25.2
+624,Female,32,No,No,No,No,LTBI,N/A,N/A,N/A,,
+625,Female,52,No,Yes,No,No,TB Negative,Pulmonary,Good,No,0.0,31.0
+626,Male,21,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+627,Female,32,No,No,No,No,LTBI,N/A,N/A,N/A,,
+628,Female,45,No,No,No,No,LTBI,N/A,N/A,N/A,,
+629,Female,73,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+630,Female,51,No,No,No,No,LTBI,N/A,N/A,N/A,,
+631,Male,44,Yes,No,Yes,No,Active TB,N/A,N/A,N/A,,
+632,Female,37,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+633,Female,20,No,Yes,No,No,Active TB,Pulmonary,Good,No,0.0,27.8
+634,Male,49,No,Yes,No,No,Active TB,Extrapulmonary,Moderate,No,0.0,32.6
+635,Female,35,Yes,Yes,No,No,TB Negative,Extrapulmonary,Poor,No,0.0,33.3
+636,Male,44,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+637,Female,27,Yes,No,No,No,LTBI,N/A,N/A,N/A,,
+638,Male,42,No,No,No,No,LTBI,N/A,N/A,N/A,,
+639,Male,18,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+640,Male,48,No,No,Yes,No,Active TB,N/A,N/A,N/A,,
+641,Male,60,No,No,No,No,LTBI,N/A,N/A,N/A,,
+642,Female,54,Yes,Yes,No,No,TB Negative,Pulmonary,Good,No,0.0,21.6
+643,Male,72,Yes,No,No,Yes,LTBI,N/A,N/A,N/A,,
+644,Female,45,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+645,Male,48,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+646,Male,48,No,No,No,Yes,TB Negative,N/A,N/A,N/A,,
+647,Male,27,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+648,Male,72,No,Yes,No,No,TB Negative,Extrapulmonary,Good,No,0.0,28.2
+649,Female,55,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+650,Male,36,Yes,No,No,No,Active TB,N/A,N/A,N/A,,
+651,Male,26,No,No,No,No,LTBI,N/A,N/A,N/A,,
+652,Male,49,No,Yes,No,No,TB Negative,Extrapulmonary,Good,No,0.0,26.6
+653,Female,53,Yes,No,No,Yes,Active TB,N/A,N/A,N/A,,
+654,Male,42,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+655,Female,43,No,Yes,Yes,No,TB Negative,Pulmonary,Poor,No,0.0,30.3
+656,Male,37,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+657,Female,40,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+658,Male,60,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+659,Female,61,No,No,No,Yes,LTBI,N/A,N/A,N/A,,
+660,Male,18,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+661,Female,42,Yes,Yes,No,No,LTBI,Pulmonary,Good,No,0.0,24.6
+662,Female,22,Yes,Yes,No,No,Active TB,Pulmonary,Moderate,No,0.0,28.0
+663,Male,20,No,No,No,No,LTBI,N/A,N/A,N/A,,
+664,Female,49,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+665,Male,27,No,Yes,No,No,Active TB,Pulmonary,Good,No,0.0,25.2
+666,Female,18,Yes,Yes,No,No,LTBI,Pulmonary,Poor,No,0.0,19.1
+667,Female,50,Yes,Yes,No,No,Active TB,Pulmonary,Moderate,No,0.0,22.2
+668,Male,59,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+669,Female,71,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+670,Male,34,No,No,No,No,LTBI,N/A,N/A,N/A,,
+671,Female,62,No,Yes,Yes,No,Active TB,Pulmonary,Good,No,0.0,25.6
+672,Female,18,No,No,No,Yes,TB Negative,N/A,N/A,N/A,,
+673,Male,24,No,Yes,No,No,LTBI,Pulmonary,Poor,No,0.0,22.9
+674,Female,48,No,No,No,No,LTBI,N/A,N/A,N/A,,
+675,Female,47,No,Yes,No,No,TB Negative,Pulmonary,Good,No,0.0,30.1
+676,Female,60,No,Yes,No,No,LTBI,Extrapulmonary,Moderate,Yes,1.0,13.2
+677,Male,54,No,No,No,No,LTBI,N/A,N/A,N/A,,
+678,Male,39,No,No,No,No,LTBI,N/A,N/A,N/A,,
+679,Female,63,No,No,Yes,No,TB Negative,N/A,N/A,N/A,,
+680,Female,50,No,No,No,No,LTBI,N/A,N/A,N/A,,
+681,Female,66,No,No,No,No,LTBI,N/A,N/A,N/A,,
+682,Female,28,No,Yes,No,Yes,TB Negative,Pulmonary,Poor,Yes,1.0,1.0
+683,Female,45,No,Yes,No,No,TB Negative,Pulmonary,Good,No,0.0,30.4
+684,Female,34,Yes,Yes,No,No,Active TB,Extrapulmonary,Good,Yes,1.0,35.9
+685,Male,52,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+686,Female,37,No,No,No,No,LTBI,N/A,N/A,N/A,,
+687,Female,36,No,No,No,No,LTBI,N/A,N/A,N/A,,
+688,Female,20,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+689,Male,45,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+690,Female,57,Yes,No,No,No,Active TB,N/A,N/A,N/A,,
+691,Male,55,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+692,Female,18,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+693,Female,18,No,Yes,No,Yes,Active TB,Pulmonary,Good,No,0.0,18.7
+694,Male,70,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+695,Male,37,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+696,Male,38,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+697,Male,57,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+698,Female,43,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+699,Female,31,No,Yes,No,No,TB Negative,Pulmonary,Moderate,Yes,1.0,20.6
+700,Male,37,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+701,Male,68,No,Yes,No,No,TB Negative,Pulmonary,Moderate,No,0.0,23.3
+702,Male,19,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+703,Female,60,No,No,No,Yes,LTBI,N/A,N/A,N/A,,
+704,Male,35,No,No,No,Yes,LTBI,N/A,N/A,N/A,,
+705,Male,36,Yes,Yes,No,No,TB Negative,Pulmonary,Moderate,No,0.0,29.9
+706,Male,68,No,Yes,No,Yes,TB Negative,Pulmonary,Good,No,0.0,20.9
+707,Female,30,Yes,No,No,No,LTBI,N/A,N/A,N/A,,
+708,Male,53,No,No,No,No,LTBI,N/A,N/A,N/A,,
+709,Male,35,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+710,Female,19,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+711,Male,38,Yes,No,Yes,No,TB Negative,N/A,N/A,N/A,,
+712,Male,58,No,Yes,No,No,TB Negative,Pulmonary,Moderate,No,0.0,35.8
+713,Male,37,No,No,No,No,Active TB,N/A,N/A,N/A,,
+714,Female,48,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+715,Female,43,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+716,Male,41,No,No,No,Yes,TB Negative,N/A,N/A,N/A,,
+717,Female,34,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+718,Male,42,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+719,Female,18,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+720,Male,33,Yes,Yes,No,No,Active TB,Pulmonary,Poor,No,0.0,31.5
+721,Male,18,No,No,Yes,No,Active TB,N/A,N/A,N/A,,
+722,Female,44,No,No,Yes,No,LTBI,N/A,N/A,N/A,,
+723,Female,45,No,No,No,No,LTBI,N/A,N/A,N/A,,
+724,Female,28,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+725,Female,52,Yes,No,No,No,LTBI,N/A,N/A,N/A,,
+726,Male,46,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+727,Female,44,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+728,Male,35,No,Yes,No,No,TB Negative,Pulmonary,Poor,Yes,1.0,6.9
+729,Female,47,Yes,Yes,No,Yes,Active TB,Pulmonary,Good,Yes,1.0,21.4
+730,Female,56,No,Yes,No,No,LTBI,Pulmonary,Good,No,0.0,28.1
+731,Female,30,No,No,Yes,Yes,LTBI,N/A,N/A,N/A,,
+732,Male,28,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+733,Female,58,No,Yes,No,No,LTBI,Pulmonary,Good,No,0.0,32.2
+734,Male,18,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+735,Female,18,No,No,No,No,LTBI,N/A,N/A,N/A,,
+736,Female,18,Yes,No,Yes,No,Active TB,N/A,N/A,N/A,,
+737,Female,43,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+738,Female,42,No,No,No,Yes,TB Negative,N/A,N/A,N/A,,
+739,Female,47,No,No,No,No,LTBI,N/A,N/A,N/A,,
+740,Male,41,No,Yes,No,No,TB Negative,Pulmonary,Good,No,0.0,22.9
+741,Female,63,No,No,No,Yes,LTBI,N/A,N/A,N/A,,
+742,Male,64,No,No,No,No,LTBI,N/A,N/A,N/A,,
+743,Male,57,No,No,No,No,Active TB,N/A,N/A,N/A,,
+744,Female,23,No,No,No,No,LTBI,N/A,N/A,N/A,,
+745,Male,45,No,No,No,No,Active TB,N/A,N/A,N/A,,
+746,Female,27,No,Yes,No,No,TB Negative,Pulmonary,Poor,No,0.0,30.1
+747,Female,32,No,Yes,No,No,Active TB,Pulmonary,Good,No,0.0,25.2
+748,Male,25,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+749,Male,40,No,Yes,No,No,TB Negative,Pulmonary,Moderate,No,0.0,33.4
+750,Female,48,No,Yes,No,No,TB Negative,Pulmonary,Moderate,No,0.0,32.0
+751,Male,41,Yes,Yes,Yes,No,LTBI,Extrapulmonary,Good,No,0.0,28.7
+752,Male,22,No,No,No,No,Active TB,N/A,N/A,N/A,,
+753,Female,18,No,No,No,No,LTBI,N/A,N/A,N/A,,
+754,Female,29,No,No,No,Yes,LTBI,N/A,N/A,N/A,,
+755,Male,28,Yes,Yes,No,No,LTBI,Extrapulmonary,Good,No,0.0,21.0
+756,Female,52,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+757,Male,35,No,No,No,No,LTBI,N/A,N/A,N/A,,
+758,Female,37,Yes,No,No,No,LTBI,N/A,N/A,N/A,,
+759,Male,38,Yes,Yes,No,No,Active TB,Extrapulmonary,Good,No,0.0,21.5
+760,Female,56,No,Yes,No,No,TB Negative,Pulmonary,Poor,No,0.0,27.8
+761,Male,65,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+762,Female,46,No,No,No,No,Active TB,N/A,N/A,N/A,,
+763,Male,36,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+764,Male,61,No,Yes,No,No,Active TB,Pulmonary,Moderate,Yes,1.0,11.9
+765,Male,47,No,Yes,No,No,LTBI,Pulmonary,Good,No,0.0,22.3
+766,Male,34,No,No,Yes,No,Active TB,N/A,N/A,N/A,,
+767,Female,55,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+768,Female,43,No,No,No,No,LTBI,N/A,N/A,N/A,,
+769,Female,18,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+770,Female,49,No,No,No,No,LTBI,N/A,N/A,N/A,,
+771,Female,44,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+772,Female,18,No,No,No,Yes,TB Negative,N/A,N/A,N/A,,
+773,Female,18,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+774,Male,42,No,No,No,No,Active TB,N/A,N/A,N/A,,
+775,Female,50,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+776,Male,49,No,No,Yes,No,TB Negative,N/A,N/A,N/A,,
+777,Male,20,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+778,Male,35,No,No,No,Yes,LTBI,N/A,N/A,N/A,,
+779,Male,50,Yes,No,No,Yes,LTBI,N/A,N/A,N/A,,
+780,Male,18,Yes,Yes,Yes,Yes,Active TB,Extrapulmonary,Good,Yes,1.0,19.1
+781,Male,41,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+782,Female,43,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+783,Male,54,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+784,Female,18,No,No,No,No,Active TB,N/A,N/A,N/A,,
+785,Female,42,No,No,No,No,LTBI,N/A,N/A,N/A,,
+786,Male,70,No,No,No,No,Active TB,N/A,N/A,N/A,,
+787,Female,31,No,Yes,No,No,Active TB,Extrapulmonary,Poor,No,0.0,31.8
+788,Female,35,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+789,Male,54,No,No,No,No,LTBI,N/A,N/A,N/A,,
+790,Female,29,Yes,No,No,Yes,LTBI,N/A,N/A,N/A,,
+791,Male,57,Yes,Yes,No,No,LTBI,Pulmonary,Moderate,Yes,1.0,17.7
+792,Male,48,No,No,Yes,No,TB Negative,N/A,N/A,N/A,,
+793,Male,18,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+794,Female,42,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+795,Male,18,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+796,Female,54,No,No,No,No,Active TB,N/A,N/A,N/A,,
+797,Male,18,Yes,Yes,No,No,Active TB,Pulmonary,Poor,No,0.0,21.5
+798,Female,18,No,No,No,No,LTBI,N/A,N/A,N/A,,
+799,Male,23,No,No,No,No,Active TB,N/A,N/A,N/A,,
+800,Female,28,Yes,No,No,No,Active TB,N/A,N/A,N/A,,
+801,Female,60,No,No,Yes,No,Active TB,N/A,N/A,N/A,,
+802,Male,40,No,Yes,No,Yes,LTBI,Pulmonary,Good,No,0.0,22.5
+803,Female,44,No,No,No,No,Active TB,N/A,N/A,N/A,,
+804,Female,56,No,No,No,No,LTBI,N/A,N/A,N/A,,
+805,Male,30,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+806,Female,31,Yes,No,No,No,Active TB,N/A,N/A,N/A,,
+807,Male,27,No,No,Yes,No,Active TB,N/A,N/A,N/A,,
+808,Female,52,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+809,Female,64,Yes,Yes,No,No,TB Negative,Pulmonary,Good,No,0.0,33.9
+810,Male,44,Yes,Yes,No,No,Active TB,Pulmonary,Good,No,0.0,19.5
+811,Male,31,No,Yes,No,No,LTBI,Pulmonary,Good,No,0.0,18.1
+812,Male,32,Yes,Yes,No,No,LTBI,Pulmonary,Good,No,0.0,18.9
+813,Female,23,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+814,Male,51,Yes,Yes,No,No,Active TB,Pulmonary,Good,Yes,1.0,20.7
+815,Female,24,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+816,Male,36,No,Yes,No,Yes,Active TB,Pulmonary,Good,No,0.0,30.2
+817,Male,22,No,No,No,Yes,TB Negative,N/A,N/A,N/A,,
+818,Male,18,No,No,No,No,LTBI,N/A,N/A,N/A,,
+819,Female,18,No,No,No,Yes,TB Negative,N/A,N/A,N/A,,
+820,Female,27,No,No,No,No,LTBI,N/A,N/A,N/A,,
+821,Female,43,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+822,Male,35,No,No,No,No,Active TB,N/A,N/A,N/A,,
+823,Female,37,No,No,Yes,No,LTBI,N/A,N/A,N/A,,
+824,Male,24,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+825,Male,26,No,Yes,No,No,TB Negative,Extrapulmonary,Moderate,Yes,1.0,11.7
+826,Male,24,Yes,Yes,No,No,Active TB,Pulmonary,Good,No,0.0,28.3
+827,Male,43,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+828,Male,71,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+829,Female,38,Yes,Yes,No,No,Active TB,Pulmonary,Good,No,0.0,21.4
+830,Female,19,No,No,No,Yes,TB Negative,N/A,N/A,N/A,,
+831,Female,59,No,Yes,No,No,Active TB,Pulmonary,Moderate,No,0.0,19.2
+832,Female,25,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+833,Male,48,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+834,Male,33,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+835,Female,41,No,No,No,Yes,TB Negative,N/A,N/A,N/A,,
+836,Female,85,No,No,No,No,LTBI,N/A,N/A,N/A,,
+837,Male,29,Yes,No,No,No,LTBI,N/A,N/A,N/A,,
+838,Male,31,No,No,No,No,Active TB,N/A,N/A,N/A,,
+839,Male,46,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+840,Male,40,No,Yes,No,No,Active TB,Pulmonary,Good,No,0.0,19.1
+841,Male,34,Yes,No,Yes,No,TB Negative,N/A,N/A,N/A,,
+842,Male,30,Yes,Yes,No,Yes,Active TB,Extrapulmonary,Good,Yes,1.0,26.7
+843,Male,49,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+844,Female,56,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+845,Female,26,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+846,Male,23,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+847,Female,67,No,No,No,Yes,TB Negative,N/A,N/A,N/A,,
+848,Male,19,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+849,Female,51,No,Yes,No,No,TB Negative,Pulmonary,Good,No,0.0,27.8
+850,Male,47,No,No,No,No,LTBI,N/A,N/A,N/A,,
+851,Female,23,Yes,Yes,Yes,No,Active TB,Pulmonary,Poor,Yes,1.0,8.7
+852,Female,51,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+853,Female,23,No,No,No,Yes,TB Negative,N/A,N/A,N/A,,
+854,Male,24,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+855,Male,19,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+856,Female,53,No,No,Yes,No,LTBI,N/A,N/A,N/A,,
+857,Female,33,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+858,Female,56,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+859,Male,28,Yes,Yes,No,Yes,LTBI,Pulmonary,Good,No,0.0,23.2
+860,Female,49,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+861,Female,61,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+862,Male,39,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+863,Male,23,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+864,Female,35,Yes,Yes,No,No,TB Negative,Pulmonary,Moderate,No,0.0,28.4
+865,Female,59,No,No,No,Yes,TB Negative,N/A,N/A,N/A,,
+866,Female,51,No,No,No,No,Active TB,N/A,N/A,N/A,,
+867,Female,34,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+868,Female,18,Yes,No,No,Yes,LTBI,N/A,N/A,N/A,,
+869,Male,51,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+870,Female,64,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+871,Male,65,No,No,Yes,Yes,Active TB,N/A,N/A,N/A,,
+872,Male,46,No,Yes,No,No,LTBI,Pulmonary,Good,No,0.0,30.1
+873,Male,37,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+874,Male,28,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+875,Female,31,No,No,No,Yes,Active TB,N/A,N/A,N/A,,
+876,Male,18,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+877,Male,72,No,No,No,Yes,Active TB,N/A,N/A,N/A,,
+878,Male,40,No,No,No,No,Active TB,N/A,N/A,N/A,,
+879,Female,76,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+880,Female,39,No,Yes,No,No,LTBI,Pulmonary,Good,No,0.0,21.3
+881,Male,18,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+882,Male,68,Yes,Yes,No,No,TB Negative,Pulmonary,Moderate,No,0.0,30.5
+883,Female,27,Yes,No,Yes,No,Active TB,N/A,N/A,N/A,,
+884,Male,33,No,No,No,Yes,TB Negative,N/A,N/A,N/A,,
+885,Female,65,Yes,No,No,No,Active TB,N/A,N/A,N/A,,
+886,Male,62,No,No,No,No,LTBI,N/A,N/A,N/A,,
+887,Female,18,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+888,Male,40,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+889,Female,24,No,No,No,Yes,TB Negative,N/A,N/A,N/A,,
+890,Male,48,Yes,No,No,Yes,LTBI,N/A,N/A,N/A,,
+891,Male,67,No,No,No,Yes,TB Negative,N/A,N/A,N/A,,
+892,Male,32,No,No,No,No,LTBI,N/A,N/A,N/A,,
+893,Male,62,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+894,Male,26,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+895,Female,73,Yes,No,No,No,LTBI,N/A,N/A,N/A,,
+896,Male,28,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+897,Female,33,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+898,Female,44,Yes,No,No,No,Active TB,N/A,N/A,N/A,,
+899,Female,19,No,Yes,No,No,TB Negative,Pulmonary,Moderate,No,0.0,34.7
+900,Male,63,Yes,No,No,Yes,TB Negative,N/A,N/A,N/A,,
+901,Male,24,No,No,No,No,LTBI,N/A,N/A,N/A,,
+902,Female,49,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+903,Male,21,Yes,Yes,No,No,TB Negative,Pulmonary,Good,No,0.0,29.5
+904,Female,42,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+905,Female,40,No,No,No,No,Active TB,N/A,N/A,N/A,,
+906,Male,34,No,Yes,No,No,TB Negative,Pulmonary,Moderate,No,0.0,35.7
+907,Female,47,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+908,Male,23,No,No,No,No,Active TB,N/A,N/A,N/A,,
+909,Female,63,Yes,No,No,Yes,Active TB,N/A,N/A,N/A,,
+910,Male,43,No,Yes,No,No,Active TB,Pulmonary,Moderate,No,0.0,35.0
+911,Female,18,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+912,Male,70,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+913,Female,47,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+914,Female,63,No,No,Yes,No,TB Negative,N/A,N/A,N/A,,
+915,Female,37,No,Yes,No,Yes,Active TB,Pulmonary,Good,No,0.0,22.5
+916,Male,18,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+917,Female,34,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+918,Female,22,No,Yes,No,No,Active TB,Pulmonary,Good,No,0.0,24.5
+919,Male,39,No,Yes,No,No,LTBI,Pulmonary,Poor,No,0.0,33.2
+920,Female,33,No,Yes,No,No,LTBI,Extrapulmonary,Poor,No,0.0,23.0
+921,Male,43,Yes,Yes,No,No,Active TB,Pulmonary,Moderate,No,0.0,19.5
+922,Male,18,Yes,Yes,No,No,Active TB,Extrapulmonary,Poor,Yes,1.0,5.2
+923,Male,41,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+924,Female,33,No,No,No,No,LTBI,N/A,N/A,N/A,,
+925,Male,50,No,No,No,No,LTBI,N/A,N/A,N/A,,
+926,Male,18,Yes,Yes,Yes,No,Active TB,Pulmonary,Moderate,No,0.0,27.3
+927,Female,34,Yes,No,No,No,Active TB,N/A,N/A,N/A,,
+928,Female,65,Yes,No,No,No,Active TB,N/A,N/A,N/A,,
+929,Male,22,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+930,Male,51,Yes,Yes,No,No,Active TB,Pulmonary,Good,No,0.0,35.2
+931,Male,60,No,Yes,No,No,LTBI,Pulmonary,Good,No,0.0,22.2
+932,Male,40,Yes,No,No,Yes,LTBI,N/A,N/A,N/A,,
+933,Male,55,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+934,Male,56,No,No,No,Yes,Active TB,N/A,N/A,N/A,,
+935,Female,64,No,Yes,No,No,Active TB,Pulmonary,Good,No,0.0,22.7
+936,Female,34,No,No,No,Yes,LTBI,N/A,N/A,N/A,,
+937,Male,38,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+938,Female,52,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+939,Male,29,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+940,Female,41,Yes,Yes,No,Yes,TB Negative,Pulmonary,Moderate,Yes,1.0,24.1
+941,Male,30,No,No,No,No,LTBI,N/A,N/A,N/A,,
+942,Male,18,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+943,Male,45,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+944,Female,66,Yes,No,No,Yes,TB Negative,N/A,N/A,N/A,,
+945,Male,34,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+946,Female,41,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+947,Male,33,No,No,No,No,Active TB,N/A,N/A,N/A,,
+948,Male,29,Yes,Yes,No,No,Active TB,Extrapulmonary,Good,Yes,1.0,26.5
+949,Male,42,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+950,Male,56,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+951,Male,73,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+952,Female,52,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+953,Male,26,No,No,No,No,Active TB,N/A,N/A,N/A,,
+954,Male,19,No,Yes,No,No,LTBI,Pulmonary,Good,No,0.0,31.0
+955,Male,60,No,No,No,Yes,TB Negative,N/A,N/A,N/A,,
+956,Male,45,No,No,No,Yes,TB Negative,N/A,N/A,N/A,,
+957,Female,31,Yes,Yes,No,Yes,Active TB,Pulmonary,Poor,Yes,1.0,3.1
+958,Male,24,No,No,No,Yes,LTBI,N/A,N/A,N/A,,
+959,Male,28,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+960,Female,59,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+961,Female,40,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+962,Female,19,No,No,No,No,LTBI,N/A,N/A,N/A,,
+963,Female,53,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+964,Female,45,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+965,Male,36,Yes,Yes,No,No,Active TB,Pulmonary,Poor,No,0.0,31.9
+966,Male,49,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+967,Male,28,No,No,No,No,Active TB,N/A,N/A,N/A,,
+968,Male,54,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+969,Female,19,No,No,No,No,LTBI,N/A,N/A,N/A,,
+970,Male,26,No,No,No,No,Active TB,N/A,N/A,N/A,,
+971,Female,19,No,No,No,No,LTBI,N/A,N/A,N/A,,
+972,Female,34,No,Yes,No,No,TB Negative,Extrapulmonary,Moderate,No,0.0,29.2
+973,Male,29,No,No,No,No,LTBI,N/A,N/A,N/A,,
+974,Female,35,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+975,Male,40,No,No,No,No,LTBI,N/A,N/A,N/A,,
+976,Male,48,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+977,Male,42,No,No,No,No,Active TB,N/A,N/A,N/A,,
+978,Female,44,No,No,No,No,Active TB,N/A,N/A,N/A,,
+979,Male,64,No,No,No,No,LTBI,N/A,N/A,N/A,,
+980,Female,36,Yes,No,Yes,No,TB Negative,N/A,N/A,N/A,,
+981,Male,18,No,No,No,No,LTBI,N/A,N/A,N/A,,
+982,Male,54,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+983,Female,68,Yes,No,No,No,TB Negative,N/A,N/A,N/A,,
+984,Male,43,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+985,Male,53,Yes,No,No,Yes,Active TB,N/A,N/A,N/A,,
+986,Female,30,Yes,No,Yes,Yes,LTBI,N/A,N/A,N/A,,
+987,Female,43,No,No,No,No,LTBI,N/A,N/A,N/A,,
+988,Male,50,No,Yes,No,No,Active TB,Pulmonary,Moderate,No,0.0,34.2
+989,Female,46,Yes,Yes,No,No,LTBI,Pulmonary,Poor,No,0.0,22.8
+990,Female,32,Yes,Yes,Yes,No,Active TB,Pulmonary,Moderate,No,0.0,30.5
+991,Female,64,No,No,No,Yes,LTBI,N/A,N/A,N/A,,
+992,Male,43,No,No,No,No,LTBI,N/A,N/A,N/A,,
+993,Female,54,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+994,Male,46,No,No,No,No,LTBI,N/A,N/A,N/A,,
+995,Female,53,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+996,Female,54,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+997,Male,37,No,No,No,No,Active TB,N/A,N/A,N/A,,
+998,Female,53,No,Yes,No,No,LTBI,Pulmonary,Moderate,No,0.0,29.2
+999,Male,72,No,No,No,No,TB Negative,N/A,N/A,N/A,,
+1000,Female,70,No,No,No,No,Active TB,N/A,N/A,N/A,,

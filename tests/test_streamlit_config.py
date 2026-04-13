@@ -13,6 +13,7 @@ def test_streamlit_config_exposes_ui_defaults_in_one_place() -> None:
 def test_streamlit_config_exposes_supported_options_in_one_place() -> None:
     assert streamlit_config.PROVIDER_OPTIONS == ("openai", "anthropic", "vllm")
     assert streamlit_config.EXECUTION_MODE_OPTIONS == ("docker", "trusted_local")
+    assert streamlit_config.DEFAULT_ALLOW_TRUSTED_LOCAL_POLICY_BLOCKED is True
     assert streamlit_config.MAX_AUTO_STEPS_RANGE == (1, 8)
     assert streamlit_config.EXECUTION_TIMEOUT_RANGE == (5, 120)
     assert streamlit_config.EXECUTION_TIMEOUT_STEP == 5

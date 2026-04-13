@@ -472,7 +472,7 @@ def test_orchestrator_uses_llm_action_and_fallback_policy() -> None:
     fallback = orchestrator.orchestrator_node(state, llm_invalid, available_actions)
     assert fallback["next_action"] == "qa"
 
-def test_orchestrator_routes_sample_code_request_to_qa_without_execution_flow() -> None:
+def test_orchestrator_routes_sample_code_request_to_generate_code() -> None:
     _install_langchain_and_langgraph_stubs()
     orchestrator = importlib.import_module("graph.nodes.orchestrator")
 
@@ -491,7 +491,7 @@ def test_orchestrator_routes_sample_code_request_to_qa_without_execution_flow() 
 
     fallback = orchestrator.orchestrator_node(state, _LLM("not-json"), ["qa", "generate_code", "end"])
 
-    assert fallback["next_action"] == "qa"
+    assert fallback["next_action"] == "generate_code"
 
 
 def test_orchestrator_uses_planner_for_terminal_execution_error_after_resume_handling() -> None:
@@ -1750,6 +1750,32 @@ def test_orchestrator_uses_planner_for_explicit_code_request() -> None:
         state,
         _LLM(json.dumps({"action": "generate_code", "thought": "explicit code request"})),
         ["qa", "generate_code", "execute_code", "end"],
+    )
+
+    assert updated["next_action"] == "generate_code"
+
+
+def test_orchestrator_forces_generate_code_for_explicit_code_request_when_planner_output_is_invalid() -> None:
+    _install_langchain_and_langgraph_stubs()
+    orchestrator = importlib.import_module("graph.nodes.orchestrator")
+
+    state = {
+        "messages": [SimpleNamespace(type="human", content="Write ready-to-run Python code for survival analysis stratified by sex")],
+        "output": {},
+        "observations": [],
+        "last_action": None,
+        "orchestrator": {},
+        "agents": {
+            "executor": {"run_status": "idle"},
+            "human_review": {"before_run_decision": None, "final_decision": None},
+        },
+        "meta": {"error_iterations": 0, "workflow_trace": []},
+    }
+
+    updated = orchestrator.orchestrator_node(
+        state,
+        _LLM("not-json"),
+        ["qa", "generate_code", "end"],
     )
 
     assert updated["next_action"] == "generate_code"

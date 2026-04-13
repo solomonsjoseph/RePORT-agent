@@ -7,6 +7,8 @@ from types import ModuleType, SimpleNamespace
 
 def _install_stubs(decision: str, suggestion: str | None = None) -> None:
     langgraph_types = ModuleType("langgraph.types")
+    graph_message_mod = ModuleType("langgraph.graph.message")
+    graph_message_mod.add_messages = lambda current, new: (current or []) + (new or [])
 
     def _interrupt(_payload):
         data = {"action": decision}
@@ -34,6 +36,7 @@ def _install_stubs(decision: str, suggestion: str | None = None) -> None:
     messages_mod.BaseMessage = SimpleNamespace
 
     sys.modules["langgraph.types"] = langgraph_types
+    sys.modules["langgraph.graph.message"] = graph_message_mod
     sys.modules["langchain_core.messages"] = messages_mod
 
 
@@ -44,13 +47,21 @@ def test_human_review_final_only_emits_result_message_on_approve() -> None:
 
     state = {
         "messages": [],
-        "output": {"generated_code": "print(1)", "text": "ok", "figure_png": b"png"},
+        "output": {
+            "generated_code": "print(1)",
+            "code_summary": "Prints one.",
+            "code_assumptions": "No assumptions.",
+            "text": "ok",
+            "figure_png": b"png",
+        },
         "agents": {},
     }
 
     updated = mod.human_review_final_node(state)
     assert len(updated["messages"]) == 1
     assert updated["messages"][0].type == "ai"
+    assert "Prints one." in updated["messages"][0].content
+    assert "No assumptions." in updated["messages"][0].content
     assert updated["agents"]["human_review"]["final_decision"] == "approve"
 
 

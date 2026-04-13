@@ -32,7 +32,7 @@ This project is tested to work with Python `3.12.7`.
 
 ### Clone the repository
 ```bash
-git clone -b dev-test-macOS --single-branch https://github.com/xutao-wang/RePORT-agent.git
+git clone -b dev-transit --single-branch https://github.com/xutao-wang/RePORT-agent.git
 cd RePORT-agent
 ```
 
@@ -47,42 +47,20 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### Build the sandbox image
-Python analysis now runs inside a short-lived Docker sandbox by default. Build the
-runner image once before starting the app:
-
-```bash
-docker build -t report-agent-sandbox:latest -f tools/sandbox/Dockerfile .
+### Build .env file (optional)
+create `.env` file and add your API keys inside the `.env` so we do not have to enter API key every time. For example:
 ```
-
-Optional execution settings:
-
-```bash
-export EXECUTION_MODE=docker
-export SANDBOX_IMAGE=report-agent-sandbox:latest
-export EXECUTION_TIMEOUT_SEC=20
-export SANDBOX_MEMORY_MB=512
-export SANDBOX_CPU_LIMIT=1.0
+OPENAI_API_KEY="YOUR_OPENAI_API_KEY"
+ANTHROPIC_API_KEY="YOUR_ANTHROPIC_API_KEY"
 ```
-
-Local trusted mode:
-
-```bash
-# Explicit trusted local execution (no Docker isolation)
-export EXECUTION_MODE=trusted_local
-```
-
-Use `trusted_local` only for trusted operators or local development. It keeps
-the app workflow but runs approved Python directly on the host process without
-container isolation.
-
-If you need additional analysis packages, add them to
-`tools/sandbox/requirements.txt` and rebuild the image. Runtime package
-installation inside the sandbox is intentionally unsupported.
 
 ### Run the app
 ```bash
 python -m streamlit run streamlit_app.py
 ```
 
-Synthetic demo data are included under `data/` folder.
+### Activate Langraph
+In the pop up webpage, enter the API key in the field and click submit. If `.env` was set up previously, click submit directly.
+
+### Notes:
+- Synthetic demo data are included under `data/` folder.

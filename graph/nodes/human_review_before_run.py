@@ -11,6 +11,8 @@ def human_review_before_run_node(state):
     output = dict(state.get("output") or {})
     feedback = interrupt({
         "type": "before_run_review",
+        "code_summary": output.get("code_summary", ""),
+        "code_assumptions": output.get("code_assumptions", ""),
         "generated_code": output.get("generated_code", ""),
     })
     decision = feedback.get("action")

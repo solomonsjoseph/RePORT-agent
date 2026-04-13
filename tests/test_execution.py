@@ -83,6 +83,7 @@ def test_run_python_user_blocks_pathlib_file_writes(monkeypatch) -> None:
     execution = _load_execution_module()
 
     monkeypatch.setenv("EXECUTION_MODE", "trusted_local")
+    monkeypatch.setenv("ALLOW_TRUSTED_LOCAL_POLICY_BLOCKED", "0")
 
     result, stdout, figure_png, error = execution.run_python_user(
         "from pathlib import Path\nPath('x.txt').write_text('data')",
@@ -103,6 +104,7 @@ def test_run_python_user_blocks_pathlib_file_deletes(monkeypatch) -> None:
     execution = _load_execution_module()
 
     monkeypatch.setenv("EXECUTION_MODE", "trusted_local")
+    monkeypatch.setenv("ALLOW_TRUSTED_LOCAL_POLICY_BLOCKED", "0")
 
     result, stdout, figure_png, error = execution.run_python_user(
         "from pathlib import Path\nPath('x.txt').unlink()",
@@ -123,6 +125,7 @@ def test_run_python_user_blocks_os_file_delete_calls(monkeypatch) -> None:
     execution = _load_execution_module()
 
     monkeypatch.setenv("EXECUTION_MODE", "trusted_local")
+    monkeypatch.setenv("ALLOW_TRUSTED_LOCAL_POLICY_BLOCKED", "0")
 
     result, stdout, figure_png, error = execution.run_python_user(
         "import os\nos.remove('x.txt')",
@@ -143,6 +146,7 @@ def test_run_python_user_blocks_shutil_tree_delete_calls(monkeypatch) -> None:
     execution = _load_execution_module()
 
     monkeypatch.setenv("EXECUTION_MODE", "trusted_local")
+    monkeypatch.setenv("ALLOW_TRUSTED_LOCAL_POLICY_BLOCKED", "0")
 
     result, stdout, figure_png, error = execution.run_python_user(
         "import shutil\nshutil.rmtree('tmpdir')",
@@ -163,6 +167,7 @@ def test_run_python_user_blocks_dataframe_export_calls(monkeypatch) -> None:
     execution = _load_execution_module()
 
     monkeypatch.setenv("EXECUTION_MODE", "trusted_local")
+    monkeypatch.setenv("ALLOW_TRUSTED_LOCAL_POLICY_BLOCKED", "0")
 
     result, stdout, figure_png, error = execution.run_python_user(
         "df.to_csv('out.csv', index=False)",
@@ -183,6 +188,7 @@ def test_run_python_user_blocks_plot_file_exports(monkeypatch) -> None:
     execution = _load_execution_module()
 
     monkeypatch.setenv("EXECUTION_MODE", "trusted_local")
+    monkeypatch.setenv("ALLOW_TRUSTED_LOCAL_POLICY_BLOCKED", "0")
 
     result, stdout, figure_png, error = execution.run_python_user(
         "plt.plot([1, 2], [3, 4])\nplt.savefig('plot.png')",
@@ -197,6 +203,28 @@ def test_run_python_user_blocks_plot_file_exports(monkeypatch) -> None:
         "type": "PolicyBlockedError",
         "message": "Disallowed filesystem mutation: savefig",
     }
+
+
+def test_run_python_user_allows_pathlib_file_writes_when_trusted_local_toggle_enabled(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    execution = _load_execution_module()
+
+    monkeypatch.setenv("EXECUTION_MODE", "trusted_local")
+    monkeypatch.setenv("ALLOW_TRUSTED_LOCAL_POLICY_BLOCKED", "1")
+    monkeypatch.chdir(tmp_path)
+
+    result, stdout, figure_png, error = execution.run_python_user(
+        "from pathlib import Path\nPath('x.txt').write_text('data')\nresult = Path('x.txt').read_text()",
+        pd.DataFrame({"a": [1]}),
+    )
+
+    assert result == "data"
+    assert stdout == ""
+    assert figure_png == b""
+    assert error is None
+    assert (tmp_path / "x.txt").read_text(encoding="utf-8") == "data"
 
 
 def test_run_python_user_reads_structured_docker_outputs(

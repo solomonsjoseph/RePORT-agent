@@ -30,3 +30,15 @@ def test_apply_execution_mode_clears_stale_fallback_env(monkeypatch) -> None:
 
     assert execution_mode.current_execution_mode() == "docker"
     assert "ALLOW_TRUSTED_LOCAL_FALLBACK" not in execution_mode.os.environ
+
+
+def test_trusted_local_policy_block_toggle_defaults_on(monkeypatch) -> None:
+    monkeypatch.delenv("ALLOW_TRUSTED_LOCAL_POLICY_BLOCKED", raising=False)
+
+    assert execution_mode.allow_trusted_local_policy_blocked() is True
+
+
+def test_trusted_local_policy_block_toggle_reads_explicit_off(monkeypatch) -> None:
+    monkeypatch.setenv("ALLOW_TRUSTED_LOCAL_POLICY_BLOCKED", "0")
+
+    assert execution_mode.allow_trusted_local_policy_blocked() is False

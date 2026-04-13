@@ -13,6 +13,11 @@ from typing import Any
 
 import pandas as pd
 
+from utils.execution_mode import (
+    allow_trusted_local_policy_blocked,
+    current_execution_mode,
+)
+
 
 DISALLOWED_IMPORT_ROOTS = {
     "socket",
@@ -222,6 +227,13 @@ def _make_error(error_type: str, message: str, category: str) -> dict[str, str]:
     }
 
 
+def _allow_trusted_local_fs_mutations() -> bool:
+    return (
+        current_execution_mode() == "trusted_local"
+        and allow_trusted_local_policy_blocked()
+    )
+
+
 def _preflight_policy_check(code: str) -> dict[str, str] | None:
     try:
         tree = ast.parse((code or "").strip())
@@ -263,7 +275,7 @@ def _preflight_policy_check(code: str) -> dict[str, str] | None:
 
             if isinstance(node.func, ast.Name):
                 imported_name = import_aliases.get(node.func.id)
-                if imported_name in DISALLOWED_FS_FUNCTION_CALLS:
+                if imported_name in DISALLOWED_FS_FUNCTION_CALLS and not _allow_trusted_local_fs_mutations():
                     return {
                         "type": "PolicyBlockedError",
                         "message": f"Disallowed filesystem mutation: {'.'.join(imported_name[:2])}",
@@ -277,13 +289,21 @@ def _preflight_policy_check(code: str) -> dict[str, str] | None:
                     "message": f"Disallowed call: {'.'.join(func_name[:2])}",
                     "category": ERROR_CATEGORY_POLICY_BLOCKED,
                 }
-            if len(func_name) >= 2 and tuple(func_name[:2]) in DISALLOWED_FS_FUNCTION_CALLS:
+            if (
+                len(func_name) >= 2
+                and tuple(func_name[:2]) in DISALLOWED_FS_FUNCTION_CALLS
+                and not _allow_trusted_local_fs_mutations()
+            ):
                 return {
                     "type": "PolicyBlockedError",
                     "message": f"Disallowed filesystem mutation: {'.'.join(func_name[:2])}",
                     "category": ERROR_CATEGORY_POLICY_BLOCKED,
                 }
-            if isinstance(node.func, ast.Attribute) and node.func.attr in DISALLOWED_FS_METHOD_CALLS:
+            if (
+                isinstance(node.func, ast.Attribute)
+                and node.func.attr in DISALLOWED_FS_METHOD_CALLS
+                and not _allow_trusted_local_fs_mutations()
+            ):
                 return {
                     "type": "PolicyBlockedError",
                     "message": (
@@ -455,7 +475,7 @@ def run_python_user(code: str, df: pd.DataFrame):
     if policy_error is not None:
         return _policy_error(policy_error["message"])
 
-    execution_mode = os.getenv("EXECUTION_MODE", "trusted_local").lower()
+    execution_mode = current_execution_mode()
     if execution_mode in {"inline", "trusted_local"}:
         return _execute_user_code(code, df)
     if execution_mode == "docker":

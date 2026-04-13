@@ -59,6 +59,38 @@ def _planner_fallback_action(available_actions: Iterable[str]) -> str:
         return "generate_code"
     return "end"
 
+
+def _latest_user_message_is_explicit_code_request(state: AgentState) -> bool:
+    messages = list(state.get("messages", []))
+    latest = ""
+    for message in reversed(messages):
+        if getattr(message, "type", None) == "human":
+            latest = str(getattr(message, "content", "") or "").strip().lower()
+            break
+
+    if not latest:
+        return False
+
+    normalized = " ".join(latest.split())
+    direct_markers = (
+        "write code",
+        "generate code",
+        "show code",
+        "sample code",
+        "example code",
+        "python code",
+        "ready-to-run code",
+        "ready to run code",
+        "give me code",
+        "give me python",
+    )
+    if any(marker in normalized for marker in direct_markers):
+        return True
+
+    return "python" in normalized and any(
+        token in normalized for token in ("write", "generate", "show", "ready-to-run", "ready to run")
+    )
+
 def _ready_deterministic_action(
     state: AgentState,
     available_actions: Iterable[str],
@@ -261,7 +293,13 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
         if llm_choice != "end" and llm_choice in masked_actions:
             next_action = llm_choice
         else:
-            next_action = _planner_fallback_action(masked_actions)
+            if (
+                _latest_user_message_is_explicit_code_request(routing_state)
+                and "generate_code" in masked_actions
+            ):
+                next_action = "generate_code"
+            else:
+                next_action = _planner_fallback_action(masked_actions)
         routing_state = _record_planner_decision(
             routing_state,
             planner_action,

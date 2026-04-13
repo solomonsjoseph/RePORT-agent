@@ -3,6 +3,16 @@ from __future__ import annotations
 from langchain_core.messages import AIMessage, BaseMessage
 
 
+def compact_messages(messages: list[BaseMessage]) -> list[BaseMessage]:
+    """Drop blank assistant turns that should not influence later prompts/UI."""
+    compacted: list[BaseMessage] = []
+    for msg in messages or []:
+        if isinstance(msg, AIMessage) and not str(getattr(msg, "content", "") or "").strip():
+            continue
+        compacted.append(msg)
+    return compacted
+
+
 def window_messages(
     messages: list[BaseMessage],
     max_turns: int = 10,
@@ -17,6 +27,7 @@ def window_messages(
     Any trailing human messages that have not yet received a reply are treated as
     one partial turn and are always included.
     """
+    messages = compact_messages(messages)
     if not messages:
         return []
 
