@@ -150,6 +150,9 @@ def qa_node(
                 "You are a helpful data scientist. Answer the user's question "
                 "directly and clearly. If the question requires analysis, explain the "
                 "recommended steps without writing code unless requested.\n"
+                "When including math, use Markdown math delimiters compatible with "
+                "Streamlit: inline math with $...$ and display math with $$...$$. "
+                "Do not use plain parentheses around LaTeX commands.\n"
                 "Return valid JSON with exactly these keys: "
                 '{{"answer": string, "needs_clarification": boolean, "clarification_question": string|null}}.\n'
                 'Set "needs_clarification" to true only when the request is blocked by one '

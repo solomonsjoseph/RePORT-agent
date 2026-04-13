@@ -111,6 +111,26 @@ def test_qa_node_includes_context_in_prompt() -> None:
     assert "- sex" in rendered
 
 
+def test_qa_node_prompt_instructs_streamlit_math_delimiters() -> None:
+    qa = _fresh_qa_module()
+    llm = _LLM()
+
+    state = {
+        "messages": [_HumanMessage("What is 3/5 + 1/5?")],
+        "output": {},
+        "meta": {"intent": "qa"},
+        "observations": [],
+        "agents": {"qa": {"tool_requests": [], "tool_results": []}},
+    }
+
+    qa.qa_node(state, llm, context="")
+
+    assert llm.last_messages is not None
+    rendered = "\n".join(m.get("content", "") for m in llm.last_messages)
+    assert "inline math with $...$ and display math with $$...$$" in rendered
+    assert "Do not use plain parentheses around LaTeX commands." in rendered
+
+
 def test_qa_node_prompt_template_escapes_literal_json_braces() -> None:
     original_format_prompt = _PromptTemplate.format_prompt
 

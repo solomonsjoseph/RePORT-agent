@@ -31,8 +31,8 @@ Always:
 - The user explicitly wants code, so do not ask whether they want code.
 - Return only valid JSON.
 - Use exactly one of these response shapes:
-  {"response_type": "code_result", "summary": "...", "assumptions": "...", "code": "..."}
-  {"response_type": "clarification", "question": "..."}
+  {{"response_type": "code_result", "summary": "...", "assumptions": "...", "code": "..."}}
+  {{"response_type": "clarification", "question": "..."}}
 - For "code_result":
   - "summary" must briefly describe what the generated code does.
   - "assumptions" may be an empty string when there is nothing important to note.
