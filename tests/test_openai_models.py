@@ -39,9 +39,10 @@ class _FakeHTTPClient:
             200,
             {
                 "data": [
-                    {"id": "gpt-4o"},
+                    {"id": "gpt-4.1-mini-2025-04-14"},
                     {"id": "gpt-5"},
                     {"id": "gpt-5-codex"},
+                    {"id": "gpt-4o"},
                     {"id": "gpt-4o-audio-preview"},
                 ]
             },
@@ -52,7 +53,7 @@ class _FakeHTTPClient:
         assert timeout == 15
         assert json is not None
         self.post_payloads[json["model"]] = json
-        if json["model"] == "gpt-4o":
+        if json["model"] == "gpt-4.1-mini-2025-04-14":
             return _FakeResponse(200, {"choices": [{"message": {"content": "ok"}}]})
         if json["model"] == "gpt-5":
             return _FakeResponse(200, {"choices": [{"message": {"content": "ok"}}]})
@@ -62,20 +63,21 @@ class _FakeHTTPClient:
 def test_is_openai_gpt5_family_detects_gpt5_models() -> None:
     assert is_openai_gpt5_family("gpt-5")
     assert is_openai_gpt5_family("gpt-5.4-mini")
-    assert not is_openai_gpt5_family("gpt-4o")
+    assert not is_openai_gpt5_family("gpt-4.1-mini-2025-04-14")
 
 
 def test_openai_chat_probe_payload_uses_gpt5_token_field() -> None:
-    assert openai_chat_probe_payload("gpt-4o")["max_tokens"] == 8
-    assert "max_completion_tokens" not in openai_chat_probe_payload("gpt-4o")
+    assert openai_chat_probe_payload("gpt-4.1-mini-2025-04-14")["max_tokens"] == 8
+    assert "max_completion_tokens" not in openai_chat_probe_payload("gpt-4.1-mini-2025-04-14")
 
     assert openai_chat_probe_payload("gpt-5")["max_completion_tokens"] == 8
     assert "max_tokens" not in openai_chat_probe_payload("gpt-5")
 
 
 def test_is_openai_chat_candidate_filters_non_chat_variants() -> None:
-    assert is_openai_chat_candidate("gpt-4o")
+    assert is_openai_chat_candidate("gpt-4.1-mini-2025-04-14")
     assert is_openai_chat_candidate("gpt-5")
+    assert not is_openai_chat_candidate("gpt-4o")
     assert not is_openai_chat_candidate("gpt-5-codex")
     assert not is_openai_chat_candidate("gpt-4o-audio-preview")
 
@@ -85,8 +87,9 @@ def test_list_supported_openai_chat_models_probes_and_filters() -> None:
 
     models = list_supported_openai_chat_models("secret", http_client=http_client)
 
-    assert models == ["gpt-4o", "gpt-5"]
-    assert http_client.post_payloads["gpt-4o"]["max_tokens"] == 8
+    assert models == ["gpt-4.1-mini-2025-04-14", "gpt-5"]
+    assert "gpt-4o" not in http_client.post_payloads
+    assert http_client.post_payloads["gpt-4.1-mini-2025-04-14"]["max_tokens"] == 8
     assert http_client.post_payloads["gpt-5"]["max_completion_tokens"] == 8
 
 
@@ -98,8 +101,9 @@ class _AllProbeFailuresHTTPClient:
             200,
             {
                 "data": [
-                    {"id": "gpt-4o"},
+                    {"id": "gpt-4.1-mini-2025-04-14"},
                     {"id": "gpt-5"},
+                    {"id": "gpt-4o"},
                 ]
             },
         )
@@ -108,8 +112,8 @@ class _AllProbeFailuresHTTPClient:
         assert headers is not None
         assert json is not None
         assert timeout == 15
-        if json["model"] == "gpt-4o":
-            return _FakeResponse(403, {"error": {"message": "Project does not have access to gpt-4o"}})
+        if json["model"] == "gpt-4.1-mini-2025-04-14":
+            return _FakeResponse(403, {"error": {"message": "Project does not have access to gpt-4.1-mini-2025-04-14"}})
         return _FakeResponse(429, {"error": {"message": "Quota exceeded for gpt-5"}})
 
 
@@ -121,5 +125,5 @@ def test_list_supported_openai_chat_models_raises_probe_error_when_all_candidate
 
     message = str(excinfo.value)
     assert "No supported OpenAI chat models passed the availability probe" in message
-    assert "gpt-4o: Project does not have access to gpt-4o" in message
+    assert "gpt-4.1-mini-2025-04-14: Project does not have access to gpt-4.1-mini-2025-04-14" in message
     assert "gpt-5: Quota exceeded for gpt-5" in message

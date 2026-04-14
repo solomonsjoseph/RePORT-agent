@@ -43,6 +43,7 @@ from utils.streamlit_config import (
     EXECUTION_TIMEOUT_STEP,
     MAX_AUTO_STEPS_RANGE,
     PROVIDER_OPTIONS,
+    provider_display_label,
     TEMPERATURE_RANGE,
     TEMPERATURE_STEP,
     TOP_P_RANGE,
@@ -88,6 +89,7 @@ provider = st.sidebar.selectbox(
     "Provider",
     list(PROVIDER_OPTIONS),
     index=PROVIDER_OPTIONS.index(DEFAULT_PROVIDER),
+    format_func=provider_display_label,
     help="Choose the model provider to use."
 )
 

@@ -18,6 +18,8 @@ def is_openai_chat_candidate(model_name: str) -> bool:
     normalized = (model_name or "").strip().lower()
     if not (normalized.startswith("gpt-4") or normalized.startswith("gpt-5")):
         return False
+    if normalized.startswith("gpt-4o"):
+        return False
 
     unsupported_markers = (
         "audio",

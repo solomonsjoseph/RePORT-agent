@@ -41,7 +41,7 @@ def test_build_llm_passes_timeout_and_retries_to_anthropic(monkeypatch) -> None:
     assert os.environ["ANTHROPIC_API_KEY"] == "secret"
 
 
-def test_build_llm_passes_sampling_params_to_openai_gpt4o_models(monkeypatch) -> None:
+def test_build_llm_passes_sampling_params_to_openai_gpt41_models(monkeypatch) -> None:
     monkeypatch.setenv("LLM_REQUEST_TIMEOUT_SEC", "21")
 
     captured: dict[str, object] = {}
@@ -59,7 +59,7 @@ def test_build_llm_passes_sampling_params_to_openai_gpt4o_models(monkeypatch) ->
     llm_vllm = importlib.import_module("llm_vllm")
 
     llm_vllm.build_llm(
-        model_name="gpt-4o-mini",
+        model_name="gpt-4.1-mini-2025-04-14",
         temperature=0.3,
         top_p=0.7,
         base_url="",
@@ -67,7 +67,7 @@ def test_build_llm_passes_sampling_params_to_openai_gpt4o_models(monkeypatch) ->
         provider="openai",
     )
 
-    assert captured["model"] == "gpt-4o-mini"
+    assert captured["model"] == "gpt-4.1-mini-2025-04-14"
     assert captured["temperature"] == 0.3
     assert captured["top_p"] == 0.7
     assert captured["max_tokens"] == 4096

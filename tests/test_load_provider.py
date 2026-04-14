@@ -83,7 +83,7 @@ def test_load_provider_uses_env_key_without_submit(monkeypatch):
 
     def load_models_fn(api_key):
         model_calls.append(api_key)
-        return ["gpt-4o-mini", "gpt-4.1"]
+        return ["gpt-4.1-mini-2025-04-14", "gpt-4.1"]
 
     api_key, model_name = load_provider_module.load_provider(
         provider_label="OpenAI",
@@ -91,13 +91,13 @@ def test_load_provider_uses_env_key_without_submit(monkeypatch):
         input_label="OpenAI API Key",
         default_api_key="",
         env_api_key="env-key",
-        default_model="gpt-4o-mini",
+        default_model="gpt-4.1-mini-2025-04-14",
         load_models_fn=load_models_fn,
         model_help="Choose model.",
     )
 
     assert api_key == "env-key"
-    assert model_name == "gpt-4o-mini"
+    assert model_name == "gpt-4.1-mini-2025-04-14"
     assert fake_st.session_state["openai_api_key"] == "env-key"
     assert model_calls == ["env-key"]
     assert fake_st.sidebar.info_messages == []
@@ -114,8 +114,8 @@ def test_load_provider_stops_when_no_key_available(monkeypatch):
             input_label="OpenAI API Key",
             default_api_key="",
             env_api_key="",
-            default_model="gpt-4o-mini",
-            load_models_fn=lambda _api_key: ["gpt-4o-mini"],
+            default_model="gpt-4.1-mini-2025-04-14",
+            load_models_fn=lambda _api_key: ["gpt-4.1-mini-2025-04-14"],
             model_help="Choose model.",
         )
 
@@ -141,7 +141,7 @@ def test_load_provider_surfaces_loader_error_details(monkeypatch):
             input_label="OpenAI API Key",
             default_api_key="",
             env_api_key="env-key",
-            default_model="gpt-4o-mini",
+            default_model="gpt-4.1-mini-2025-04-14",
             load_models_fn=load_models_fn,
             model_help="Choose model.",
         )

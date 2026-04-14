@@ -8,6 +8,11 @@ DEFAULT_ANTHROPIC_MODEL = "claude-3-5-sonnet-20240620"
 ANTHROPIC_API_VERSION = "2023-06-01"
 
 PROVIDER_OPTIONS = ("openai", "anthropic", "vllm")
+PROVIDER_LABELS = {
+    "openai": "OpenAI (ChatGPT)",
+    "anthropic": "Anthropic (Claude)",
+    "vllm": "Local",
+}
 EXECUTION_MODE_OPTIONS = ("docker", "trusted_local")
 
 DEFAULT_TEMPERATURE = 0.1
@@ -26,3 +31,7 @@ MAX_AUTO_STEPS_RANGE = (1, 8)
 DEFAULT_EXECUTION_TIMEOUT_SEC = 60
 EXECUTION_TIMEOUT_RANGE = (5, 120)
 EXECUTION_TIMEOUT_STEP = 5
+
+
+def provider_display_label(provider: str) -> str:
+    return PROVIDER_LABELS.get(provider, provider)
