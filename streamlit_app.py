@@ -57,6 +57,11 @@ from utils.streamlit_interrupts import (
     should_block_chat_submission,
     should_render_review_interrupt,
 )
+from utils.working_directory import (
+    WORKING_DIRECTORY_ENV_VAR,
+    build_execution_profile,
+    normalize_working_directory,
+)
 # --------------------------
 # Streamlit Config
 # --------------------------
@@ -84,6 +89,45 @@ default_openai_model = os.getenv("OPENAI_MODEL", DEFAULT_OPENAI_MODEL)
 default_anthropic_model = os.getenv("ANTHROPIC_MODEL", DEFAULT_ANTHROPIC_MODEL)
 openai_env_key = os.getenv("OPENAI_API_KEY", "")
 anthropic_env_key = os.getenv("ANTHROPIC_API_KEY", "")
+
+st.sidebar.header("Workspace")
+working_directory_input = st.sidebar.text_input(
+    "Working directory",
+    value=st.session_state.get("working_directory_input", ""),
+    help="Choose the only directory where LLM-caused files may be created or modified.",
+)
+create_working_directory = st.sidebar.checkbox(
+    "Create directory if missing",
+    value=False,
+)
+
+working_directory_error = None
+execution_profile = None
+
+try:
+    candidate_path = normalize_working_directory(working_directory_input)
+    if candidate_path.exists():
+        if not candidate_path.is_dir():
+            raise ValueError("Working directory must point to a directory.")
+    elif create_working_directory:
+        candidate_path.mkdir(parents=True, exist_ok=True)
+    else:
+        raise ValueError("Working directory does not exist.")
+
+    execution_profile = build_execution_profile(candidate_path)
+    st.session_state["execution_profile"] = execution_profile
+    st.session_state["working_directory_input"] = execution_profile["working_directory"]
+    os.environ[WORKING_DIRECTORY_ENV_VAR] = execution_profile["working_directory"]
+    st.sidebar.caption(f"Active workspace: {execution_profile['working_directory']}")
+except ValueError as exc:
+    working_directory_error = str(exc)
+    st.session_state.pop("execution_profile", None)
+    os.environ.pop(WORKING_DIRECTORY_ENV_VAR, None)
+
+if working_directory_error:
+    st.sidebar.error(working_directory_error)
+    st.info("Choose a working directory before initializing the model.")
+    st.stop()
 
 provider = st.sidebar.selectbox(
     "Provider",
