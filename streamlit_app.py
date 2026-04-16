@@ -105,8 +105,6 @@ browser_current_directory = Path(
     st.session_state.get("browser_current_directory", "/")
 ).resolve()
 selected_working_directory = st.session_state.get("selected_working_directory")
-child_directories = _list_child_directories(browser_current_directory)
-child_directory_labels = [child.name for child in child_directories]
 
 st.sidebar.caption(f"Browsing: {browser_current_directory}")
 
@@ -116,21 +114,12 @@ if parent_directory != browser_current_directory:
         st.session_state["browser_current_directory"] = str(parent_directory)
         st.rerun()
 
-selected_child_name = st.sidebar.selectbox(
-    "Folders",
-    child_directory_labels,
-    index=None,
-    placeholder="Select a folder",
-)
+for child_dir in _list_child_directories(browser_current_directory):
+    if st.sidebar.button(f"Open {child_dir.name}", key=f"open-dir-{child_dir}"):
+        st.session_state["browser_current_directory"] = str(child_dir)
+        st.rerun()
 
-if st.sidebar.button("Open selected folder", disabled=selected_child_name is None):
-    matching_child = next(
-        child for child in child_directories if child.name == selected_child_name
-    )
-    st.session_state["browser_current_directory"] = str(matching_child)
-    st.rerun()
-
-if st.sidebar.button("Use selected folder"):
+if st.sidebar.button("Use this directory"):
     selected_working_directory = str(browser_current_directory)
     st.session_state["selected_working_directory"] = selected_working_directory
 
