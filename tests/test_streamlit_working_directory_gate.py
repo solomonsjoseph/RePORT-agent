@@ -6,7 +6,7 @@ from utils.working_directory import build_execution_profile
 def test_working_directory_gate_requires_selection_before_model_load() -> None:
     source = Path("streamlit_app.py").read_text(encoding="utf-8")
 
-    gate_index = source.index('working_directory_input = st.sidebar.text_input(')
+    gate_index = source.index('st.sidebar.header("Workspace")')
     load_index = source.index("def load_llm(")
 
     assert gate_index < load_index
