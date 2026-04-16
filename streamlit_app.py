@@ -6,7 +6,7 @@ import hashlib
 import io
 import tempfile
 import requests
-from pathlib import Path
+# from pathlib import Path
 import uuid
 import time
 from dotenv import load_dotenv
@@ -75,16 +75,6 @@ load_dotenv()
 
 st.title(title)
 
-
-def _list_child_directories(path: Path) -> list[Path]:
-    try:
-        return sorted(
-            [child for child in path.iterdir() if child.is_dir()],
-            key=lambda child: child.name.lower(),
-        )
-    except (PermissionError, FileNotFoundError, OSError):
-        return []
-
 # ============================================================
 # Sidebar UI — Model Configuration
 # ============================================================
@@ -101,42 +91,32 @@ openai_env_key = os.getenv("OPENAI_API_KEY", "")
 anthropic_env_key = os.getenv("ANTHROPIC_API_KEY", "")
 
 st.sidebar.header("Workspace")
-browser_current_directory = Path(
-    st.session_state.get("browser_current_directory", "/")
-).resolve()
-selected_working_directory = st.session_state.get("selected_working_directory")
-
-st.sidebar.caption(f"Browsing: {browser_current_directory}")
-
-parent_directory = browser_current_directory.parent
-if parent_directory != browser_current_directory:
-    if st.sidebar.button("Up"):
-        st.session_state["browser_current_directory"] = str(parent_directory)
-        st.rerun()
-
-for child_dir in _list_child_directories(browser_current_directory):
-    if st.sidebar.button(f"Open {child_dir.name}", key=f"open-dir-{child_dir}"):
-        st.session_state["browser_current_directory"] = str(child_dir)
-        st.rerun()
-
-if st.sidebar.button("Use this directory"):
-    selected_working_directory = str(browser_current_directory)
-    st.session_state["selected_working_directory"] = selected_working_directory
+working_directory_input = st.sidebar.text_input(
+    "Working directory",
+    value=st.session_state.get("working_directory_input", ""),
+    help="Choose the only directory where LLM-caused files may be created or modified.",
+)
+create_working_directory = st.sidebar.checkbox(
+    "Create directory if missing",
+    value=False,
+)
 
 working_directory_error = None
 execution_profile = None
 
 try:
-    if not selected_working_directory:
-        raise ValueError("Working directory is required.")
-
-    candidate_path = normalize_working_directory(selected_working_directory)
-    if not candidate_path.is_dir():
-        raise ValueError("Working directory must point to an existing directory.")
+    candidate_path = normalize_working_directory(working_directory_input)
+    if candidate_path.exists():
+        if not candidate_path.is_dir():
+            raise ValueError("Working directory must point to a directory.")
+    elif create_working_directory:
+        candidate_path.mkdir(parents=True, exist_ok=True)
+    else:
+        raise ValueError("Working directory does not exist.")
 
     execution_profile = build_execution_profile(candidate_path)
     st.session_state["execution_profile"] = execution_profile
-    st.session_state["selected_working_directory"] = execution_profile["working_directory"]
+    st.session_state["working_directory_input"] = execution_profile["working_directory"]
     os.environ[WORKING_DIRECTORY_ENV_VAR] = execution_profile["working_directory"]
     st.sidebar.caption(f"Active workspace: {execution_profile['working_directory']}")
 except ValueError as exc:
