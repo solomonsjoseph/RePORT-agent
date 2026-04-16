@@ -18,6 +18,8 @@ def test_streamlit_config_exposes_supported_options_in_one_place() -> None:
         "vllm": "Local",
     }
     assert streamlit_config.EXECUTION_MODE_OPTIONS == ("docker", "trusted_local")
+    assert streamlit_config.DEFAULT_ENVIRONMENT_MODE == "project_default"
+    assert streamlit_config.WORKING_DIRECTORY_RUNS_SUBDIR == "runs"
     assert streamlit_config.DEFAULT_ALLOW_TRUSTED_LOCAL_POLICY_BLOCKED is True
     assert streamlit_config.MAX_AUTO_STEPS_RANGE == (1, 8)
     assert streamlit_config.EXECUTION_TIMEOUT_RANGE == (5, 120)
