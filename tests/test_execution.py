@@ -8,6 +8,7 @@ from pathlib import Path
 from types import ModuleType
 
 import pandas as pd
+import pytest
 
 
 def _load_execution_module():
@@ -17,6 +18,11 @@ def _load_execution_module():
     sys.modules["lifelines"] = lifelines_mod
     sys.modules.pop("tools.execution", None)
     return importlib.import_module("tools.execution")
+
+
+@pytest.fixture(autouse=True)
+def _working_directory_env(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("REPORT_AGENT_WORKING_DIRECTORY", str(tmp_path))
 
 
 class _TmpDirCtx:
@@ -44,6 +50,26 @@ def test_run_python_user_blocks_disallowed_imports() -> None:
         "category": "policy_blocked",
         "type": "PolicyBlockedError",
         "message": "Disallowed import: subprocess",
+    }
+
+
+def test_run_python_user_requires_working_directory_env(monkeypatch) -> None:
+    execution = _load_execution_module()
+    monkeypatch.setenv("EXECUTION_MODE", "trusted_local")
+    monkeypatch.delenv("REPORT_AGENT_WORKING_DIRECTORY", raising=False)
+
+    result, stdout, figure_png, error = execution.run_python_user(
+        "result = 1",
+        pd.DataFrame({"a": [1]}),
+    )
+
+    assert result is None
+    assert stdout == ""
+    assert figure_png == b""
+    assert error == {
+        "category": "policy_blocked",
+        "type": "PolicyBlockedError",
+        "message": "Working directory is not configured.",
     }
 
 
@@ -213,7 +239,6 @@ def test_run_python_user_allows_pathlib_file_writes_when_trusted_local_toggle_en
 
     monkeypatch.setenv("EXECUTION_MODE", "trusted_local")
     monkeypatch.setenv("ALLOW_TRUSTED_LOCAL_POLICY_BLOCKED", "1")
-    monkeypatch.chdir(tmp_path)
 
     result, stdout, figure_png, error = execution.run_python_user(
         "from pathlib import Path\nPath('x.txt').write_text('data')\nresult = Path('x.txt').read_text()",
@@ -225,6 +250,30 @@ def test_run_python_user_allows_pathlib_file_writes_when_trusted_local_toggle_en
     assert figure_png == b""
     assert error is None
     assert (tmp_path / "x.txt").read_text(encoding="utf-8") == "data"
+
+
+def test_run_python_user_blocks_mutation_outside_working_directory(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    execution = _load_execution_module()
+    outside = tmp_path.parent / "outside.txt"
+    monkeypatch.setenv("EXECUTION_MODE", "trusted_local")
+    monkeypatch.setenv("ALLOW_TRUSTED_LOCAL_POLICY_BLOCKED", "1")
+
+    result, stdout, figure_png, error = execution.run_python_user(
+        f"from pathlib import Path\nPath({str(outside)!r}).write_text('data')",
+        pd.DataFrame({"a": [1]}),
+    )
+
+    assert result is None
+    assert stdout == ""
+    assert figure_png == b""
+    assert error == {
+        "category": "policy_blocked",
+        "type": "PolicyBlockedError",
+        "message": "Filesystem mutation target escapes working directory.",
+    }
 
 
 def test_run_python_user_reads_structured_docker_outputs(
@@ -251,7 +300,6 @@ def test_run_python_user_reads_structured_docker_outputs(
 
     monkeypatch.setenv("EXECUTION_MODE", "docker")
     monkeypatch.setenv("SANDBOX_IMAGE", "report-agent-sandbox:test")
-    monkeypatch.setattr(execution.tempfile, "TemporaryDirectory", lambda prefix="": _TmpDirCtx(tmp_path))
     monkeypatch.setattr(execution.subprocess, "run", fake_run)
 
     result, stdout, figure_png, error = execution.run_python_user(
@@ -265,6 +313,44 @@ def test_run_python_user_reads_structured_docker_outputs(
     assert error is None
     assert written["command"][:3] == ["docker", "run", "--rm"]
     assert "--network=none" in written["command"]
+
+
+def test_run_python_user_creates_docker_run_artifacts_under_working_directory(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    execution = _load_execution_module()
+    captured: dict[str, list[str]] = {}
+
+    def fake_run(command, **kwargs):
+        captured["command"] = command
+        output_mount = next(arg for arg in command if "dst=/sandbox/output" in arg)
+        output_dir = Path(
+            output_mount.split("src=", 1)[1].split(",dst=/sandbox/output", 1)[0]
+        )
+        (output_dir / "result.json").write_text(
+            json.dumps({"status": "ok", "text": "", "result": 1, "error": None}),
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setenv("EXECUTION_MODE", "docker")
+    monkeypatch.setattr(execution.subprocess, "run", fake_run)
+
+    result, stdout, figure_png, error = execution.run_python_user(
+        "result = 1",
+        pd.DataFrame({"a": [1]}),
+    )
+
+    assert result == 1
+    assert stdout == ""
+    assert figure_png == b""
+    assert error is None
+    output_mount = next(arg for arg in captured["command"] if "dst=/sandbox/output" in arg)
+    output_dir = Path(
+        output_mount.split("src=", 1)[1].split(",dst=/sandbox/output", 1)[0]
+    )
+    assert tmp_path.resolve() in output_dir.resolve().parents
 
 
 def test_run_python_user_returns_timeout_error_for_docker_timeout(monkeypatch) -> None:
@@ -293,7 +379,6 @@ def test_run_python_user_returns_timeout_error_for_docker_timeout(monkeypatch) -
 
 def test_run_python_user_returns_sandbox_error_when_result_missing(
     monkeypatch,
-    tmp_path: Path,
 ) -> None:
     execution = _load_execution_module()
     def fake_run(command, **kwargs):
@@ -301,7 +386,6 @@ def test_run_python_user_returns_sandbox_error_when_result_missing(
 
     monkeypatch.setenv("EXECUTION_MODE", "docker")
     monkeypatch.setenv("SANDBOX_IMAGE", "report-agent-sandbox:test")
-    monkeypatch.setattr(execution.tempfile, "TemporaryDirectory", lambda prefix="": _TmpDirCtx(tmp_path))
     monkeypatch.setattr(execution.subprocess, "run", fake_run)
 
     result, stdout, figure_png, error = execution.run_python_user(
@@ -321,7 +405,6 @@ def test_run_python_user_returns_sandbox_error_when_result_missing(
 
 def test_run_python_user_maps_missing_package_to_unsupported_runtime(
     monkeypatch,
-    tmp_path: Path,
 ) -> None:
     execution = _load_execution_module()
 
@@ -347,7 +430,6 @@ def test_run_python_user_maps_missing_package_to_unsupported_runtime(
 
     monkeypatch.setenv("EXECUTION_MODE", "docker")
     monkeypatch.setenv("SANDBOX_IMAGE", "report-agent-sandbox:test")
-    monkeypatch.setattr(execution.tempfile, "TemporaryDirectory", lambda prefix="": _TmpDirCtx(tmp_path))
     monkeypatch.setattr(execution.subprocess, "run", fake_run)
 
     result, stdout, figure_png, error = execution.run_python_user(
