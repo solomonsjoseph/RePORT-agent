@@ -14,8 +14,6 @@ PROVIDER_LABELS = {
     "vllm": "Local",
 }
 EXECUTION_MODE_OPTIONS = ("docker", "trusted_local")
-DEFAULT_ENVIRONMENT_MODE = "project_default"
-WORKING_DIRECTORY_RUNS_SUBDIR = "runs"
 
 DEFAULT_TEMPERATURE = 0.1
 TEMPERATURE_RANGE = (0.0, 1.0)
