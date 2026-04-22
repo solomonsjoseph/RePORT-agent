@@ -139,7 +139,7 @@ def _fresh_modules(review_decisions: list[dict]):
         "graph.nodes.execute_code",
         "graph.nodes.qa",
         "graph.nodes.human_review_before_run",
-        "graph.nodes.human_review_final",
+        "graph.nodes.human_review_before_output",
         "graph.nodes.orchestrator",
         "graph.nodes.orchestrator.node",
         "graph.nodes.orchestrator.planner",
@@ -151,7 +151,7 @@ def _fresh_modules(review_decisions: list[dict]):
         "execute_code": importlib.import_module("graph.nodes.execute_code"),
         "qa": importlib.import_module("graph.nodes.qa"),
         "human_review_before_run": importlib.import_module("graph.nodes.human_review_before_run"),
-        "human_review_final": importlib.import_module("graph.nodes.human_review_final"),
+        "human_review_before_output": importlib.import_module("graph.nodes.human_review_before_output"),
         "orchestrator": importlib.import_module("graph.nodes.orchestrator"),
     }
 
@@ -220,7 +220,7 @@ def _successful_analysis_state(mods) -> dict:
     generate_code = mods["generate_code"]
     execute_code = mods["execute_code"]
     before_run = mods["human_review_before_run"]
-    final_review = mods["human_review_final"]
+    final_review = mods["human_review_before_output"]
 
     planner_llm = _SeqLLM(['{"action":"generate_code","thought":"user asked to run code"}'])
     state = _initial_state(_HumanMessage("run df.head() for me", id="u1"))
@@ -230,7 +230,7 @@ def _successful_analysis_state(mods) -> dict:
         "generate_code",
         "human_review_before_run",
         "execute_code",
-        "human_review_final",
+        "human_review_before_output",
         "end",
     ]
 
@@ -256,9 +256,13 @@ def _successful_analysis_state(mods) -> dict:
     state = _run_action(state, "execute_code", execute_code.execute_code_node, pd.DataFrame())
 
     state = orchestrator.orchestrator_node(state, _SeqLLM([]), available_actions)
-    assert state["next_action"] == "human_review_final"
+    assert state["next_action"] == "human_review_before_output"
 
-    state = _run_action(state, "human_review_final", final_review.human_review_final_node)
+    state = _run_action(
+        state,
+        "human_review_before_output",
+        final_review.human_review_before_output_node,
+    )
     state = orchestrator.orchestrator_node(state, _SeqLLM([]), available_actions)
     assert state["next_action"] == "end"
     return state
@@ -275,7 +279,7 @@ def test_completed_final_review_is_idempotent_on_checkpoint_like_reentry() -> No
     rerun_state = mods["orchestrator"].orchestrator_node(
         state,
         _SeqLLM([]),
-        ["qa", "generate_code", "human_review_final", "end"],
+        ["qa", "generate_code", "human_review_before_output", "end"],
     )
 
     assert rerun_state["next_action"] == "end"
@@ -298,7 +302,7 @@ def test_new_user_turn_after_completed_analysis_routes_to_qa_without_reconsuming
     updated = mods["orchestrator"].orchestrator_node(
         state,
         _SeqLLM(['{"action":"qa","thought":"identity question"}']),
-        ["qa", "generate_code", "human_review_final", "end"],
+        ["qa", "generate_code", "human_review_before_output", "end"],
     )
 
     assert updated["next_action"] == "qa"

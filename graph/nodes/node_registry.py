@@ -183,8 +183,8 @@ NODE_REGISTRY: list[NodeDefinition] = [
         ),
     ),
     NodeDefinition(
-        name="human_review_final",
-        capability=ACTION_CAPABILITIES["human_review_final"],
+        name="human_review_before_output",
+        capability=ACTION_CAPABILITIES["human_review_before_output"],
         priority=80,
         is_ready=lambda s: (
             get_agent_state(s, "executor").get("run_status") == "ok"

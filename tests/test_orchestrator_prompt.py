@@ -951,7 +951,7 @@ def test_orchestrator_pauses_after_qa_opens_tool_clarification_loop() -> None:
     assert len(llm.calls) == 0
 
 
-def test_orchestrator_final_review_regenerate_routes_back_to_generate_code() -> None:
+def test_orchestrator_before_output_review_regenerate_routes_back_to_generate_code() -> None:
     _install_langchain_and_langgraph_stubs()
     orchestrator = importlib.import_module("graph.nodes.orchestrator")
 
@@ -963,7 +963,7 @@ def test_orchestrator_final_review_regenerate_routes_back_to_generate_code() -> 
             "figure_png": b"old-png",
         },
         "observations": [],
-        "last_action": "human_review_final",
+        "last_action": "human_review_before_output",
         "orchestrator": {"next_action": "end"},
         "agents": {
             "executor": {"run_status": "ok"},
@@ -975,7 +975,7 @@ def test_orchestrator_final_review_regenerate_routes_back_to_generate_code() -> 
         },
         "meta": {
             "error_iterations": 0,
-            "workflow_trace": ["orchestrator", "human_review_final"],
+            "workflow_trace": ["orchestrator", "human_review_before_output"],
             "current_code_hash": "abc",
         },
     }
@@ -983,7 +983,7 @@ def test_orchestrator_final_review_regenerate_routes_back_to_generate_code() -> 
     updated = orchestrator.orchestrator_node(
         state,
         _LLM("not-json"),
-        ["qa", "generate_code", "execute_code", "human_review_final", "end"],
+        ["qa", "generate_code", "execute_code", "human_review_before_output", "end"],
     )
 
     assert updated["next_action"] == "generate_code"
@@ -994,7 +994,7 @@ def test_orchestrator_final_review_regenerate_routes_back_to_generate_code() -> 
     assert (updated["agents"].get("executor") or {}).get("run_status") == "idle"
 
 
-def test_orchestrator_consumes_final_review_approval_and_ends() -> None:
+def test_orchestrator_consumes_before_output_review_approval_and_ends() -> None:
     _install_langchain_and_langgraph_stubs()
     orchestrator = importlib.import_module("graph.nodes.orchestrator")
 
@@ -1005,7 +1005,7 @@ def test_orchestrator_consumes_final_review_approval_and_ends() -> None:
             "text": "ok",
         },
         "observations": [],
-        "last_action": "human_review_final",
+        "last_action": "human_review_before_output",
         "orchestrator": {},
         "agents": {
             "executor": {"run_status": "ok"},
@@ -1016,7 +1016,7 @@ def test_orchestrator_consumes_final_review_approval_and_ends() -> None:
             },
         },
         "meta": {
-            "workflow_trace": ["orchestrator", "human_review_final"],
+            "workflow_trace": ["orchestrator", "human_review_before_output"],
             "current_code_hash": "abc",
             "execution_ticket_hash": "abc",
         },
@@ -1025,7 +1025,7 @@ def test_orchestrator_consumes_final_review_approval_and_ends() -> None:
     updated = orchestrator.orchestrator_node(
         state,
         _LLM("not-json"),
-        ["generate_code", "human_review_final", "end"],
+        ["generate_code", "human_review_before_output", "end"],
     )
 
     assert updated["next_action"] == "end"
@@ -1165,10 +1165,10 @@ def test_orchestrator_routes_successful_execution_to_final_review_without_planne
     updated = orchestrator.orchestrator_node(
         state,
         llm,
-        ["qa", "generate_code", "execute_code", "human_review_final", "end"],
+        ["qa", "generate_code", "execute_code", "human_review_before_output", "end"],
     )
 
-    assert updated["next_action"] == "human_review_final"
+    assert updated["next_action"] == "human_review_before_output"
     assert len(llm.calls) == 0
 
 
@@ -1367,16 +1367,16 @@ def test_planner_two_stage_selection_uses_ranked_ready_candidate() -> None:
     llm = _SeqLLM([
         json.dumps({
             "action": "execute_code",
-            "ranked_actions": ["execute_code", "human_review_final"],
+            "ranked_actions": ["execute_code", "human_review_before_output"],
             "thought": "ranking"
         }),
     ])
 
     action, thought = planner.llm_select_next_action(
-        state, llm, ["generate_code", "execute_code", "human_review_final", "end"]
+        state, llm, ["generate_code", "execute_code", "human_review_before_output", "end"]
     )
 
-    assert action == "human_review_final"
+    assert action == "human_review_before_output"
     assert "ranked=" in thought
 
 
@@ -1408,7 +1408,7 @@ def test_planner_uses_single_planner_call() -> None:
     ])
 
     action, thought = planner.llm_select_next_action(
-        state, llm, ["generate_code", "execute_code", "human_review_final", "end"]
+        state, llm, ["generate_code", "execute_code", "human_review_before_output", "end"]
     )
 
     assert action == "end"
@@ -1437,16 +1437,16 @@ def test_planner_keeps_ranked_actions_without_extra_calls() -> None:
     llm = _SeqLLM([
         json.dumps({
             "action": "execute_code",
-            "ranked_actions": ["execute_code", "human_review_final"],
+            "ranked_actions": ["execute_code", "human_review_before_output"],
             "thought": "ranking"
         }),
     ])
 
     action, thought = planner.llm_select_next_action(
-        state, llm, ["generate_code", "execute_code", "human_review_final", "end"]
+        state, llm, ["generate_code", "execute_code", "human_review_before_output", "end"]
     )
 
-    assert action == "human_review_final"
+    assert action == "human_review_before_output"
     assert "ranked=" in thought
     assert len(llm.calls) == 1
 
@@ -1575,7 +1575,7 @@ def test_llm_select_next_action_rejects_inactive_clarification_choice() -> None:
     assert "Blocked actions:\n- clarification (requires active clarification loop)" in planner_messages[1]["content"]
 
 
-def test_llm_select_next_action_rejects_inactive_human_review_final_choice() -> None:
+def test_llm_select_next_action_rejects_inactive_human_review_before_output_choice() -> None:
     _install_langchain_and_langgraph_stubs()
     planner = importlib.import_module("graph.nodes.orchestrator.planner")
 
@@ -1592,11 +1592,11 @@ def test_llm_select_next_action_rejects_inactive_human_review_final_choice() -> 
         "last_action": None,
     }
 
-    llm = _LLM('{"action":"human_review_final","thought":"final review"}')
+    llm = _LLM('{"action":"human_review_before_output","thought":"final review"}')
     action, thought = planner.llm_select_next_action(
         state,
         llm,
-        ["qa", "human_review_final"],
+        ["qa", "human_review_before_output"],
     )
 
     assert action == "end"
@@ -1604,7 +1604,7 @@ def test_llm_select_next_action_rejects_inactive_human_review_final_choice() -> 
     planner_messages = llm.calls[0]
     assert "Allowed actions:\nqa" in planner_messages[0]["content"]
     assert (
-        "Blocked actions:\n- human_review_final (requires successful execution awaiting final review)"
+        "Blocked actions:\n- human_review_before_output (requires successful execution awaiting final review)"
         in planner_messages[1]["content"]
     )
 
@@ -1630,14 +1630,14 @@ def test_llm_select_next_action_explains_execute_code_block_when_final_review_is
     action, thought = planner.llm_select_next_action(
         state,
         llm,
-        ["qa", "execute_code", "human_review_final"],
+        ["qa", "execute_code", "human_review_before_output"],
     )
 
     assert action == "end"
     assert thought == "run again"
     planner_messages = llm.calls[0]
-    assert "Allowed actions:\nhuman_review_final, qa" in planner_messages[0]["content"]
-    assert "Blocked actions:\n- execute_code (already succeeded; move to human_review_final)" in planner_messages[1]["content"]
+    assert "Allowed actions:\nhuman_review_before_output, qa" in planner_messages[0]["content"]
+    assert "Blocked actions:\n- execute_code (already succeeded; move to human_review_before_output)" in planner_messages[1]["content"]
 
 def test_orchestrator_routes_latest_qa_turn_without_stale_code_bias() -> None:
     _install_langchain_and_langgraph_stubs()

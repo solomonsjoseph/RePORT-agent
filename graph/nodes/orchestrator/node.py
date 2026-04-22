@@ -144,7 +144,7 @@ def _should_end_for_completion(state: AgentState) -> bool:
     return state.get("last_action") in {
         "human_review_before_run",
         "human_review_after_error",
-        "human_review_final",
+        "human_review_before_output",
         "terminal_execution_error",
     }
 
@@ -193,7 +193,7 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
             )
             state = {**state, "observations": observations}
 
-    if _resumed_from(state, "human_review_final"):
+    if _resumed_from(state, "human_review_before_output"):
         output, agents, meta, regenerated_final = _consume_final_review_regenerate(output, agents, meta)
         if regenerated_final:
             next_action = "generate_code"

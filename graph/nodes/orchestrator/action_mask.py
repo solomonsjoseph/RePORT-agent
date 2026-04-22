@@ -10,10 +10,10 @@ def _static_reason(text: str):
 
 
 def _execute_code_block_reason(state: dict) -> str:
-    final_review = NODE_REGISTRY_MAP.get("human_review_final")
+    final_review = NODE_REGISTRY_MAP.get("human_review_before_output")
     before_run = NODE_REGISTRY_MAP.get("human_review_before_run")
     if final_review and final_review.is_ready(state):
-        return "already succeeded; move to human_review_final"
+        return "already succeeded; move to human_review_before_output"
     if before_run and before_run.is_ready(state):
         return "requires generated code awaiting run approval"
     return "requires approved generated code ready to run"
@@ -27,7 +27,9 @@ CONTROL_ACTION_REASON_FACTORIES = {
     "human_review_after_error": _static_reason("requires exhausted retryable execution error awaiting review"),
     "human_review_before_run": _static_reason("requires generated code awaiting run approval"),
     "execute_code": _execute_code_block_reason,
-    "human_review_final": _static_reason("requires successful execution awaiting final review"),
+    "human_review_before_output": _static_reason(
+        "requires successful execution awaiting final review"
+    ),
 }
 
 

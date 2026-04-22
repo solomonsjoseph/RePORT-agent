@@ -87,10 +87,10 @@ def test_mask_actions_blocks_inactive_review_control_actions_without_preconditio
         "meta": {},
     }
 
-    allowed, blocked = mask_actions(state, ["qa", "human_review_final"])
+    allowed, blocked = mask_actions(state, ["qa", "human_review_before_output"])
 
     assert allowed == ["qa"]
-    assert blocked["human_review_final"] == "requires successful execution awaiting final review"
+    assert blocked["human_review_before_output"] == "requires successful execution awaiting final review"
 
 
 def test_mask_actions_explain_execute_code_block_when_final_review_is_pending() -> None:
@@ -103,7 +103,7 @@ def test_mask_actions_explain_execute_code_block_when_final_review_is_pending() 
         "meta": {"current_code_hash": "h1"},
     }
 
-    allowed, blocked = mask_actions(state, ["qa", "execute_code", "human_review_final"])
+    allowed, blocked = mask_actions(state, ["qa", "execute_code", "human_review_before_output"])
 
-    assert allowed == ["qa", "human_review_final"]
-    assert blocked["execute_code"] == "already succeeded; move to human_review_final"
+    assert allowed == ["qa", "human_review_before_output"]
+    assert blocked["execute_code"] == "already succeeded; move to human_review_before_output"

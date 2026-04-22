@@ -10,7 +10,7 @@ DETERMINISTIC_CONTROL_ACTIONS = (
     "human_review_after_error",
     "human_review_before_run",
     "execute_code",
-    "human_review_final",
+    "human_review_before_output",
 )
 
 

@@ -13,7 +13,7 @@ _ACTION_MODULES = (
     "tool_handler",
     "human_review_before_run",
     "human_review_after_error",
-    "human_review_final",
+    "human_review_before_output",
     "terminal_execution_error",
 )
 
@@ -47,4 +47,3 @@ ACTION_CAPABILITIES: dict[str, str] = dict(
     _load_node_action_metadata(module_name)
     for module_name in _ACTION_MODULES
 )
-

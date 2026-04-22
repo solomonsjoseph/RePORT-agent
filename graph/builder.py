@@ -17,7 +17,7 @@ from .nodes.tool_handler import tool_handler_node
 from .nodes.terminal_execution_error import terminal_execution_error_node
 from .nodes.human_review_before_run import human_review_before_run_node
 from .nodes.human_review_after_error import human_review_after_error_node
-from .nodes.human_review_final import human_review_final_node
+from .nodes.human_review_before_output import human_review_before_output_node
 
 def _run_and_mark(node_name, fn):
     def _wrapped(state):
@@ -71,7 +71,10 @@ def build_graph(llm, df, schema, db_path):
         "clarification": _run_and_mark("clarification", lambda s: clarification_node(s, llm, context)),
         "human_review_after_error": _run_and_mark("human_review_after_error", human_review_after_error_node),
         "human_review_before_run": _run_and_mark("human_review_before_run", human_review_before_run_node),
-        "human_review_final": _run_and_mark("human_review_final", human_review_final_node),
+        "human_review_before_output": _run_and_mark(
+            "human_review_before_output",
+            human_review_before_output_node,
+        ),
         "tool_handler": _run_and_mark("tool_handler", tool_handler_node),
         "qa": _run_and_mark("qa", lambda s: qa_node(s, llm, context)),
     }

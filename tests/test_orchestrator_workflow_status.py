@@ -173,7 +173,7 @@ def test_successful_execution_with_approved_final_review_is_not_awaiting_final_r
             "human_review": {"final_decision": None},
         },
         "meta": {"current_code_hash": "h1", "final_approved_code_hash": "h1"},
-        "last_action": "human_review_final",
+        "last_action": "human_review_before_output",
     }
 
     status = derive_workflow_status(state)

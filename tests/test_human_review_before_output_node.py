@@ -40,10 +40,10 @@ def _install_stubs(decision: str, suggestion: str | None = None) -> None:
     sys.modules["langchain_core.messages"] = messages_mod
 
 
-def test_human_review_final_only_emits_result_message_on_approve() -> None:
+def test_human_review_before_output_only_emits_result_message_on_approve() -> None:
     _install_stubs(decision="approve")
-    sys.modules.pop("graph.nodes.human_review_final", None)
-    mod = importlib.import_module("graph.nodes.human_review_final")
+    sys.modules.pop("graph.nodes.human_review_before_output", None)
+    mod = importlib.import_module("graph.nodes.human_review_before_output")
 
     state = {
         "messages": [],
@@ -57,7 +57,7 @@ def test_human_review_final_only_emits_result_message_on_approve() -> None:
         "agents": {},
     }
 
-    updated = mod.human_review_final_node(state)
+    updated = mod.human_review_before_output_node(state)
     assert len(updated["messages"]) == 1
     assert updated["messages"][0].type == "ai"
     assert "Prints one." in updated["messages"][0].content
@@ -65,10 +65,10 @@ def test_human_review_final_only_emits_result_message_on_approve() -> None:
     assert updated["agents"]["human_review"]["final_decision"] == "approve"
 
 
-def test_human_review_final_regenerate_skips_result_message_and_keeps_suggestion() -> None:
+def test_human_review_before_output_regenerate_skips_result_message_and_keeps_suggestion() -> None:
     _install_stubs(decision="regenerate", suggestion="add covariates")
-    sys.modules.pop("graph.nodes.human_review_final", None)
-    mod = importlib.import_module("graph.nodes.human_review_final")
+    sys.modules.pop("graph.nodes.human_review_before_output", None)
+    mod = importlib.import_module("graph.nodes.human_review_before_output")
 
     state = {
         "messages": [],
@@ -76,7 +76,7 @@ def test_human_review_final_regenerate_skips_result_message_and_keeps_suggestion
         "agents": {},
     }
 
-    updated = mod.human_review_final_node(state)
+    updated = mod.human_review_before_output_node(state)
     assert len(updated["messages"]) == 1
     assert updated["messages"][0].type == "human"
     assert updated["messages"][0].content == "add covariates"
