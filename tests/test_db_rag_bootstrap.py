@@ -7,8 +7,13 @@ from types import ModuleType
 
 def _install_langchain_message_stubs(monkeypatch) -> None:
     messages_mod = ModuleType("langchain_core.messages")
-    messages_mod.HumanMessage = object
-    messages_mod.SystemMessage = object
+
+    class _Message:
+        def __init__(self, content: str = "") -> None:
+            self.content = content
+
+    messages_mod.HumanMessage = _Message
+    messages_mod.SystemMessage = _Message
     monkeypatch.setitem(sys.modules, "langchain_core.messages", messages_mod)
 
 

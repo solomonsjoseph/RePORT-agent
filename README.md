@@ -62,5 +62,28 @@ python -m streamlit run streamlit_app.py
 ### Activate Langraph
 In the pop up webpage, enter the API key in the field and click submit. If `.env` was set up previously, click submit directly.
 
+### DB-RAG setup
+If you want to use the DB-RAG feature, place the source files in this repo under:
+
+- `local_data/db_rag_source/reviewed_annotated_json_files/`
+- `local_data/db_rag_source/filtered_excel_files/`
+
+Then build the index from the repo root:
+
+```bash
+python -m db_rag.bootstrap --rebuild
+```
+
+This creates the runtime assets in `runtime/db_rag/`.
+
+To run a quick terminal demo against the DB-RAG assets:
+
+```bash
+python -m db_rag.quick_test "your question here"
+```
+
+If you omit the question, the script drops into interactive mode. If the runtime
+assets are missing, it rebuilds them first.
+
 ### Notes:
 - Synthetic demo data are included under `data/` folder.
