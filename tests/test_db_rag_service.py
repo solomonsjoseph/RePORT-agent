@@ -5,6 +5,8 @@ import sys
 from types import ModuleType
 from types import SimpleNamespace
 
+import pytest
+
 
 def _install_langchain_message_stubs(monkeypatch) -> None:
     messages_mod = ModuleType("langchain_core.messages")
@@ -321,3 +323,100 @@ def test_prepare_column_selection_uses_feedback_history(monkeypatch) -> None:
 
     message_text = "\n".join(getattr(message, "content", "") for message in captured[0])
     assert "Include gender explicitly." in message_text
+
+
+def test_prepare_column_selection_filters_invented_pairs(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    from db_rag import service
+
+    class _LLM:
+        def invoke(self, messages):
+            return SimpleNamespace(
+                content=json.dumps(
+                    {
+                        "selection_id": "sel-2",
+                        "rationale": "keep the exact retrieved pairs",
+                        "tables": ["Form 1A", "Invented Form"],
+                        "columns": [
+                            {
+                                "table": "Form 1A",
+                                "column": "AGE",
+                                "description": "Age in years",
+                            },
+                            {
+                                "table": "Form 1A",
+                                "column": "HEIGHT",
+                                "description": "Not present in context",
+                            },
+                            {
+                                "table": "Invented Form",
+                                "column": "SEX",
+                                "description": "Invented pair",
+                            },
+                        ],
+                    }
+                )
+            )
+
+    context = service.DbRagContext(
+        tables=[service.DbRagTableHit(table="Form 1A", text="Form 1A summary")],
+        columns=[
+            service.DbRagColumnHit(table="Form 1A", column="AGE", text="AGE summary"),
+            service.DbRagColumnHit(table="Form 1A", column="SEX", text="SEX summary"),
+        ],
+    )
+    db_rag_service = service.DbRagService(llm=_LLM())
+
+    selection = db_rag_service.prepare_column_selection("subset age and sex", context)
+
+    assert selection.selection_id == "sel-2"
+    assert selection.tables == ["Form 1A"]
+    assert selection.columns == [
+        {
+            "table": "Form 1A",
+            "column": "AGE",
+            "description": "Age in years",
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "not json at all",
+        "{}",
+    ],
+)
+def test_prepare_column_selection_fails_closed_on_invalid_output(monkeypatch, content) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    from db_rag import service
+
+    class _LLM:
+        def invoke(self, messages):
+            return SimpleNamespace(content=content)
+
+    context = service.DbRagContext(
+        tables=[service.DbRagTableHit(table="Form 1A", text="Form 1A summary")],
+        columns=[service.DbRagColumnHit(table="Form 1A", column="AGE", text="AGE summary")],
+    )
+    db_rag_service = service.DbRagService(llm=_LLM())
+
+    selection = db_rag_service.prepare_column_selection(
+        "subset age and sex",
+        context,
+        feedback_history=[{"feedback": "Include gender explicitly."}],
+    )
+
+    expected_selection_id = service._default_selection_id(
+        "subset age and sex",
+        context,
+        [{"feedback": "Include gender explicitly."}],
+    )
+    assert selection.selection_id == expected_selection_id
+    assert selection.question == "subset age and sex"
+    assert selection.tables == []
+    assert selection.columns == []
+    assert selection.rationale == "Invalid structured response from the model."
+    assert selection.feedback_history == [{"feedback": "Include gender explicitly."}]

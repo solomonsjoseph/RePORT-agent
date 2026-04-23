@@ -74,7 +74,7 @@ class ColumnSelectionCandidate:
     selection_id: str
     question: str
     tables: list[str]
-    columns: list[dict[str, Any]]
+    columns: list[dict[str, str]]
     rationale: str
     feedback_history: list[dict[str, Any]] = field(default_factory=list)
     status: str = "awaiting_review"
@@ -120,6 +120,21 @@ def _default_selection_id(question: str, context: DbRagContext, feedback_history
     }
     digest = hashlib.sha1(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
     return f"sel-{digest[:12]}"
+
+
+def _build_invalid_column_selection_candidate(
+    question: str,
+    context: DbRagContext,
+    feedback_history: list[dict[str, Any]],
+) -> ColumnSelectionCandidate:
+    return ColumnSelectionCandidate(
+        selection_id=_default_selection_id(question, context, feedback_history),
+        question=question,
+        tables=[],
+        columns=[],
+        rationale=_DB_RAG_CONTEXT_FALLBACK_RATIONALE,
+        feedback_history=feedback_history,
+    )
 
 
 def _validate_sql(sql: str) -> tuple[bool, str | None]:
@@ -331,6 +346,8 @@ class DbRagService:
         feedback_history: list[dict[str, Any]] | None = None,
     ) -> ColumnSelectionCandidate:
         normalized_feedback_history = list(feedback_history or [])
+        valid_tables = set(context.table_names)
+        valid_columns = {(entry.table, entry.column) for entry in context.columns}
         response = self.llm.invoke(
             [
                 SystemMessage(
@@ -354,24 +371,26 @@ class DbRagService:
             ]
         )
         parsed = _parse_json_object(coerce_text_content(getattr(response, "content", "")))
+        if not parsed:
+            return _build_invalid_column_selection_candidate(question, context, normalized_feedback_history)
 
         raw_tables = parsed.get("tables")
         tables: list[str] = []
         if isinstance(raw_tables, list):
             for value in raw_tables:
                 table = str(value or "").strip()
-                if table and table not in tables:
+                if table and table in valid_tables and table not in tables:
                     tables.append(table)
 
         raw_columns = parsed.get("columns")
-        columns: list[dict[str, Any]] = []
+        columns: list[dict[str, str]] = []
         if isinstance(raw_columns, list):
             for item in raw_columns:
                 if not isinstance(item, dict):
                     continue
                 table = str(item.get("table", "") or "").strip()
                 column = str(item.get("column", "") or "").strip()
-                if not table or not column:
+                if not table or not column or (table, column) not in valid_columns:
                     continue
                 description = str(item.get("description", "") or "").strip()
                 columns.append(
@@ -382,21 +401,15 @@ class DbRagService:
                     }
                 )
 
-        if not tables:
-            tables = []
-            for column in columns:
-                table = column["table"]
-                if table not in tables:
-                    tables.append(table)
-        if not tables:
-            tables = context.table_names
-
         selection_id = str(parsed.get("selection_id", "") or "").strip() or _default_selection_id(
             question,
             context,
             normalized_feedback_history,
         )
         rationale = str(parsed.get("rationale", "") or "").strip()
+
+        if not tables and not columns:
+            return _build_invalid_column_selection_candidate(question, context, normalized_feedback_history)
 
         return ColumnSelectionCandidate(
             selection_id=selection_id,
