@@ -381,6 +381,48 @@ def test_prepare_column_selection_filters_invented_pairs(monkeypatch) -> None:
     ]
 
 
+def test_prepare_column_selection_derives_tables_when_omitted(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    from db_rag import service
+
+    class _LLM:
+        def invoke(self, messages):
+            return SimpleNamespace(
+                content=json.dumps(
+                    {
+                        "selection_id": "sel-3",
+                        "rationale": "tables omitted but the column is valid",
+                        "columns": [
+                            {
+                                "table": "Form 1A",
+                                "column": "AGE",
+                                "description": "Age in years",
+                            }
+                        ],
+                    }
+                )
+            )
+
+    context = service.DbRagContext(
+        tables=[service.DbRagTableHit(table="Form 1A", text="Form 1A summary")],
+        columns=[service.DbRagColumnHit(table="Form 1A", column="AGE", text="AGE summary")],
+    )
+    db_rag_service = service.DbRagService(llm=_LLM())
+
+    selection = db_rag_service.prepare_column_selection("subset age", context)
+
+    assert selection.selection_id == "sel-3"
+    assert selection.tables == ["Form 1A"]
+    assert selection.columns == [
+        {
+            "table": "Form 1A",
+            "column": "AGE",
+            "description": "Age in years",
+        }
+    ]
+
+
 @pytest.mark.parametrize(
     "content",
     [

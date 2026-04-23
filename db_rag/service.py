@@ -112,10 +112,11 @@ def _parse_json_object(text: str) -> dict[str, Any]:
 
 
 def _default_selection_id(question: str, context: DbRagContext, feedback_history: list[dict[str, Any]]) -> str:
+    columns = [{"table": entry.table, "column": entry.column} for entry in context.columns]
     payload = {
         "question": question,
         "tables": context.table_names,
-        "columns": context.column_names,
+        "columns": columns,
         "feedback_history": feedback_history,
     }
     digest = hashlib.sha1(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
@@ -400,6 +401,12 @@ class DbRagService:
                         "description": description,
                     }
                 )
+
+        if not tables and columns:
+            for column in columns:
+                table = column["table"]
+                if table not in tables:
+                    tables.append(table)
 
         selection_id = str(parsed.get("selection_id", "") or "").strip() or _default_selection_id(
             question,
