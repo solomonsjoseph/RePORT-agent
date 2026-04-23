@@ -37,6 +37,39 @@ def _is_explicit_code_request(state: AgentState) -> bool:
     )
 
 
+def _has_uploaded_dataset(state: AgentState) -> bool:
+    datasets = dict((state.get("artifacts") or {}).get("datasets") or {})
+    return any(dataset.get("kind") == "uploaded" for dataset in datasets.values())
+
+
+def _mentions_explicit_rag_database(text: str) -> bool:
+    explicit_rag_database_cues = (
+        "rag database",
+        "rag databse",
+        "rag db",
+        "db rag",
+        "db-rag",
+        "rag datab",
+    )
+    return any(cue in text for cue in explicit_rag_database_cues)
+
+
+def _mentions_database_reference(text: str) -> bool:
+    database_reference_cues = (
+        "database",
+        "db-rag",
+    )
+    return any(cue in text for cue in database_reference_cues)
+
+
+def _pending_clarification_has_database_context(state: AgentState) -> bool:
+    meta = dict(state.get("meta") or {})
+    if not meta.get(MetaKeys.AWAITING_USER_CLARIFICATION):
+        return False
+    pending_question = str(meta.get(MetaKeys.PENDING_QUESTION) or "").strip().lower()
+    return _mentions_explicit_rag_database(pending_question) or _mentions_database_reference(pending_question)
+
+
 def _prefer_rag_db_qa(state: AgentState) -> bool:
     rag_state = get_agent_state(state, "rag_db_qa")
     if rag_state.get("pending_sql_offer") or rag_state.get("active_thread"):
@@ -46,41 +79,11 @@ def _prefer_rag_db_qa(state: AgentState) -> bool:
     if not latest or _is_explicit_code_request(state):
         return False
 
-    quantitative_cues = (
-        "how many",
-        "count",
-        "number of",
-        "proportion",
-        "percentage",
-        "compare",
-        "subset",
-        "extract",
-        "filter",
-        "cohort",
+    return (
+        _mentions_explicit_rag_database(latest)
+        or _pending_clarification_has_database_context(state)
+        or (not _has_uploaded_dataset(state) and _mentions_database_reference(latest))
     )
-    database_cues = (
-        "participant",
-        "participants",
-        "patient",
-        "patients",
-        "subject",
-        "subjects",
-        "records",
-        "rows",
-        "database",
-        "table",
-        "form",
-        "column",
-        "columns",
-        "site",
-        "culture",
-    )
-    referential_followup_cues = ("what about", "same", "those", "them", "that subset", "break down by")
-
-    has_quantitative_cue = any(cue in latest for cue in quantitative_cues)
-    has_database_cue = any(cue in latest for cue in database_cues)
-    has_referential_cue = any(cue in latest for cue in referential_followup_cues)
-    return (has_quantitative_cue and has_database_cue) or has_referential_cue
 
 
 def _always(_state: AgentState) -> bool:

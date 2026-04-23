@@ -38,7 +38,7 @@ class GraphRunManager:
     ) -> bool:
         with self._lock:
             current = self._jobs.get(thread_id)
-            if current and current.get("state") == "running":
+            if current and current.get("state") in {"running", "error"}:
                 return False
             self._jobs[thread_id] = {
                 "state": "running",

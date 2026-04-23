@@ -29,6 +29,18 @@ class _FakeApp:
         return SimpleNamespace(next=[], interrupts=[])
 
 
+class _FailingApp:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def invoke(self, payload, config=None):
+        self.calls += 1
+        raise RuntimeError("boom")
+
+    def get_state(self, config=None):
+        return SimpleNamespace(next=["orchestrator"], interrupts=[])
+
+
 def _wait_done(mgr: GraphRunManager, tid: str, timeout_s: float = 1.5):
     deadline = time.time() + timeout_s
     while time.time() < deadline:
@@ -118,3 +130,33 @@ def test_run_manager_stops_on_interrupt() -> None:
     st = _wait_done(mgr, "t3")
     assert st["state"] == "done"
     assert st["steps"] == 1
+
+
+def test_run_manager_preserves_failed_thread_until_reset() -> None:
+    mgr = GraphRunManager()
+    app = _FailingApp()
+
+    started = mgr.submit(
+        thread_id="t_failed",
+        app=app,
+        config={"configurable": {"thread_id": "t_failed"}},
+        max_steps=5,
+        initial_payload={"messages": ["hi"]},
+    )
+    assert started is True
+
+    st = _wait_done(mgr, "t_failed")
+    assert st["state"] == "error"
+    assert st["error"] == "RuntimeError: boom"
+
+    restarted = mgr.submit(
+        thread_id="t_failed",
+        app=app,
+        config={"configurable": {"thread_id": "t_failed"}},
+        max_steps=5,
+        initial_payload=None,
+    )
+
+    assert restarted is False
+    assert mgr.status("t_failed")["state"] == "error"
+    assert app.calls == 1

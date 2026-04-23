@@ -876,6 +876,40 @@ def test_orchestrator_ends_deterministically_after_completed_qa_answer() -> None
     assert len(llm.calls) == 0
 
 
+def test_orchestrator_ends_deterministically_after_completed_rag_db_answer() -> None:
+    _install_langchain_and_langgraph_stubs()
+    orchestrator = importlib.import_module("graph.nodes.orchestrator")
+
+    llm = _LLM('{"action":"rag_db_qa","thought":"keep querying"}')
+    state = {
+        "messages": [
+            SimpleNamespace(type="human", content="query the RAG database"),
+            SimpleNamespace(type="ai", content="DB-RAG assets are not initialized."),
+        ],
+        "output": {"qa_response": "DB-RAG assets are not initialized."},
+        "observations": [],
+        "last_action": "rag_db_qa",
+        "orchestrator": {},
+        "agents": {
+            "executor": {"run_status": "idle"},
+            "human_review": {"before_run_decision": None, "final_decision": None},
+            "rag_db_qa": {"status": "done", "active_thread": False},
+        },
+        "meta": {"workflow_trace": ["orchestrator", "rag_db_qa"]},
+    }
+
+    updated = orchestrator.orchestrator_node(
+        llm=llm,
+        state=state,
+        available_actions=["qa", "rag_db_qa", "generate_code", "end"],
+    )
+
+    assert updated["next_action"] == "end"
+    assert updated["meta"]["workflow_milestone"] == "answered"
+    assert updated["meta"]["completion_status"] == "complete"
+    assert len(llm.calls) == 0
+
+
 def test_orchestrator_clears_stale_completed_qa_state_on_new_user_turn() -> None:
     _install_langchain_and_langgraph_stubs()
     orchestrator = importlib.import_module("graph.nodes.orchestrator")
@@ -944,6 +978,51 @@ def test_orchestrator_pauses_after_qa_opens_tool_clarification_loop() -> None:
     }
 
     updated = orchestrator.orchestrator_node(state, llm, ["qa", "clarification", "end"])
+
+    assert updated["next_action"] == "end"
+    assert updated["meta"]["completion_status"] == "blocked_waiting"
+    assert updated["meta"]["workflow_milestone"] == "awaiting_clarification"
+    assert len(llm.calls) == 0
+
+
+def test_orchestrator_pauses_after_rag_db_opens_sql_offer_loop() -> None:
+    _install_langchain_and_langgraph_stubs()
+    orchestrator = importlib.import_module("graph.nodes.orchestrator")
+
+    question = "How many records are in the RAG database?"
+    llm = _LLM('{"action":"rag_db_qa","thought":"keep querying"}')
+    state = {
+        "messages": [
+            SimpleNamespace(type="human", content=question),
+            SimpleNamespace(
+                type="ai",
+                content="The relevant metadata is available. Do you want me to extract a read-only subset?",
+            ),
+        ],
+        "output": {"qa_response": "The relevant metadata is available. Do you want me to extract a read-only subset?"},
+        "observations": ["rag_db_qa: responded to database question"],
+        "last_action": "rag_db_qa",
+        "orchestrator": {},
+        "agents": {
+            "executor": {"run_status": "idle"},
+            "human_review": {"before_run_decision": None, "after_error_decision": None, "final_decision": None},
+            "rag_db_qa": {"status": "done", "pending_sql_offer": True, "active_thread": True},
+        },
+        "meta": {
+            "workflow_trace": ["orchestrator", "rag_db_qa"],
+            "awaiting_user_clarification": True,
+            "clarification_return_node": "rag_db_qa",
+            "clarification_kind": "rag_db_sql_offer",
+            "pending_question": question,
+            "last_user_message_hash": hashlib.sha256(question.encode()).hexdigest()[:16],
+        },
+    }
+
+    updated = orchestrator.orchestrator_node(
+        state,
+        llm,
+        ["qa", "rag_db_qa", "clarification", "end"],
+    )
 
     assert updated["next_action"] == "end"
     assert updated["meta"]["completion_status"] == "blocked_waiting"

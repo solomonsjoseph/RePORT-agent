@@ -82,11 +82,11 @@ class _LLM:
         return SimpleNamespace(content=self.content)
 
 
-def test_orchestrator_falls_back_to_rag_db_qa_for_database_question() -> None:
+def test_orchestrator_falls_back_to_rag_db_qa_for_explicit_database_question() -> None:
     orchestrator = _fresh_orchestrator()
 
     state = {
-        "messages": [SimpleNamespace(type="human", content="How many male participants are in cohort A?")],
+        "messages": [SimpleNamespace(type="human", content="How many male participants are in the database cohort A?")],
         "output": {},
         "observations": [],
         "last_action": None,
@@ -103,6 +103,223 @@ def test_orchestrator_falls_back_to_rag_db_qa_for_database_question() -> None:
         state,
         _LLM("not-json"),
         ["qa", "rag_db_qa", "generate_code", "end"],
+    )
+
+    assert updated["next_action"] == "rag_db_qa"
+
+
+def test_orchestrator_does_not_force_rag_db_qa_from_clinical_fields_alone() -> None:
+    orchestrator = _fresh_orchestrator()
+
+    state = {
+        "messages": [
+            SimpleNamespace(
+                type="human",
+                content="Help me to subset age, gender, diabetes status, and final outcome among index case",
+            )
+        ],
+        "output": {},
+        "artifacts": {"datasets": {}, "active_dataset_id": None},
+        "observations": [],
+        "last_action": None,
+        "orchestrator": {},
+        "agents": {
+            "executor": {"run_status": "idle"},
+            "human_review": {"before_run_decision": None, "final_decision": None},
+            "rag_db_qa": {},
+        },
+        "meta": {"error_iterations": 0, "workflow_trace": []},
+    }
+
+    updated = orchestrator.orchestrator_node(
+        state,
+        _LLM(json.dumps({"action": "qa", "thought": "generic clinical request"})),
+        ["qa", "rag_db_qa", "generate_code", "clarification", "end"],
+    )
+
+    assert updated["next_action"] == "qa"
+
+
+def test_orchestrator_routes_database_overview_to_rag_db_qa() -> None:
+    orchestrator = _fresh_orchestrator()
+
+    state = {
+        "messages": [
+            SimpleNamespace(
+                type="human",
+                content="Help me to query the database give me overview of the database, and what kind of analysis I can perform",
+            )
+        ],
+        "output": {},
+        "observations": [],
+        "last_action": None,
+        "orchestrator": {},
+        "agents": {
+            "executor": {"run_status": "idle"},
+            "human_review": {"before_run_decision": None, "final_decision": None},
+            "rag_db_qa": {},
+        },
+        "meta": {"error_iterations": 0, "workflow_trace": []},
+    }
+
+    updated = orchestrator.orchestrator_node(
+        state,
+        _LLM(json.dumps({"action": "qa", "thought": "generic qa"})),
+        ["qa", "rag_db_qa", "generate_code", "clarification", "end"],
+    )
+
+    assert updated["next_action"] == "rag_db_qa"
+
+
+def test_orchestrator_prioritizes_rag_db_qa_for_database_question_when_no_uploaded_dataset() -> None:
+    orchestrator = _fresh_orchestrator()
+
+    state = {
+        "messages": [SimpleNamespace(type="human", content="Tell me about the database")],
+        "output": {},
+        "artifacts": {"datasets": {}, "active_dataset_id": None},
+        "observations": [],
+        "last_action": None,
+        "orchestrator": {},
+        "agents": {
+            "executor": {"run_status": "idle"},
+            "human_review": {"before_run_decision": None, "final_decision": None},
+            "rag_db_qa": {},
+        },
+        "meta": {"error_iterations": 0, "workflow_trace": []},
+    }
+
+    updated = orchestrator.orchestrator_node(
+        state,
+        _LLM(json.dumps({"action": "qa", "thought": "generic database explanation"})),
+        ["qa", "rag_db_qa", "generate_code", "clarification", "end"],
+    )
+
+    assert updated["next_action"] == "rag_db_qa"
+
+
+def test_orchestrator_exits_stale_qa_clarification_for_explicit_rag_database_request() -> None:
+    orchestrator = _fresh_orchestrator()
+
+    state = {
+        "messages": [
+            SimpleNamespace(
+                type="human",
+                content="Help me to query the database give me overview of the database, and what kind of analysis I can perform",
+            ),
+            SimpleNamespace(
+                type="ai",
+                content="Can you provide the database schema or describe the tables and their columns?",
+            ),
+            SimpleNamespace(type="human", content="No, I want to query the rag databse"),
+        ],
+        "output": {"qa_response": "Can you provide the database schema or describe the tables and their columns?"},
+        "observations": ["orchestrator: next_action=qa", "qa: asked clarification (structured qa response)"],
+        "last_action": "qa",
+        "orchestrator": {},
+        "agents": {
+            "executor": {"run_status": "idle"},
+            "human_review": {"before_run_decision": None, "final_decision": None},
+            "qa": {"awaiting_tool_clarification": True},
+            "rag_db_qa": {},
+        },
+        "meta": {
+            "error_iterations": 0,
+            "workflow_trace": ["orchestrator", "qa"],
+            "awaiting_user_clarification": True,
+            "clarification_return_node": "qa",
+            "clarification_kind": "qa_followup",
+            "pending_question": "Help me to query the database give me overview of the database, and what kind of analysis I can perform",
+        },
+    }
+
+    updated = orchestrator.orchestrator_node(
+        state,
+        _LLM(json.dumps({"action": "clarification", "thought": "resume qa clarification"})),
+        ["qa", "rag_db_qa", "generate_code", "clarification", "end"],
+    )
+
+    assert updated["next_action"] == "rag_db_qa"
+
+
+def test_orchestrator_reclassifies_qa_followup_with_planner_instead_of_hard_resuming_qa() -> None:
+    orchestrator = _fresh_orchestrator()
+
+    state = {
+        "messages": [
+            SimpleNamespace(type="human", content="Find the matching records"),
+            SimpleNamespace(type="ai", content="Which source should I use?"),
+            SimpleNamespace(type="human", content="Use the local metadata store"),
+        ],
+        "output": {"qa_response": "Which source should I use?"},
+        "artifacts": {"datasets": {}, "active_dataset_id": None},
+        "observations": ["orchestrator: next_action=qa", "qa: asked clarification (structured qa response)"],
+        "last_action": "qa",
+        "orchestrator": {},
+        "agents": {
+            "executor": {"run_status": "idle"},
+            "human_review": {"before_run_decision": None, "final_decision": None},
+            "qa": {"awaiting_tool_clarification": True},
+            "rag_db_qa": {},
+        },
+        "meta": {
+            "error_iterations": 0,
+            "workflow_trace": ["orchestrator", "qa"],
+            "awaiting_user_clarification": True,
+            "clarification_return_node": "qa",
+            "clarification_kind": "qa_followup",
+            "pending_question": "Find the matching records",
+        },
+    }
+
+    updated = orchestrator.orchestrator_node(
+        state,
+        _LLM(json.dumps({"action": "rag_db_qa", "thought": "local metadata store means DB-RAG"})),
+        ["qa", "rag_db_qa", "generate_code", "clarification", "end"],
+    )
+
+    assert updated["next_action"] == "rag_db_qa"
+
+
+def test_orchestrator_routes_clinical_subset_request_from_stale_qa_clarification_to_rag_db_qa() -> None:
+    orchestrator = _fresh_orchestrator()
+
+    state = {
+        "messages": [
+            SimpleNamespace(type="human", content="Give me overview of the database"),
+            SimpleNamespace(type="ai", content="Can you please specify which database you want an overview of?"),
+            SimpleNamespace(type="human", content="the rag database in my system"),
+            SimpleNamespace(type="ai", content="Can you provide details about the RAG database schema?"),
+            SimpleNamespace(
+                type="human",
+                content="Help me to subset age, gender, diabetes status, and final outcome among index case",
+            ),
+        ],
+        "output": {"qa_response": "Can you provide details about the RAG database schema?"},
+        "artifacts": {"datasets": {}, "active_dataset_id": None},
+        "observations": [],
+        "last_action": "clarification",
+        "orchestrator": {},
+        "agents": {
+            "executor": {"run_status": "idle"},
+            "human_review": {"before_run_decision": None, "final_decision": None},
+            "qa": {"awaiting_tool_clarification": True},
+            "rag_db_qa": {},
+        },
+        "meta": {
+            "error_iterations": 0,
+            "workflow_trace": ["orchestrator", "qa", "orchestrator", "clarification"],
+            "awaiting_user_clarification": True,
+            "clarification_return_node": "qa",
+            "clarification_kind": "qa_followup",
+            "pending_question": "the rag database in my system",
+        },
+    }
+
+    updated = orchestrator.orchestrator_node(
+        state,
+        _LLM(json.dumps({"action": "clarification", "thought": "resume qa clarification"})),
+        ["qa", "rag_db_qa", "generate_code", "clarification", "end"],
     )
 
     assert updated["next_action"] == "rag_db_qa"

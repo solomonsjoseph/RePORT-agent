@@ -49,6 +49,25 @@ def test_direct_qa_answer_is_classified_as_answered_complete() -> None:
     assert status["blocker_signature"] is None
 
 
+def test_direct_rag_db_answer_is_classified_as_answered_complete() -> None:
+    state = {
+        "messages": [],
+        "output": {"qa_response": "DB-RAG assets are not initialized."},
+        "agents": {
+            "executor": {"run_status": "idle"},
+            "human_review": {"before_run_decision": None, "after_error_decision": None, "final_decision": None},
+        },
+        "meta": {"workflow_trace": ["orchestrator", "rag_db_qa"]},
+        "last_action": "rag_db_qa",
+    }
+
+    status = derive_workflow_status(state)
+
+    assert status["milestone"] == "answered"
+    assert status["completion_status"] == "complete"
+    assert status["blocker_signature"] is None
+
+
 def test_generated_code_without_ticket_is_awaiting_run_review() -> None:
     state = {
         "output": {"generated_code": "print(1)"},

@@ -515,6 +515,7 @@ if run_status.get("state") == "running":
     st.rerun()
 elif run_status.get("state") == "error":
     st.error(f"Background workflow failed: {run_status.get('error') or 'unknown error'}")
+    st.stop()
 
 if snapshot and snapshot.next and not snapshot.interrupts and not run_manager.is_running(st.session_state.thread_id):
     run_manager.submit(

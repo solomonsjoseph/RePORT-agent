@@ -121,7 +121,7 @@ def derive_workflow_status(state: dict) -> dict:
     if (
         output.get("qa_response")
         and not has_code
-        and state.get("last_action") == "qa"
+        and state.get("last_action") in {"qa", "rag_db_qa"}
         and not _has_unanswered_human_message(state)
     ):
         return {

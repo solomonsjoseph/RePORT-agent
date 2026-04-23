@@ -170,3 +170,55 @@ def test_clarification_node_resumes_generic_qa_with_pending_question_context() -
     assert "awaiting_user_clarification" not in captured["state"]["meta"]
     assert updated["output"]["qa_response"] == "Boston is the capital of Massachusetts."
     assert updated["messages"][-1].content == "Boston is the capital of Massachusetts."
+
+
+def test_clarification_node_resumes_rag_db_qa_with_pending_question_context() -> None:
+    clarification = _fresh_clarification_module()
+    captured: dict[str, object] = {}
+
+    def _fake_rag_db_qa_node(state, llm, *, provider, service, question_override=None):
+        captured["state"] = state
+        captured["provider"] = provider
+        captured["service"] = service
+        captured["question_override"] = question_override
+        return {
+            **state,
+            "output": {"qa_response": "I extracted the requested subset."},
+            "messages": list(state.get("messages", [])) + [_AIMessage("I extracted the requested subset.")],
+            "agents": {"rag_db_qa": {"status": "done"}},
+        }
+
+    service = object()
+    clarification.rag_db_qa_node = _fake_rag_db_qa_node
+
+    state = {
+        "messages": [
+            _HumanMessage("What does this database include?"),
+            _AIMessage("Do you want me to extract a read-only subset or run a read-only SQL query for this?"),
+            _HumanMessage("yes, extract age and gender for index cases"),
+        ],
+        "output": {"qa_response": "Do you want me to extract a read-only subset or run a read-only SQL query for this?"},
+        "meta": {
+            "awaiting_user_clarification": True,
+            "pending_question": "What does this database include?",
+            "clarification_return_node": "rag_db_qa",
+            "clarification_kind": "rag_db_sql_offer",
+        },
+        "observations": [],
+        "agents": {"rag_db_qa": {"pending_sql_offer": True}},
+    }
+
+    updated = clarification.clarification_node(
+        state,
+        object(),
+        context={"provider": "openai", "db_rag_service": service},
+    )
+
+    assert captured["question_override"] == (
+        "What does this database include?\n\n"
+        "User clarification: yes, extract age and gender for index cases"
+    )
+    assert captured["provider"] == "openai"
+    assert captured["service"] is service
+    assert "awaiting_user_clarification" not in captured["state"]["meta"]
+    assert updated["output"]["qa_response"] == "I extracted the requested subset."

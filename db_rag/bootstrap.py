@@ -10,10 +10,13 @@ import pandas as pd
 from .service import (
     CHROMA_DIR,
     DUCKDB_PATH,
+    EMBEDDING_MODEL,
     EXCEL_DIR,
     MANIFEST_PATH,
+    PROJECT_ROOT,
     RUNTIME_ROOT,
     SCHEMA_DIR,
+    SOURCE_ROOT,
     OpenAIEmbeddingFunction,
 )
 
@@ -163,7 +166,34 @@ def _source_fingerprint() -> str:
     return digest.hexdigest()
 
 
-def rebuild() -> None:
+def _display_path(path: object) -> str:
+    candidate = Path(str(path)).resolve()
+    try:
+        return str(candidate.relative_to(PROJECT_ROOT))
+    except ValueError:
+        return str(candidate)
+
+
+def _format_rebuild_success(manifest: dict[str, object]) -> str:
+    return "\n".join(
+        [
+            "DB-RAG rebuild completed successfully.",
+            f"Embedding model: {manifest.get('embedding_model', EMBEDDING_MODEL)}",
+            f"Source data: {_display_path(manifest.get('source_root', SOURCE_ROOT))}",
+            f"DuckDB database: {_display_path(manifest.get('duckdb_path', DUCKDB_PATH))}",
+            f"Chroma index: {_display_path(manifest.get('chroma_path', CHROMA_DIR))}",
+            f"Manifest: {_display_path(manifest.get('manifest_path', MANIFEST_PATH))}",
+            (
+                "Indexed chunks: "
+                f"{manifest.get('table_chunk_count', 0)} table summaries, "
+                f"{manifest.get('column_chunk_count', 0)} column chunks"
+            ),
+            f"Source fingerprint: {manifest.get('source_fingerprint', 'unknown')}",
+        ]
+    )
+
+
+def rebuild() -> dict[str, object]:
     excel_data = _load_excel_data()
     table_chunks = _build_table_chunks(excel_data)
     column_chunks = _build_column_chunks(excel_data)
@@ -171,11 +201,16 @@ def rebuild() -> None:
     _build_chroma(table_chunks, column_chunks)
     manifest = {
         "source_fingerprint": _source_fingerprint(),
-        "embedding_model": "text-embedding-3-small",
+        "embedding_model": EMBEDDING_MODEL,
+        "source_root": str(SOURCE_ROOT),
         "duckdb_path": str(DUCKDB_PATH),
         "chroma_path": str(CHROMA_DIR),
+        "manifest_path": str(MANIFEST_PATH),
+        "table_chunk_count": len(table_chunks),
+        "column_chunk_count": len(column_chunks),
     }
     MANIFEST_PATH.write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
+    return manifest
 
 
 def main() -> None:
@@ -184,7 +219,8 @@ def main() -> None:
     args = parser.parse_args()
     if not args.rebuild:
         parser.error("Use --rebuild to initialize DB-RAG assets.")
-    rebuild()
+    manifest = rebuild()
+    print(_format_rebuild_success(manifest))
 
 
 if __name__ == "__main__":

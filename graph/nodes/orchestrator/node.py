@@ -109,6 +109,13 @@ def _resumed_from(state: AgentState, node_name: str) -> bool:
     return bool(workflow_trace and workflow_trace[-1] == node_name)
 
 
+def _is_soft_qa_followup(meta: dict) -> bool:
+    return (
+        meta.get(MetaKeys.CLARIFICATION_KIND) == "qa_followup"
+        and meta.get(MetaKeys.CLARIFICATION_RETURN_NODE) == "qa"
+    )
+
+
 def _store_workflow_status(state: AgentState) -> AgentState:
     meta = dict(state.get("meta") or {})
     status = derive_workflow_status(state)
@@ -149,6 +156,7 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
     thought = orchestrator_state.get("thought", "")
     meta = dict(state.get("meta") or {})
     transition_selected_from_resume = False
+    defer_qa_followup_clarification_to_planner = False
 
     output = dict(state.get("output") or {})
     agents = dict(state.get("agents") or {})
@@ -226,12 +234,25 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
 
     if fresh_unanswered_user_turn:
         if was_awaiting_clarification:
-            meta[MetaKeys.LAST_USER_MESSAGE_HASH] = current_hash
-            if "clarification" in available_action_set:
+            clarification_return_node = meta.get(MetaKeys.CLARIFICATION_RETURN_NODE)
+            if _is_soft_qa_followup(meta):
+                next_action = None
+                defer_qa_followup_clarification_to_planner = True
+                orchestrator_state.pop("next_action", None)
+            elif (
+                clarification_return_node != "rag_db_qa"
+                and "rag_db_qa" in available_action_set
+                and should_prefer_rag_db_qa({**state, "output": output, "agents": agents, "meta": meta})
+            ):
+                meta[MetaKeys.LAST_USER_MESSAGE_HASH] = current_hash
+                next_action = "rag_db_qa"
+            elif "clarification" in available_action_set:
+                meta[MetaKeys.LAST_USER_MESSAGE_HASH] = current_hash
                 next_action = "clarification"
             else:
+                meta[MetaKeys.LAST_USER_MESSAGE_HASH] = current_hash
                 clarification_return = (
-                    meta.get(MetaKeys.CLARIFICATION_RETURN_NODE)
+                    clarification_return_node
                     or state.get("last_action")
                     or "qa"
                 )
@@ -267,18 +288,18 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
     routing_state = _store_workflow_status(routing_state)
     routing_state = update_recurrence_state(routing_state)
 
+    if not next_action and _should_end_for_completion(routing_state):
+        next_action = "end"
+
     if not next_action and "rag_db_qa" in available_action_set and should_prefer_rag_db_qa(routing_state):
         next_action = "rag_db_qa"
 
-    if not next_action:
+    if not next_action and not defer_qa_followup_clarification_to_planner:
         next_action = _ready_deterministic_action(
             routing_state,
             available_action_list,
             fresh_unanswered_user_turn=fresh_unanswered_user_turn,
         )
-
-    if not next_action and _should_end_for_completion(routing_state):
-        next_action = "end"
 
     if not next_action:
         llm_choice, thought, planner_action, diagnostics = llm_plan_next_action(
@@ -295,6 +316,8 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
                 next_action = "generate_code"
             else:
                 next_action = select_planner_fallback_action(routing_state, set(masked_actions))
+        if _is_soft_qa_followup(dict(routing_state.get("meta") or {})) and next_action == "qa":
+            next_action = "clarification" if "clarification" in masked_actions else "qa"
         routing_state = _record_planner_decision(
             routing_state,
             planner_action,
