@@ -985,7 +985,7 @@ def test_orchestrator_pauses_after_qa_opens_tool_clarification_loop() -> None:
     assert len(llm.calls) == 0
 
 
-def test_orchestrator_pauses_after_rag_db_opens_sql_offer_loop() -> None:
+def test_orchestrator_routes_to_rag_db_column_review_without_planner_when_review_is_pending() -> None:
     _install_langchain_and_langgraph_stubs()
     orchestrator = importlib.import_module("graph.nodes.orchestrator")
 
@@ -996,24 +996,30 @@ def test_orchestrator_pauses_after_rag_db_opens_sql_offer_loop() -> None:
             SimpleNamespace(type="human", content=question),
             SimpleNamespace(
                 type="ai",
-                content="The relevant metadata is available. Do you want me to extract a read-only subset?",
+                content="I identified the relevant tables and columns for review.",
             ),
         ],
-        "output": {"qa_response": "The relevant metadata is available. Do you want me to extract a read-only subset?"},
+        "output": {"qa_response": "I identified the relevant tables and columns for review."},
         "observations": ["rag_db_qa: responded to database question"],
         "last_action": "rag_db_qa",
         "orchestrator": {},
         "agents": {
             "executor": {"run_status": "idle"},
             "human_review": {"before_run_decision": None, "after_error_decision": None, "final_decision": None},
-            "rag_db_qa": {"status": "done", "pending_sql_offer": True, "active_thread": True},
+            "rag_db_qa": {
+                "status": "done",
+                "active_thread": True,
+                "pending_column_review": {
+                    "status": "awaiting_review",
+                    "selection_id": "sel-review",
+                    "question": question,
+                    "tables": ["Form 1A"],
+                    "columns": [{"table": "Form 1A", "column": "SEX", "description": "Sex at enrollment"}],
+                },
+            },
         },
         "meta": {
             "workflow_trace": ["orchestrator", "rag_db_qa"],
-            "awaiting_user_clarification": True,
-            "clarification_return_node": "rag_db_qa",
-            "clarification_kind": "rag_db_sql_offer",
-            "pending_question": question,
             "last_user_message_hash": hashlib.sha256(question.encode()).hexdigest()[:16],
         },
     }
@@ -1021,12 +1027,12 @@ def test_orchestrator_pauses_after_rag_db_opens_sql_offer_loop() -> None:
     updated = orchestrator.orchestrator_node(
         state,
         llm,
-        ["qa", "rag_db_qa", "clarification", "end"],
+        ["qa", "rag_db_qa", "human_review_rag_db_column_selection", "end"],
     )
 
-    assert updated["next_action"] == "end"
+    assert updated["next_action"] == "human_review_rag_db_column_selection"
     assert updated["meta"]["completion_status"] == "blocked_waiting"
-    assert updated["meta"]["workflow_milestone"] == "awaiting_clarification"
+    assert updated["meta"]["workflow_milestone"] == "awaiting_rag_db_column_review"
     assert len(llm.calls) == 0
 
 

@@ -194,18 +194,17 @@ def test_clarification_node_resumes_rag_db_qa_with_pending_question_context() ->
     state = {
         "messages": [
             _HumanMessage("What does this database include?"),
-            _AIMessage("Do you want me to extract a read-only subset or run a read-only SQL query for this?"),
-            _HumanMessage("yes, extract age and gender for index cases"),
+            _AIMessage("Which columns should I include in the read-only subset?"),
+            _HumanMessage("age and gender for index cases"),
         ],
-        "output": {"qa_response": "Do you want me to extract a read-only subset or run a read-only SQL query for this?"},
+        "output": {"qa_response": "Which columns should I include in the read-only subset?"},
         "meta": {
             "awaiting_user_clarification": True,
             "pending_question": "What does this database include?",
             "clarification_return_node": "rag_db_qa",
-            "clarification_kind": "rag_db_sql_offer",
         },
         "observations": [],
-        "agents": {"rag_db_qa": {"pending_sql_offer": True}},
+        "agents": {"rag_db_qa": {}},
     }
 
     updated = clarification.clarification_node(
@@ -216,7 +215,7 @@ def test_clarification_node_resumes_rag_db_qa_with_pending_question_context() ->
 
     assert captured["question_override"] == (
         "What does this database include?\n\n"
-        "User clarification: yes, extract age and gender for index cases"
+        "User clarification: age and gender for index cases"
     )
     assert captured["provider"] == "openai"
     assert captured["service"] is service
