@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 from types import ModuleType
 from types import SimpleNamespace
@@ -7,8 +8,13 @@ from types import SimpleNamespace
 
 def _install_langchain_message_stubs(monkeypatch) -> None:
     messages_mod = ModuleType("langchain_core.messages")
-    messages_mod.HumanMessage = object
-    messages_mod.SystemMessage = object
+
+    class _Message:
+        def __init__(self, content: str = "") -> None:
+            self.content = content
+
+    messages_mod.HumanMessage = _Message
+    messages_mod.SystemMessage = _Message
     monkeypatch.setitem(sys.modules, "langchain_core.messages", messages_mod)
 
 
@@ -135,3 +141,67 @@ def test_retrieve_context_returns_typed_hits(monkeypatch) -> None:
     assert "Table: Form 1A" in context.table_context
     assert "Column: AGE" in context.column_context
     assert "Column: OTHER" not in context.column_context
+
+
+class _LLM:
+    def __init__(self, content: str):
+        self.content = content
+        self.calls: list[list[object]] = []
+
+    def invoke(self, messages):
+        self.calls.append(messages)
+        return SimpleNamespace(content=self.content)
+
+
+def test_answer_from_context_returns_metadata_qa_without_sql(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    from db_rag import service
+
+    context = service.DbRagContext(
+        tables=[service.DbRagTableHit(table="Form 1A", text="Form 1A summary")],
+        columns=[service.DbRagColumnHit(table="Form 1A", column="AGE", text="AGE summary")],
+    )
+    llm = _LLM(
+        json.dumps(
+            {
+                "answer": "This database contains TB study forms.",
+                "needs_sql": False,
+                "rationale": "overview question answered from metadata",
+            }
+        )
+    )
+    db_rag_service = service.DbRagService(llm=llm)
+
+    answer = db_rag_service.answer_from_context("Give me overview of the database", context)
+
+    assert answer.answer == "This database contains TB study forms."
+    assert answer.needs_sql is False
+    assert answer.relevant_tables == ["Form 1A"]
+    assert answer.relevant_columns == ["AGE"]
+
+
+def test_answer_from_context_marks_subset_request_as_sql_needed(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    from db_rag import service
+
+    context = service.DbRagContext(
+        tables=[service.DbRagTableHit(table="Form 1A", text="Form 1A summary")],
+        columns=[service.DbRagColumnHit(table="Form 1A", column="AGE", text="AGE summary")],
+    )
+    llm = _LLM(
+        json.dumps(
+            {
+                "answer": "A row-level subset is needed for this request.",
+                "needs_sql": True,
+                "rationale": "row-level subset requested",
+            }
+        )
+    )
+    db_rag_service = service.DbRagService(llm=llm)
+
+    answer = db_rag_service.answer_from_context("Give me the subset of records", context)
+
+    assert answer.needs_sql is True
+    assert answer.rationale == "row-level subset requested"

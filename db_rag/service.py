@@ -57,6 +57,15 @@ class DbRagContext:
         return [entry.column for entry in self.columns]
 
 
+@dataclass
+class DbRagQaAnswer:
+    answer: str
+    needs_sql: bool
+    rationale: str
+    relevant_tables: list[str]
+    relevant_columns: list[str]
+
+
 def _extract_sql(text: str) -> str:
     text = str(text or "").strip()
     match = re.search(r"```(?:sql)?\s*(.*?)```", text, re.DOTALL | re.IGNORECASE)
@@ -67,6 +76,25 @@ def _extract_sql(text: str) -> str:
         if idx >= 0:
             return text[idx:].strip()
     return text
+
+
+def _parse_json_object(text: str) -> dict[str, Any]:
+    raw_text = str(text or "").strip()
+    if not raw_text:
+        return {}
+
+    try:
+        parsed = json.loads(raw_text)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", raw_text, re.DOTALL)
+        if not match:
+            return {}
+        try:
+            parsed = json.loads(match.group(0))
+        except json.JSONDecodeError:
+            return {}
+
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _validate_sql(sql: str) -> tuple[bool, str | None]:
@@ -222,6 +250,46 @@ class DbRagService:
                 "columns": context.column_names,
             },
         }
+
+    def answer_from_context(self, question: str, context: DbRagContext) -> DbRagQaAnswer:
+        response = self.llm.invoke(
+            [
+                SystemMessage(
+                    content=(
+                        "You are classifying whether a RePORT database question can be answered from retrieved "
+                        "metadata and schema context alone.\n"
+                        "Use the retrieved table and column descriptions to answer overview, schema, variable, and "
+                        "other metadata questions directly.\n"
+                        "Mark needs_sql true when the user asks for row-level records, subsets, counts, filters, "
+                        "aggregations, or any other request that depends on actual data values rather than schema.\n"
+                        "Return only a JSON object with exactly these keys: "
+                        '{"answer": string, "needs_sql": boolean, "rationale": string}.\n'
+                        "If the request can be answered from metadata/schema context, set needs_sql to false.\n"
+                        "If the request needs SQL for an exact answer, set needs_sql to true and explain why in rationale."
+                    )
+                ),
+                HumanMessage(
+                    content=(
+                        f"Question:\n{question}\n\n"
+                        f"Table context:\n{context.table_context or 'none'}\n\n"
+                        f"Column context:\n{context.column_context or 'none'}"
+                    )
+                ),
+            ]
+        )
+        parsed = _parse_json_object(coerce_text_content(getattr(response, "content", "")))
+        answer_text = str(parsed.get("answer", "") or "").strip() or (
+            "I could not answer from the retrieved DB-RAG context."
+        )
+        rationale = str(parsed.get("rationale", "") or "").strip()
+        needs_sql = parsed.get("needs_sql") is True
+        return DbRagQaAnswer(
+            answer=answer_text,
+            needs_sql=needs_sql,
+            rationale=rationale,
+            relevant_tables=context.table_names,
+            relevant_columns=context.column_names,
+        )
 
     def _generate_sql(self, question: str, context: dict[str, Any]) -> str:
         response = self.llm.invoke(
