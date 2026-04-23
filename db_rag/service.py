@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
 from pathlib import Path
 import re
 from typing import Any
 
+from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from utils.llm_response import coerce_text_content
@@ -19,8 +20,41 @@ RUNTIME_ROOT = PROJECT_ROOT / "runtime" / "db_rag"
 CHROMA_DIR = RUNTIME_ROOT / "chroma_db"
 DUCKDB_PATH = RUNTIME_ROOT / "report.duckdb"
 MANIFEST_PATH = RUNTIME_ROOT / "manifest.json"
+EMBEDDING_MODEL = "text-embedding-3-small"
 
 _DANGEROUS_SQL = ("DROP", "DELETE", "UPDATE", "INSERT", "ALTER", "TRUNCATE", "ATTACH", "DETACH", "CREATE", "REPLACE")
+
+
+@dataclass
+class DbRagTableHit:
+    table: str
+    text: str
+
+
+@dataclass
+class DbRagColumnHit:
+    table: str
+    column: str
+    text: str
+
+    def as_prompt_line(self) -> str:
+        return f"{self.table}.{self.column}"
+
+
+@dataclass
+class DbRagContext:
+    tables: list[DbRagTableHit] = field(default_factory=list)
+    columns: list[DbRagColumnHit] = field(default_factory=list)
+    table_context: str = ""
+    column_context: str = ""
+
+    @property
+    def table_names(self) -> list[str]:
+        return [entry.table for entry in self.tables]
+
+    @property
+    def column_names(self) -> list[str]:
+        return [entry.column for entry in self.columns]
 
 
 def _extract_sql(text: str) -> str:
@@ -54,11 +88,19 @@ def _validate_sql(sql: str) -> tuple[bool, str | None]:
 
 
 class OpenAIEmbeddingFunction:
-    def __init__(self, model: str = "text-embedding-3-small"):
+    def __init__(self, model: str = EMBEDDING_MODEL):
         from openai import OpenAI
 
+        load_dotenv()
         self.client = OpenAI()
         self.model = model
+
+    @staticmethod
+    def name() -> str:
+        return "openai"
+
+    def embed_query(self, input: list[str]) -> list[list[float]]:
+        return self.__call__(input)
 
     def __call__(self, input: list[str]) -> list[list[float]]:
         embeddings: list[list[float]] = []
