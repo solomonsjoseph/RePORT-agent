@@ -175,6 +175,7 @@ def test_answer_from_context_returns_metadata_qa_without_sql(monkeypatch) -> Non
 
     answer = db_rag_service.answer_from_context("Give me overview of the database", context)
 
+    assert isinstance(answer, service.DbRagQaAnswer)
     assert answer.answer == "This database contains TB study forms."
     assert answer.needs_sql is False
     assert answer.relevant_tables == ["Form 1A"]
@@ -203,5 +204,6 @@ def test_answer_from_context_marks_subset_request_as_sql_needed(monkeypatch) -> 
 
     answer = db_rag_service.answer_from_context("Give me the subset of records", context)
 
+    assert isinstance(answer, service.DbRagQaAnswer)
     assert answer.needs_sql is True
     assert answer.rationale == "row-level subset requested"
