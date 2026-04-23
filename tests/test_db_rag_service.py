@@ -90,3 +90,48 @@ def test_db_rag_context_dataclasses_round_trip(monkeypatch) -> None:
     assert context.table_names == ["Form 1A"]
     assert context.column_names == ["AGE"]
     assert context.columns[0].as_prompt_line() == "Form 1A.AGE"
+
+
+def test_retrieve_context_returns_typed_hits(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    from db_rag import service
+
+    class _Collection:
+        def __init__(self, result):
+            self._result = result
+
+        def query(self, **kwargs):
+            return self._result
+
+    table_collection = _Collection(
+        {
+            "documents": [["Table: Form 1A"]],
+            "metadatas": [[{"table": "Form 1A"}]],
+        }
+    )
+    column_collection = _Collection(
+        {
+            "documents": [["Column: AGE", "Column: SEX", "Column: OTHER"]],
+            "metadatas": [[
+                {"table": "Form 1A", "column": "AGE"},
+                {"table": "Form 1A", "column": "SEX"},
+                {"table": "Form 2A", "column": "OTHER"},
+            ]],
+        }
+    )
+
+    db_rag_service = service.DbRagService(llm=object())
+    monkeypatch.setattr(
+        db_rag_service,
+        "_load_collections",
+        lambda: (table_collection, column_collection),
+    )
+
+    context = db_rag_service.retrieve_context("age and sex")
+
+    assert context.table_names == ["Form 1A"]
+    assert context.column_names == ["AGE", "SEX"]
+    assert "Table: Form 1A" in context.table_context
+    assert "Column: AGE" in context.column_context
+    assert "Column: OTHER" not in context.column_context

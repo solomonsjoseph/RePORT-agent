@@ -156,7 +156,7 @@ class DbRagService:
         column_collection = client.get_collection("column_chunks", embedding_function=ef)
         return table_collection, column_collection
 
-    def _retrieve_context(self, question: str) -> dict[str, Any]:
+    def retrieve_context(self, question: str) -> DbRagContext:
         table_collection, column_collection = self._load_collections()
 
         table_result = table_collection.query(
@@ -164,37 +164,37 @@ class DbRagService:
             n_results=4,
             include=["documents", "metadatas"],
         )
-        tables = []
+        tables: list[DbRagTableHit] = []
         for document, metadata in zip(table_result["documents"][0], table_result["metadatas"][0]):
-            tables.append({"table": metadata["table"], "text": document})
+            tables.append(DbRagTableHit(table=metadata["table"], text=document))
 
-        selected_tables = [entry["table"] for entry in tables]
+        selected_tables = {entry.table for entry in tables}
         column_result = column_collection.query(
             query_texts=[question],
             n_results=12,
             include=["documents", "metadatas"],
         )
-        columns = []
+        columns: list[DbRagColumnHit] = []
         for document, metadata in zip(column_result["documents"][0], column_result["metadatas"][0]):
             if metadata["table"] not in selected_tables:
                 continue
             columns.append(
-                {
-                    "table": metadata["table"],
-                    "column": metadata["column"],
-                    "text": document,
-                }
+                DbRagColumnHit(
+                    table=metadata["table"],
+                    column=metadata["column"],
+                    text=document,
+                )
             )
 
-        return {
-            "tables": tables,
-            "columns": columns,
-            "table_context": "\n\n".join(entry["text"] for entry in tables),
-            "column_context": "\n\n".join(entry["text"] for entry in columns),
-        }
+        return DbRagContext(
+            tables=tables,
+            columns=columns,
+            table_context="\n\n".join(entry.text for entry in tables),
+            column_context="\n\n".join(entry.text for entry in columns),
+        )
 
     def answer_question(self, question: str) -> dict[str, Any]:
-        context = self._retrieve_context(question)
+        context = self.retrieve_context(question)
         response = self.llm.invoke(
             [
                 SystemMessage(
@@ -209,8 +209,8 @@ class DbRagService:
                 HumanMessage(
                     content=(
                         f"Question:\n{question}\n\n"
-                        f"Table context:\n{context['table_context'] or 'none'}\n\n"
-                        f"Column context:\n{context['column_context'] or 'none'}"
+                        f"Table context:\n{context.table_context or 'none'}\n\n"
+                        f"Column context:\n{context.column_context or 'none'}"
                     )
                 ),
             ]
@@ -218,8 +218,8 @@ class DbRagService:
         return {
             "answer": coerce_text_content(getattr(response, "content", "")),
             "retrieval_summary": {
-                "tables": [entry["table"] for entry in context["tables"]],
-                "columns": [entry["column"] for entry in context["columns"]],
+                "tables": context.table_names,
+                "columns": context.column_names,
             },
         }
 
@@ -251,8 +251,14 @@ class DbRagService:
     def execute_sql_flow(self, question: str) -> dict[str, Any]:
         import duckdb
 
-        context = self._retrieve_context(question)
-        sql = self._generate_sql(question, context)
+        context = self.retrieve_context(question)
+        sql = self._generate_sql(
+            question,
+            {
+                "table_context": context.table_context,
+                "column_context": context.column_context,
+            },
+        )
         db = duckdb.connect(str(DUCKDB_PATH), read_only=True)
         dataframe = db.execute(sql).fetchdf()
         answer = f"Read-only SQL execution completed with {len(dataframe)} result row(s)."
@@ -260,5 +266,5 @@ class DbRagService:
             "answer": answer,
             "sql": sql,
             "dataframe": dataframe,
-            "source_tables": [entry["table"] for entry in context["tables"]],
+            "source_tables": context.table_names,
         }
