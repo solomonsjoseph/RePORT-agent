@@ -283,7 +283,6 @@ def rag_db_qa_node(
     del llm
 
     rag_state = dict(get_agent_state(state, "rag_db_qa"))
-    rag_state.pop("pending_sql_offer", None)
 
     latest_question = latest_user_message(state)
     question = str(question_override or _question_from_stale_qa_followup(state, latest_question) or latest_question)

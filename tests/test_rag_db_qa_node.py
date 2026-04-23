@@ -156,6 +156,49 @@ def test_rag_db_metadata_qa_answers_without_pending_sql_state() -> None:
     assert "awaiting_user_clarification" not in updated["meta"]
 
 
+def test_rag_db_qa_does_not_mutate_legacy_pending_sql_offer_key() -> None:
+    rag = _fresh_rag_module()
+
+    class _Service:
+        def readiness(self):
+            return {"ready": True, "message": ""}
+
+        def retrieve_context(self, question):
+            assert "cohort A" in question
+            return SimpleNamespace(
+                tables=[SimpleNamespace(table="Form 1A", text="table summary")],
+                columns=[SimpleNamespace(table="Form 1A", column="SEX", text="column summary")],
+                table_names=["Form 1A"],
+                column_names=["SEX"],
+            )
+
+        def answer_from_context(self, question, context):
+            assert context.table_names == ["Form 1A"]
+            return SimpleNamespace(
+                answer="Metadata answer from retrieved context.",
+                needs_sql=False,
+                rationale="metadata answer",
+                relevant_tables=["Form 1A"],
+                relevant_columns=["SEX"],
+            )
+
+    state = {
+        "messages": [_HumanMessage("How many male participants are in cohort A?")],
+        "output": {},
+        "observations": [],
+        "meta": {},
+        "agents": {"rag_db_qa": {"pending_sql_offer": True}},
+        "artifacts": {},
+    }
+
+    updated = rag.rag_db_qa_node(state, llm=object(), provider="openai", service=_Service())
+
+    assert updated["agents"]["rag_db_qa"]["pending_sql_offer"] is True
+    assert updated["output"]["qa_response"] == "Metadata answer from retrieved context."
+    assert "pending_sql_candidate" not in updated["agents"]["rag_db_qa"]
+    assert "pending_column_review" not in updated["agents"]["rag_db_qa"]
+
+
 def test_rag_db_qa_combines_stale_qa_followup_context_when_taking_over() -> None:
     rag = _fresh_rag_module()
     captured: dict[str, str] = {}
