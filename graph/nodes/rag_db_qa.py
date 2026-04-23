@@ -2,8 +2,14 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 from typing import Any
+from uuid import uuid4
 
 from langchain_core.messages import AIMessage
+from utils.dataset_artifacts import (
+    DEFAULT_RUNTIME_ROOT,
+    persist_dataset_artifact,
+    register_dataset_artifact,
+)
 
 from ..state import AgentState, MetaKeys
 from .state_helpers import clear_clarification_meta, get_agent_state
@@ -159,6 +165,75 @@ def _serialize_context_summary(context: Any) -> dict[str, list[str]]:
         "tables": _table_names_from_context(context),
         "columns": _column_names_from_context(context),
     }
+
+
+def _build_subset_dataset_id() -> str:
+    return f"subset-{uuid4().hex[:8]}"
+
+
+def _build_subset_schema(dataframe: Any, selected_columns: list[dict[str, str]]) -> dict[str, dict[str, str]]:
+    selected_by_name = {
+        str(column.get("column") or "").strip(): column
+        for column in list(selected_columns or [])
+        if str(column.get("column") or "").strip()
+    }
+
+    schema: dict[str, dict[str, str]] = {}
+    dtypes = getattr(dataframe, "dtypes", None)
+    for column_name in list(getattr(dataframe, "columns", [])):
+        column_key = str(column_name)
+        meta: dict[str, str] = {}
+        selected = selected_by_name.get(column_key, {})
+        description = str(selected.get("description") or "").strip()
+        if description:
+            meta["description"] = description
+        table_name = str(selected.get("table") or "").strip()
+        if table_name:
+            meta["notes"] = f"Source table: {table_name}"
+        if dtypes is not None:
+            meta["dataType"] = str(dtypes[column_name])
+        schema[column_key] = meta
+    return schema
+
+
+def _persist_sql_subset_artifact(
+    state: AgentState,
+    candidate: Any,
+    approved_review: Any,
+    execution_result: Any,
+) -> tuple[AgentState, dict[str, Any]]:
+    meta = dict(state.get("meta") or {})
+    thread_id = str(meta.get(MetaKeys.THREAD_ID) or "").strip()
+    if not thread_id:
+        raise ValueError("DB-RAG SQL subset persistence requires a thread_id in state meta.")
+
+    selected_tables = _string_list(_read_value(approved_review, "tables", []) or _read_value(candidate, "tables", []))
+    selected_columns = _serialize_columns(
+        _read_value(approved_review, "columns", []) or _read_value(candidate, "columns", [])
+    )
+    artifact = persist_dataset_artifact(
+        runtime_root=DEFAULT_RUNTIME_ROOT,
+        thread_id=thread_id,
+        dataset_id=_build_subset_dataset_id(),
+        kind="subset",
+        dataframe=_read_value(execution_result, "dataframe"),
+        schema=_build_subset_schema(_read_value(execution_result, "dataframe"), selected_columns),
+        provenance={
+            "source": "db_rag_sql",
+            "question": str(_read_value(candidate, "question", "") or "").strip(),
+            "sql": str(_read_value(execution_result, "sql", _read_value(candidate, "sql", "")) or "").strip(),
+            "source_tables": _string_list(
+                _read_value(execution_result, "source_tables", []) or _read_value(candidate, "tables", [])
+            ),
+            "selected_tables": selected_tables,
+            "selected_columns": selected_columns,
+            "selection_id": str(
+                _read_value(candidate, "selection_id", _read_value(approved_review, "selection_id", "")) or ""
+            ).strip(),
+            "feedback_history": list(_read_value(approved_review, "feedback_history", []) or []),
+        },
+    )
+    return register_dataset_artifact(state, artifact, make_active=True), artifact
 
 
 def _replace_rag_state(state: AgentState, rag_state: dict[str, Any]) -> AgentState:
@@ -331,8 +406,10 @@ def rag_db_qa_node(
 
     if pending_sql_candidate and _is_explicit_sql_confirmation(latest_question):
         candidate = _deserialize_prepared_sql_candidate(pending_sql_candidate)
+        approved_review = dict(rag_state.get("pending_column_review") or {})
         try:
             execution_result = service.execute_prepared_sql(candidate)
+            persisted_state, artifact = _persist_sql_subset_artifact(state, candidate, approved_review, execution_result)
         except Exception as exc:
             error_payload = {
                 "category": "db_rag_sql",
@@ -347,9 +424,10 @@ def rag_db_qa_node(
 
         response_text = (
             f'{_read_value(execution_result, "answer", "Read-only SQL execution completed.")}\n\n'
-            f'SQL used:\n{_read_value(execution_result, "sql", "")}'
+            f'SQL used:\n{_read_value(execution_result, "sql", "")}\n\n'
+            f'Saved dataset id: {artifact["id"]}'
         )
-        updated = _append_ai_response(state, response_text)
+        updated = _append_ai_response(persisted_state, response_text)
         updated = _clear_output_error(updated)
         updated["meta"] = clear_clarification_meta(updated.get("meta") or {})
         rag_state.pop("pending_sql_candidate", None)

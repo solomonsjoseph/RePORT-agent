@@ -491,7 +491,7 @@ def test_rag_db_executes_prepared_sql_after_explicit_confirmation() -> None:
         ],
         "output": {},
         "observations": [],
-        "meta": {},
+        "meta": {"thread_id": "thread-execute"},
         "agents": {
             "rag_db_qa": {
                 "pending_sql_candidate": {
@@ -516,6 +516,82 @@ def test_rag_db_executes_prepared_sql_after_explicit_confirmation() -> None:
     assert "Read-only SQL execution completed with 1 result row" in updated["output"]["qa_response"]
     assert updated["agents"]["rag_db_qa"]["status"] == "done"
     assert "pending_sql_candidate" not in updated["agents"]["rag_db_qa"]
+
+
+def test_rag_db_execution_persists_subset_artifact_with_db_rag_provenance(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    rag = _fresh_rag_module()
+    monkeypatch.setattr(rag, "DEFAULT_RUNTIME_ROOT", tmp_path)
+
+    class _Service:
+        def readiness(self):
+            return {"ready": True, "message": ""}
+
+        def execute_prepared_sql(self, candidate):
+            assert candidate.selection_id == "sel-approved"
+            return SimpleNamespace(
+                answer="Read-only SQL execution completed with 2 result row(s).",
+                sql=candidate.sql,
+                dataframe=pd.DataFrame({"AGE": [42, 37]}),
+                source_tables=["Form 1A"],
+            )
+
+    feedback_history = [
+        {"role": "user", "content": "Keep only AGE for the first pass."},
+        {"role": "assistant", "content": "Updated the approved column selection."},
+    ]
+    state = {
+        "messages": [
+            _HumanMessage("Help me subset age for the matching participants"),
+            _AIMessage('SELECT "AGE" FROM "Form 1A"\n\nDo you want me to run the read-only SQL?'),
+            _HumanMessage("run the prepared sql"),
+        ],
+        "output": {},
+        "observations": [],
+        "meta": {"thread_id": "thread-persist"},
+        "agents": {
+            "rag_db_qa": {
+                "pending_column_review": {
+                    "selection_id": "sel-approved",
+                    "question": "Help me subset age for the matching participants",
+                    "tables": ["Form 1A"],
+                    "columns": [
+                        {"table": "Form 1A", "column": "AGE", "description": "Age in years"},
+                    ],
+                    "rationale": "approved columns",
+                    "feedback_history": feedback_history,
+                    "status": "approved",
+                },
+                "pending_sql_candidate": {
+                    "question": "Help me subset age for the matching participants",
+                    "sql": 'SELECT "AGE" FROM "Form 1A"',
+                    "tables": ["Form 1A"],
+                    "columns": [
+                        {"table": "Form 1A", "column": "AGE", "description": "Age in years"},
+                    ],
+                    "selection_id": "sel-approved",
+                    "status": "prepared",
+                },
+                "last_database_question": "Help me subset age for the matching participants",
+            }
+        },
+        "artifacts": {"datasets": {}},
+    }
+
+    updated = rag.rag_db_qa_node(state, llm=object(), provider="openai", service=_Service())
+
+    dataset_id = updated["artifacts"]["active_dataset_id"]
+    artifact = updated["artifacts"]["datasets"][dataset_id]
+
+    assert artifact["kind"] == "subset"
+    assert artifact["provenance"]["source"] == "db_rag_sql"
+    assert artifact["provenance"]["feedback_history"] == feedback_history
+    assert artifact["provenance"]["selected_columns"][0]["column"] == "AGE"
+    assert "pending_sql_candidate" not in updated["agents"]["rag_db_qa"]
+    assert "pending_column_review" not in updated["agents"]["rag_db_qa"]
+    assert dataset_id in updated["output"]["qa_response"]
 
 
 def test_rag_db_treats_contentful_followup_as_new_question_when_sql_candidate_exists() -> None:
