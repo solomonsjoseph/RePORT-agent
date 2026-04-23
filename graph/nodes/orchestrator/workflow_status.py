@@ -53,6 +53,25 @@ def derive_workflow_status(state: dict) -> dict:
             "blocker_signature": "waiting_for_tool_results",
         }
 
+    rag_db_qa = get_node_data(state, "rag_db_qa")
+    pending_column_review = dict(rag_db_qa.get("pending_column_review") or {})
+    if pending_column_review.get("status") == "awaiting_review":
+        selection_id = pending_column_review.get("selection_id")
+        return {
+            "milestone": "awaiting_rag_db_column_review",
+            "completion_status": "blocked_waiting",
+            "blocker_signature": f"waiting_for_rag_db_column_review:{selection_id}",
+        }
+
+    pending_sql_candidate = dict(rag_db_qa.get("pending_sql_candidate") or {})
+    if pending_sql_candidate.get("status") == "prepared":
+        selection_id = pending_sql_candidate.get("selection_id")
+        return {
+            "milestone": "awaiting_rag_db_sql_confirmation",
+            "completion_status": "blocked_waiting",
+            "blocker_signature": f"waiting_for_rag_db_sql_confirmation:{selection_id}",
+        }
+
     if state.get("last_action") == "terminal_execution_error" and terminal_error_category in TERMINAL_EXECUTION_ERROR_CATEGORIES:
         return {
             "milestone": "terminal_error",

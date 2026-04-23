@@ -68,6 +68,44 @@ def test_direct_rag_db_answer_is_classified_as_answered_complete() -> None:
     assert status["blocker_signature"] is None
 
 
+def test_pending_rag_db_column_review_is_blocked_waiting() -> None:
+    state = {
+        "agents": {
+            "executor": {"run_status": "idle"},
+            "human_review": {"before_run_decision": None, "after_error_decision": None, "final_decision": None},
+            "rag_db_qa": {
+                "pending_column_review": {"status": "awaiting_review", "selection_id": "sel-1"},
+            },
+        },
+        "last_action": "rag_db_qa",
+    }
+
+    status = derive_workflow_status(state)
+
+    assert status["milestone"] == "awaiting_rag_db_column_review"
+    assert status["completion_status"] == "blocked_waiting"
+    assert status["blocker_signature"] == "waiting_for_rag_db_column_review:sel-1"
+
+
+def test_pending_rag_db_sql_confirmation_is_blocked_waiting() -> None:
+    state = {
+        "agents": {
+            "executor": {"run_status": "idle"},
+            "human_review": {"before_run_decision": None, "after_error_decision": None, "final_decision": None},
+            "rag_db_qa": {
+                "pending_sql_candidate": {"selection_id": "sel-1", "status": "prepared"},
+            },
+        },
+        "last_action": "rag_db_qa",
+    }
+
+    status = derive_workflow_status(state)
+
+    assert status["milestone"] == "awaiting_rag_db_sql_confirmation"
+    assert status["completion_status"] == "blocked_waiting"
+    assert status["blocker_signature"] == "waiting_for_rag_db_sql_confirmation:sel-1"
+
+
 def test_generated_code_without_ticket_is_awaiting_run_review() -> None:
     state = {
         "output": {"generated_code": "print(1)"},
