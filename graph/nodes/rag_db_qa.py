@@ -19,12 +19,21 @@ NODE_CAPABILITY = (
 
 _SUPPORTED_PROVIDERS = {"openai", "anthropic"}
 _SQL_CONFIRMATION_ALLOWLIST = {
-    "yes",
     "yes run it",
     "run it",
     "execute it",
     "execute the query",
     "run the prepared sql",
+}
+_SQL_DECLINE_ALLOWLIST = {
+    "no",
+    "not now",
+    "not right now",
+    "cancel",
+    "cancel it",
+    "don't run it",
+    "do not run it",
+    "no thanks",
 }
 
 
@@ -34,6 +43,10 @@ def _normalized_text(text: str) -> str:
 
 def _is_explicit_sql_confirmation(text: str) -> bool:
     return _normalized_text(text) in _SQL_CONFIRMATION_ALLOWLIST
+
+
+def _is_explicit_sql_decline(text: str) -> bool:
+    return _normalized_text(text) in _SQL_DECLINE_ALLOWLIST
 
 
 def _read_value(payload: Any, field: str, default: Any = None) -> Any:
@@ -306,6 +319,16 @@ def rag_db_qa_node(
         return _finalize_rag_state(updated, rag_state, status="done", active_thread=False)
 
     pending_sql_candidate = dict(rag_state.get("pending_sql_candidate") or {})
+    if pending_sql_candidate and _is_explicit_sql_decline(latest_question):
+        candidate = _deserialize_prepared_sql_candidate(pending_sql_candidate)
+        updated = _append_ai_response(state, "Okay. I will not run the read-only SQL.")
+        updated = _clear_output_error(updated)
+        updated["meta"] = clear_clarification_meta(updated.get("meta") or {})
+        rag_state.pop("pending_sql_candidate", None)
+        rag_state["error"] = None
+        rag_state["last_database_question"] = candidate.question
+        return _finalize_rag_state(updated, rag_state, status="done", active_thread=True)
+
     if pending_sql_candidate and _is_explicit_sql_confirmation(latest_question):
         candidate = _deserialize_prepared_sql_candidate(pending_sql_candidate)
         try:

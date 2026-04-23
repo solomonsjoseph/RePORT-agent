@@ -389,3 +389,24 @@ def test_orchestrator_keeps_rag_db_thread_for_referential_followup() -> None:
     )
 
     assert updated["next_action"] == "rag_db_qa"
+
+
+def test_orchestrator_policy_ignores_legacy_pending_sql_offer() -> None:
+    _fresh_orchestrator()
+    policy = importlib.import_module("graph.nodes.orchestrator.policy")
+
+    state_with_legacy_offer = {
+        "messages": [SimpleNamespace(type="human", content="hello there")],
+        "agents": {"rag_db_qa": {"pending_sql_offer": True}},
+        "meta": {},
+        "artifacts": {"datasets": {}},
+    }
+    state_with_active_thread = {
+        "messages": [SimpleNamespace(type="human", content="hello there")],
+        "agents": {"rag_db_qa": {"active_thread": True}},
+        "meta": {},
+        "artifacts": {"datasets": {}},
+    }
+
+    assert policy.should_prefer_rag_db_qa(state_with_legacy_offer) is False
+    assert policy.should_prefer_rag_db_qa(state_with_active_thread) is True

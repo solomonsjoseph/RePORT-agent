@@ -72,7 +72,7 @@ def _pending_clarification_has_database_context(state: AgentState) -> bool:
 
 def _prefer_rag_db_qa(state: AgentState) -> bool:
     rag_state = get_agent_state(state, "rag_db_qa")
-    if rag_state.get("pending_sql_offer") or rag_state.get("active_thread"):
+    if rag_state.get("active_thread"):
         return True
 
     latest = _latest_human_message(state)

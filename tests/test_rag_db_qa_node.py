@@ -156,15 +156,17 @@ def test_rag_db_metadata_qa_answers_without_pending_sql_state() -> None:
     assert "awaiting_user_clarification" not in updated["meta"]
 
 
-def test_rag_db_qa_does_not_mutate_legacy_pending_sql_offer_key() -> None:
+def test_rag_db_qa_treats_bare_yes_as_fresh_message_without_executing_sql() -> None:
     rag = _fresh_rag_module()
+    calls: list[str] = []
 
     class _Service:
         def readiness(self):
             return {"ready": True, "message": ""}
 
         def retrieve_context(self, question):
-            assert "cohort A" in question
+            calls.append("retrieve_context")
+            assert question == "yes"
             return SimpleNamespace(
                 tables=[SimpleNamespace(table="Form 1A", text="table summary")],
                 columns=[SimpleNamespace(table="Form 1A", column="SEX", text="column summary")],
@@ -173,30 +175,110 @@ def test_rag_db_qa_does_not_mutate_legacy_pending_sql_offer_key() -> None:
             )
 
         def answer_from_context(self, question, context):
+            calls.append("answer_from_context")
+            assert question == "yes"
             assert context.table_names == ["Form 1A"]
             return SimpleNamespace(
-                answer="Metadata answer from retrieved context.",
+                answer="Fresh metadata answer from the new message.",
                 needs_sql=False,
                 rationale="metadata answer",
                 relevant_tables=["Form 1A"],
                 relevant_columns=["SEX"],
             )
 
+        def execute_prepared_sql(self, candidate):
+            raise AssertionError("execute_prepared_sql should not run for bare yes")
+
     state = {
-        "messages": [_HumanMessage("How many male participants are in cohort A?")],
+        "messages": [_HumanMessage("yes")],
         "output": {},
         "observations": [],
         "meta": {},
-        "agents": {"rag_db_qa": {"pending_sql_offer": True}},
+        "agents": {
+            "rag_db_qa": {
+                "pending_sql_candidate": {
+                    "question": "How many male participants are in cohort A?",
+                    "sql": 'SELECT "AGE", "SEX" FROM "Form 1A"',
+                    "tables": ["Form 1A"],
+                    "columns": [
+                        {"table": "Form 1A", "column": "AGE", "description": "Age in years"},
+                        {"table": "Form 1A", "column": "SEX", "description": "Sex at enrollment"},
+                    ],
+                    "selection_id": "sel-bare-yes",
+                    "status": "prepared",
+                }
+            }
+        },
         "artifacts": {},
     }
 
     updated = rag.rag_db_qa_node(state, llm=object(), provider="openai", service=_Service())
 
-    assert updated["agents"]["rag_db_qa"]["pending_sql_offer"] is True
-    assert updated["output"]["qa_response"] == "Metadata answer from retrieved context."
+    assert updated["output"]["qa_response"] == "Fresh metadata answer from the new message."
     assert "pending_sql_candidate" not in updated["agents"]["rag_db_qa"]
     assert "pending_column_review" not in updated["agents"]["rag_db_qa"]
+    assert calls == ["retrieve_context", "answer_from_context"]
+
+
+def test_rag_db_qa_decline_with_pending_sql_candidate_skips_execution_and_retrieval() -> None:
+    rag = _fresh_rag_module()
+
+    class _Service:
+        def readiness(self):
+            return {"ready": True, "message": ""}
+
+        def retrieve_context(self, question):
+            raise AssertionError("retrieve_context should not run for an explicit decline")
+
+        def execute_prepared_sql(self, candidate):
+            raise AssertionError("execute_prepared_sql should not run for an explicit decline")
+
+    state = {
+        "messages": [
+            _HumanMessage("How many male participants are in cohort A?"),
+            _AIMessage('SELECT "AGE", "SEX" FROM "Form 1A"\n\nDo you want me to run the read-only SQL?'),
+            _HumanMessage("no"),
+        ],
+        "output": {},
+        "observations": [],
+        "meta": {},
+        "agents": {
+            "rag_db_qa": {
+                "pending_column_review": {
+                    "selection_id": "sel-approved",
+                    "question": "How many male participants are in cohort A?",
+                    "tables": ["Form 1A"],
+                    "columns": [
+                        {"table": "Form 1A", "column": "AGE", "description": "Age in years"},
+                        {"table": "Form 1A", "column": "SEX", "description": "Sex at enrollment"},
+                    ],
+                    "rationale": "approved columns",
+                    "feedback_history": [],
+                    "status": "approved",
+                },
+                "pending_sql_candidate": {
+                    "question": "How many male participants are in cohort A?",
+                    "sql": 'SELECT "AGE", "SEX" FROM "Form 1A"',
+                    "tables": ["Form 1A"],
+                    "columns": [
+                        {"table": "Form 1A", "column": "AGE", "description": "Age in years"},
+                        {"table": "Form 1A", "column": "SEX", "description": "Sex at enrollment"},
+                    ],
+                    "selection_id": "sel-decline",
+                    "status": "prepared",
+                },
+                "last_database_question": "How many male participants are in cohort A?",
+            }
+        },
+        "artifacts": {},
+    }
+
+    updated = rag.rag_db_qa_node(state, llm=object(), provider="openai", service=_Service())
+
+    assert updated["output"]["qa_response"] == "Okay. I will not run the read-only SQL."
+    assert updated["agents"]["rag_db_qa"]["pending_column_review"]["status"] == "approved"
+    assert "pending_sql_candidate" not in updated["agents"]["rag_db_qa"]
+    assert updated["agents"]["rag_db_qa"]["last_database_question"] == "How many male participants are in cohort A?"
 
 
 def test_rag_db_qa_combines_stale_qa_followup_context_when_taking_over() -> None:
