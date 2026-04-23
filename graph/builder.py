@@ -18,6 +18,7 @@ from .nodes.terminal_execution_error import terminal_execution_error_node
 from .nodes.human_review_before_run import human_review_before_run_node
 from .nodes.human_review_after_error import human_review_after_error_node
 from .nodes.human_review_before_output import human_review_before_output_node
+from .nodes.human_review_rag_db_column_selection import human_review_rag_db_column_selection_node
 from .nodes.rag_db_qa import rag_db_qa_node
 from db_rag.service import DbRagService
 
@@ -101,6 +102,10 @@ def build_graph(llm, provider, db_path):
         "rag_db_qa": _run_and_mark(
             "rag_db_qa",
             lambda s: rag_db_qa_node(s, llm, provider=provider, service=db_rag_service),
+        ),
+        "human_review_rag_db_column_selection": _run_and_mark(
+            "human_review_rag_db_column_selection",
+            human_review_rag_db_column_selection_node,
         ),
     }
     available_actions = [*action_nodes.keys(), "end"]

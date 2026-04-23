@@ -107,3 +107,19 @@ def test_mask_actions_explain_execute_code_block_when_final_review_is_pending() 
 
     assert allowed == ["qa", "human_review_before_output"]
     assert blocked["execute_code"] == "already succeeded; move to human_review_before_output"
+
+
+def test_action_mask_blocks_inactive_human_review_rag_db_column_selection() -> None:
+    state = {
+        "agents": {
+            "rag_db_qa": {},
+        },
+        "meta": {},
+    }
+
+    allowed, blocked = mask_actions(state, ["qa", "human_review_rag_db_column_selection"])
+
+    assert allowed == ["qa"]
+    assert blocked["human_review_rag_db_column_selection"] == (
+        "requires DB-RAG column selection awaiting review"
+    )

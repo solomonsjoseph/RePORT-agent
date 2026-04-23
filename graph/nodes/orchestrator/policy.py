@@ -107,6 +107,7 @@ def get_policy_contract() -> OrchestratorPolicyContract:
             "terminal_execution_error",
             "human_review_after_error",
             "human_review_before_run",
+            "human_review_rag_db_column_selection",
             "execute_code",
             "human_review_before_output",
             "clarification",

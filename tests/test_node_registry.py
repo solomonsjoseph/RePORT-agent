@@ -66,6 +66,22 @@ def test_human_review_after_error_not_ready_for_terminal_error() -> None:
     assert review.is_ready(_state_with_error("policy_blocked")) is False
 
 
+def test_human_review_rag_db_column_selection_ready_when_selection_waits_for_review() -> None:
+    mod = _load_registry_module()
+    review = mod.NODE_REGISTRY_MAP["human_review_rag_db_column_selection"]
+    state = {
+        "agents": {
+            "rag_db_qa": {
+                "pending_column_review": {
+                    "status": "awaiting_review",
+                }
+            }
+        }
+    }
+
+    assert review.is_ready(state) is True
+
+
 def test_action_capabilities_are_sourced_from_node_modules() -> None:
     from graph.nodes.action_metadata import ACTION_CAPABILITIES
 

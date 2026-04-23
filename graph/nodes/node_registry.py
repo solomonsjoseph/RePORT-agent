@@ -75,6 +75,12 @@ def _has_fresh_run_approval(state: AgentState) -> bool:
     return bool(approved and current and approved == current)
 
 
+def _has_pending_rag_db_column_review(state: AgentState) -> bool:
+    rag_state = get_agent_state(state, "rag_db_qa")
+    review = dict(rag_state.get("pending_column_review") or {})
+    return review.get("status") == "awaiting_review"
+
+
 # ---------------------------------------------------------------------------
 # NodeDefinition
 # ---------------------------------------------------------------------------
@@ -161,6 +167,12 @@ NODE_REGISTRY: list[NodeDefinition] = [
             not bool((s.get("output") or {}).get("generated_code"))
             and not is_tool_requested(s)
         ),
+    ),
+    NodeDefinition(
+        name="human_review_rag_db_column_selection",
+        capability=ACTION_CAPABILITIES["human_review_rag_db_column_selection"],
+        priority=47,
+        is_ready=_has_pending_rag_db_column_review,
     ),
     NodeDefinition(
         name="generate_code",

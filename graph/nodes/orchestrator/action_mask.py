@@ -26,6 +26,9 @@ CONTROL_ACTION_REASON_FACTORIES = {
     "terminal_execution_error": _static_reason("requires terminal execution error"),
     "human_review_after_error": _static_reason("requires exhausted retryable execution error awaiting review"),
     "human_review_before_run": _static_reason("requires generated code awaiting run approval"),
+    "human_review_rag_db_column_selection": _static_reason(
+        "requires DB-RAG column selection awaiting review"
+    ),
     "execute_code": _execute_code_block_reason,
     "human_review_before_output": _static_reason(
         "requires successful execution awaiting final review"
