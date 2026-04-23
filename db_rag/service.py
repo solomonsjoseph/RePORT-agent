@@ -21,6 +21,8 @@ CHROMA_DIR = RUNTIME_ROOT / "chroma_db"
 DUCKDB_PATH = RUNTIME_ROOT / "report.duckdb"
 MANIFEST_PATH = RUNTIME_ROOT / "manifest.json"
 EMBEDDING_MODEL = "text-embedding-3-small"
+_DB_RAG_CONTEXT_FALLBACK_ANSWER = "I could not answer from the retrieved DB-RAG context."
+_DB_RAG_CONTEXT_FALLBACK_RATIONALE = "Invalid structured response from the model."
 
 _DANGEROUS_SQL = ("DROP", "DELETE", "UPDATE", "INSERT", "ALTER", "TRUNCATE", "ATTACH", "DETACH", "CREATE", "REPLACE")
 
@@ -278,11 +280,19 @@ class DbRagService:
             ]
         )
         parsed = _parse_json_object(coerce_text_content(getattr(response, "content", "")))
-        answer_text = str(parsed.get("answer", "") or "").strip() or (
-            "I could not answer from the retrieved DB-RAG context."
-        )
-        rationale = str(parsed.get("rationale", "") or "").strip()
-        needs_sql = parsed.get("needs_sql") is True
+        needs_sql_value = parsed.get("needs_sql")
+        if not parsed or not isinstance(needs_sql_value, bool):
+            return DbRagQaAnswer(
+                answer=_DB_RAG_CONTEXT_FALLBACK_ANSWER,
+                needs_sql=True,
+                rationale=_DB_RAG_CONTEXT_FALLBACK_RATIONALE,
+                relevant_tables=context.table_names,
+                relevant_columns=context.column_names,
+            )
+
+        answer_text = str(parsed.get("answer", "") or "").strip() or _DB_RAG_CONTEXT_FALLBACK_ANSWER
+        rationale = str(parsed.get("rationale", "") or "").strip() or _DB_RAG_CONTEXT_FALLBACK_RATIONALE
+        needs_sql = needs_sql_value
         return DbRagQaAnswer(
             answer=answer_text,
             needs_sql=needs_sql,

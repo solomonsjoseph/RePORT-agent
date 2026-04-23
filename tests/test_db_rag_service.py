@@ -153,6 +153,16 @@ class _LLM:
         return SimpleNamespace(content=self.content)
 
 
+class _LLMRecorder:
+    def __init__(self, content: str):
+        self.content = content
+        self.calls: list[list[object]] = []
+
+    def invoke(self, messages):
+        self.calls.append(messages)
+        return SimpleNamespace(content=self.content)
+
+
 def test_answer_from_context_returns_metadata_qa_without_sql(monkeypatch) -> None:
     _install_langchain_message_stubs(monkeypatch)
 
@@ -207,3 +217,54 @@ def test_answer_from_context_marks_subset_request_as_sql_needed(monkeypatch) -> 
     assert isinstance(answer, service.DbRagQaAnswer)
     assert answer.needs_sql is True
     assert answer.rationale == "row-level subset requested"
+
+
+def test_answer_from_context_fails_closed_on_weakly_typed_structured_output(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    from db_rag import service
+
+    context = service.DbRagContext(
+        tables=[service.DbRagTableHit(table="Form 1A", text="Form 1A summary")],
+        columns=[service.DbRagColumnHit(table="Form 1A", column="AGE", text="AGE summary")],
+    )
+    llm = _LLM('{"answer":"Subset requested.","needs_sql":"true","rationale":"row-level subset requested"}')
+    db_rag_service = service.DbRagService(llm=llm)
+
+    answer = db_rag_service.answer_from_context("Give me the subset of records", context)
+
+    assert isinstance(answer, service.DbRagQaAnswer)
+    assert answer.needs_sql is True
+    assert answer.answer == "I could not answer from the retrieved DB-RAG context."
+    assert answer.rationale == "Invalid structured response from the model."
+
+
+def test_answer_from_context_sends_table_and_column_context_to_llm(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    from db_rag import service
+
+    context = service.DbRagContext(
+        tables=[service.DbRagTableHit(table="Form 1A", text="Form 1A summary")],
+        columns=[service.DbRagColumnHit(table="Form 1A", column="AGE", text="AGE summary")],
+        table_context="Form 1A summary text",
+        column_context="AGE summary text",
+    )
+    llm = _LLMRecorder(
+        json.dumps(
+            {
+                "answer": "This database contains TB study forms.",
+                "needs_sql": False,
+                "rationale": "overview question answered from metadata",
+            }
+        )
+    )
+    db_rag_service = service.DbRagService(llm=llm)
+
+    answer = db_rag_service.answer_from_context("Give me overview of the database", context)
+
+    assert isinstance(answer, service.DbRagQaAnswer)
+    assert len(llm.calls) == 1
+    message_text = "\n".join(getattr(message, "content", "") for message in llm.calls[0])
+    assert "Table context:\nForm 1A summary text" in message_text
+    assert "Column context:\nAGE summary text" in message_text
