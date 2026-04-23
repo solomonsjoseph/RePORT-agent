@@ -5,10 +5,11 @@ import hashlib
 from ...state import AgentState, MetaKeys
 from ...state_views import get_artifacts
 from ...workflow_config import MAX_ERROR_ITERATIONS
+from .policy import get_policy_contract
 from .state_logic import _user_message_hash
 
-MAX_STAGNATION_STEPS = 4
-MAX_WEAK_PROGRESS_STEPS = 4
+MAX_STAGNATION_STEPS = get_policy_contract().recurrence.max_stagnation_steps
+MAX_WEAK_PROGRESS_STEPS = get_policy_contract().recurrence.max_weak_progress_steps
 ERROR_RECOVERY_ACTIONS = {"error_handler", "execute_code"}
 
 

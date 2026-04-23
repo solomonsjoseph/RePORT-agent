@@ -33,7 +33,8 @@ def execute_code_node(state, df):
     # --------------------------------------------------
     # Execute code
     # --------------------------------------------------
-    result, stdout, figure_png, error = run_python_user(code, df)
+    resolved_df = df(state) if callable(df) else df
+    result, stdout, figure_png, error = run_python_user(code, resolved_df)
 
     # --------------------------------------------------
     # Handle execution error

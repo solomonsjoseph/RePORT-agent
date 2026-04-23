@@ -12,6 +12,8 @@ from .policy import (
     DETERMINISTIC_CONTROL_ACTIONS,
     _next_tool_requester,
     _tool_request_queue,
+    select_planner_fallback_action,
+    should_prefer_rag_db_qa,
 )
 from .progress_controller import apply_recurrence_guard, update_recurrence_state
 from .state_logic import (
@@ -48,16 +50,6 @@ def _record_planner_decision(
     planner["last_decision"] = decision
     planner["decision_trace"] = trace[-20:]
     return merge_state_patch(state, {"planner": planner})
-
-
-def _planner_fallback_action(available_actions: Iterable[str]) -> str:
-    """Return a stable semantic default when planner output is unusable."""
-    available = set(available_actions)
-    if "qa" in available:
-        return "qa"
-    if "generate_code" in available:
-        return "generate_code"
-    return "end"
 
 
 def _latest_user_message_is_explicit_code_request(state: AgentState) -> bool:
@@ -275,6 +267,9 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
     routing_state = _store_workflow_status(routing_state)
     routing_state = update_recurrence_state(routing_state)
 
+    if not next_action and "rag_db_qa" in available_action_set and should_prefer_rag_db_qa(routing_state):
+        next_action = "rag_db_qa"
+
     if not next_action:
         next_action = _ready_deterministic_action(
             routing_state,
@@ -299,7 +294,7 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
             ):
                 next_action = "generate_code"
             else:
-                next_action = _planner_fallback_action(masked_actions)
+                next_action = select_planner_fallback_action(routing_state, set(masked_actions))
         routing_state = _record_planner_decision(
             routing_state,
             planner_action,

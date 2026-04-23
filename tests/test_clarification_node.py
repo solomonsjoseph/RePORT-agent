@@ -53,6 +53,12 @@ class _ChatPromptTemplate:
         return _PromptTemplate(messages)
 
 
+class _FewShotChatMessagePromptTemplate:
+    def __init__(self, example_prompt, examples):
+        self.example_prompt = example_prompt
+        self.examples = examples
+
+
 def _install_stubs() -> None:
     messages_mod = ModuleType("langchain_core.messages")
     messages_mod.BaseMessage = object
@@ -62,6 +68,7 @@ def _install_stubs() -> None:
     prompts_mod = ModuleType("langchain_core.prompts")
     prompts_mod.ChatPromptTemplate = _ChatPromptTemplate
     prompts_mod.MessagesPlaceholder = _MessagesPlaceholder
+    prompts_mod.FewShotChatMessagePromptTemplate = _FewShotChatMessagePromptTemplate
 
     langchain_core_mod = ModuleType("langchain_core")
     langchain_core_mod.messages = messages_mod

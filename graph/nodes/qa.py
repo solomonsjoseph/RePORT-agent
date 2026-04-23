@@ -24,6 +24,7 @@ from .tool_routing import (
 )
 from utils.message_window import window_messages
 from utils.llm_response import coerce_text_content
+from utils.dataset_artifacts import build_dataset_context, get_active_dataset_artifact
 
 NODE_NAME = "qa"
 NODE_CAPABILITY = (
@@ -72,6 +73,11 @@ def qa_node(
     context: str = "",
     question_override: str | None = None,
 ) -> AgentState:
+    if isinstance(context, dict) and context.get("runtime_datasets"):
+        context = build_dataset_context(get_active_dataset_artifact(state))
+    elif callable(context):
+        context = context(state)
+
     qa_state = get_agent_state(state, "qa")
     question = question_override if question_override is not None else latest_user_message(state)
     tool_requests = list(qa_state.get("tool_requests", []))

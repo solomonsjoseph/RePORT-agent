@@ -47,3 +47,28 @@ def test_execute_code_node_preserves_structured_sandbox_errors(monkeypatch) -> N
         "message": "Disallowed import: subprocess",
     }
     assert updated["agents"]["executor"]["run_status"] == "error"
+
+
+def test_execute_code_node_supports_callable_dataset_resolver(monkeypatch) -> None:
+    execute_code = _load_execute_code_module()
+    captured = {}
+
+    def fake_run_python_user(_code, df):
+        captured["df"] = df
+        return "ok", "done", b"", None
+
+    monkeypatch.setattr(execute_code, "run_python_user", fake_run_python_user)
+
+    state = {
+        "output": {"generated_code": "print(df.shape)"},
+        "agents": {"executor": {"run_status": "pending"}},
+        "messages": [],
+    }
+
+    updated = execute_code.execute_code_node(
+        state,
+        df=lambda current_state: {"resolved_from_state": len(current_state.get("messages", []))},
+    )
+
+    assert captured["df"] == {"resolved_from_state": 0}
+    assert updated["agents"]["executor"]["run_status"] == "ok"

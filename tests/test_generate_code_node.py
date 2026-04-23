@@ -172,6 +172,43 @@ def test_generate_code_accepts_structured_code_result_payload() -> None:
     assert updated["output"]["code_assumptions"] == ""
 
 
+def test_generate_code_supports_callable_context_provider() -> None:
+    generate_code = _fresh_generate_code()
+
+    state = {
+        "messages": [_HumanMessage("write code for descriptive analysis")],
+        "output": {},
+        "observations": [],
+        "meta": {},
+        "agents": {
+            "generate_code": {"tool_requests": [], "tool_results": []},
+            "human_review": {"before_run_decision": None},
+        },
+    }
+
+    llm = _SeqLLM(
+        [
+            json.dumps(
+                {
+                    "response_type": "code_result",
+                    "summary": "Summarizes the selected dataset.",
+                    "assumptions": "",
+                    "code": "print(df.shape)",
+                }
+            )
+        ]
+    )
+
+    updated = generate_code.generate_code_node(
+        state,
+        llm,
+        context=lambda current_state: f"context for {len(current_state['messages'])} messages",
+    )
+
+    assert updated["output"]["generated_code"] == "print(df.shape)"
+    assert llm.calls[0]["context"] == "context for 1 messages"
+
+
 def test_generate_code_retries_once_for_malformed_payload_then_accepts_code_result() -> None:
     generate_code = _fresh_generate_code()
 

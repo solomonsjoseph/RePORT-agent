@@ -58,3 +58,5 @@ class MetaKeys:
     WORKFLOW_MILESTONE = "workflow_milestone"
     COMPLETION_STATUS = "completion_status"
     BLOCKER_SIGNATURE = "blocker_signature"
+    ANALYSIS_DATASET_ID = "analysis_dataset_id"
+    THREAD_ID = "thread_id"

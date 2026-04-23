@@ -6,6 +6,7 @@ from pathlib import Path
 
 _ACTION_MODULES = (
     "qa",
+    "rag_db_qa",
     "clarification",
     "generate_code",
     "execute_code",

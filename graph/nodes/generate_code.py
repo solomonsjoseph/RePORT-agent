@@ -19,6 +19,7 @@ from .state_helpers import (
 from .tool_routing import format_tool_results
 from ..state import MetaKeys
 from ..workflow_config import CODEGEN_RECENT_TURNS
+from utils.dataset_artifacts import build_dataset_context, choose_analysis_dataset
 
 NODE_NAME = "generate_code"
 NODE_CAPABILITY = (
@@ -139,11 +140,30 @@ def generate_code_node(state, llm, context):
     if tool_results:
         output["tool_results"] = format_tool_results(tool_results)
 
+    resolved_context = context(state) if callable(context) else context
+    latest_human = _latest_human_content(messages)
+    meta = dict(state.get("meta", {}))
+    if isinstance(context, dict) and context.get("runtime_datasets"):
+        selected_artifact, selection_reason = choose_analysis_dataset(
+            state,
+            latest_user_message=latest_human,
+        )
+        if selection_reason == "ambiguous":
+            return _clarification_state(
+                state,
+                "Which dataset should I analyze: the uploaded dataset or the latest extracted subset?",
+                messages,
+            )
+        if selected_artifact is not None:
+            resolved_context = build_dataset_context(selected_artifact)
+            meta[MetaKeys.ANALYSIS_DATASET_ID] = selected_artifact["id"]
+        else:
+            resolved_context = "No dataset or schema provided."
     windowed = window_messages(messages, max_turns=CODEGEN_RECENT_TURNS)
     prompt = make_generate_code_prompt().invoke(
         {
             "messages": windowed,
-            "context": context,
+            "context": resolved_context,
             "output": output,
             "tool_results": output.get("tool_results", ""),
         }
@@ -187,7 +207,7 @@ def generate_code_node(state, llm, context):
         executor_state.pop("error", None)
         agents["executor"] = executor_state
 
-    meta = clear_clarification_meta(state.get("meta", {}))
+    meta = clear_clarification_meta(meta)
     meta[MetaKeys.ERROR_ITERATIONS] = 0
     meta[MetaKeys.CURRENT_CODE_HASH] = code_fingerprint(code)
     meta.pop(MetaKeys.FINAL_APPROVED_CODE_HASH, None)

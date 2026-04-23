@@ -2,7 +2,7 @@ import os
 import sqlite3
 from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.sqlite import SqliteSaver
-from utils.context import build_context
+from utils.dataset_artifacts import get_active_dataset_artifact, load_dataset_artifact
 from .state import AgentState
 from .routing import route_by_next_action
 from .nodes.node_registry import validate_registry
@@ -18,6 +18,8 @@ from .nodes.terminal_execution_error import terminal_execution_error_node
 from .nodes.human_review_before_run import human_review_before_run_node
 from .nodes.human_review_after_error import human_review_after_error_node
 from .nodes.human_review_before_output import human_review_before_output_node
+from .nodes.rag_db_qa import rag_db_qa_node
+from db_rag.service import DbRagService
 
 def _run_and_mark(node_name, fn):
     def _wrapped(state):
@@ -57,18 +59,37 @@ def _run_and_mark(node_name, fn):
     return _wrapped
 
 
-def build_graph(llm, df, schema, db_path):
+def build_graph(llm, provider, db_path):
     workflow = StateGraph(AgentState)
-    context = build_context(df, schema)
+    db_rag_service = DbRagService(llm=llm)
+
+    context_bundle = {
+        "runtime_datasets": True,
+        "provider": provider,
+        "db_rag_service": db_rag_service,
+    }
+
+    def _resolve_analysis_dataframe(state):
+        artifact = get_active_dataset_artifact(state)
+        meta = dict(state.get("meta") or {})
+        datasets = dict((state.get("artifacts") or {}).get("datasets") or {})
+        selected_id = meta.get("analysis_dataset_id")
+        if selected_id and selected_id in datasets:
+            artifact = datasets[selected_id]
+        if not artifact:
+            return None
+        df, _schema = load_dataset_artifact(artifact)
+        return df
+
     action_nodes = {
         # Risk-2 fix: validate_registry() is called with the exact set of node names
         # registered here.  Any mismatch (node in registry but not wired, or wired
         # but missing a NodeDefinition) raises an AssertionError at startup.
-        "generate_code": _run_and_mark("generate_code", lambda s: generate_code_node(s, llm, context)),
-        "execute_code": _run_and_mark("execute_code", lambda s: execute_code_node(s, df)),
-        "error_handler": _run_and_mark("error_handler", lambda s: error_handler_node(s, llm, context)),
+        "generate_code": _run_and_mark("generate_code", lambda s: generate_code_node(s, llm, context_bundle)),
+        "execute_code": _run_and_mark("execute_code", lambda s: execute_code_node(s, _resolve_analysis_dataframe)),
+        "error_handler": _run_and_mark("error_handler", lambda s: error_handler_node(s, llm, context_bundle)),
         "terminal_execution_error": _run_and_mark("terminal_execution_error", terminal_execution_error_node),
-        "clarification": _run_and_mark("clarification", lambda s: clarification_node(s, llm, context)),
+        "clarification": _run_and_mark("clarification", lambda s: clarification_node(s, llm, context_bundle)),
         "human_review_after_error": _run_and_mark("human_review_after_error", human_review_after_error_node),
         "human_review_before_run": _run_and_mark("human_review_before_run", human_review_before_run_node),
         "human_review_before_output": _run_and_mark(
@@ -76,7 +97,11 @@ def build_graph(llm, df, schema, db_path):
             human_review_before_output_node,
         ),
         "tool_handler": _run_and_mark("tool_handler", tool_handler_node),
-        "qa": _run_and_mark("qa", lambda s: qa_node(s, llm, context)),
+        "qa": _run_and_mark("qa", lambda s: qa_node(s, llm, context_bundle)),
+        "rag_db_qa": _run_and_mark(
+            "rag_db_qa",
+            lambda s: rag_db_qa_node(s, llm, provider=provider, service=db_rag_service),
+        ),
     }
     available_actions = [*action_nodes.keys(), "end"]
     validate_registry(known_action_names=list(action_nodes.keys()))

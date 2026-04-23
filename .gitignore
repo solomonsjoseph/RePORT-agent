@@ -15,3 +15,6 @@ AGENTS.md
 .superpowers/
 docs/superpowers/
 slides/
+local_data/db_rag_source/
+runtime/db_rag/
+runtime/datasets/

@@ -154,6 +154,15 @@ NODE_REGISTRY: list[NodeDefinition] = [
         ),
     ),
     NodeDefinition(
+        name="rag_db_qa",
+        capability=ACTION_CAPABILITIES["rag_db_qa"],
+        priority=45,
+        is_ready=lambda s: (
+            not bool((s.get("output") or {}).get("generated_code"))
+            and not is_tool_requested(s)
+        ),
+    ),
+    NodeDefinition(
         name="generate_code",
         capability=ACTION_CAPABILITIES["generate_code"],
         priority=50,

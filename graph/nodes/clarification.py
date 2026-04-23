@@ -9,6 +9,7 @@ from ..workflow_config import (
 )
 from .generate_code import generate_code_node
 from .qa import qa_node
+from .rag_db_qa import rag_db_qa_node
 from .state_helpers import (
     clear_clarification_meta,
     enqueue_tool_requester,
@@ -120,6 +121,17 @@ def clarification_node(state: AgentState, llm, context: str = "") -> AgentState:
     }
 
     if meta.get(MetaKeys.CLARIFICATION_RETURN_NODE) == "generate_code":
+        if isinstance(context, dict):
+            return generate_code_node(resumed_state, llm, context)
         return generate_code_node(resumed_state, llm, context)
+    if meta.get(MetaKeys.CLARIFICATION_RETURN_NODE) == "rag_db_qa":
+        if isinstance(context, dict):
+            return rag_db_qa_node(
+                resumed_state,
+                llm,
+                provider=str(context.get("provider") or ""),
+                service=context.get("db_rag_service"),
+            )
+        raise ValueError("rag_db_qa clarification resume requires a context mapping with provider and db_rag_service")
 
     return qa_node(resumed_state, llm, context, question_override=effective_question)

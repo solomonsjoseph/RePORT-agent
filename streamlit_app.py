@@ -57,6 +57,7 @@ from utils.streamlit_interrupts import (
     should_block_chat_submission,
     should_render_review_interrupt,
 )
+from utils.dataset_artifacts import persist_dataset_artifact
 # --------------------------
 # Streamlit Config
 # --------------------------
@@ -261,14 +262,13 @@ def load_llm(model_name, temperature, top_p, base_url, api_key, provider):
                      provider = provider)
 
 @st.cache_resource
-# db_path = '/projects/f_wj183_1/reflib/report-agent_db/agent_memory.db'
-def load_app(llm, df, schema, dataset_signature):
+def load_app(llm, provider, dataset_signature):
     db_path = os.path.join(tempfile.gettempdir(), "report-agent", "agent_memory.db")
-    return build_graph(llm, df, schema, db_path=db_path)
+    return build_graph(llm, provider, db_path=db_path)
 
 
 llm = load_llm(model_name, temperature, top_p, base_url, api_key, provider)
-app = load_app(llm, df, schema, dataset_signature)
+app = load_app(llm, provider, dataset_signature)
 
 @st.cache_resource
 def load_run_manager():
@@ -326,7 +326,7 @@ config = {
     }
 }
 
-def initial_graph_state(user_message: HumanMessage) -> dict:
+def initial_graph_state(user_message: HumanMessage, uploaded_artifact: dict | None) -> dict:
     """Bootstrap state for the first turn of a new thread.
 
     Later turns should send only message deltas so checkpointed graph state is preserved.
@@ -334,6 +334,10 @@ def initial_graph_state(user_message: HumanMessage) -> dict:
     return {
         "messages": [user_message],
         "output": {},
+        "artifacts": {
+            "datasets": ({uploaded_artifact["id"]: uploaded_artifact} if uploaded_artifact else {}),
+            "active_dataset_id": uploaded_artifact["id"] if uploaded_artifact else None,
+        },
         "next_action": None,
         "last_action": None,
         "observations": [],
@@ -346,9 +350,14 @@ def initial_graph_state(user_message: HumanMessage) -> dict:
                 "final_decision": None,
             },
             "qa": {},
+            "rag_db_qa": {},
             "generate_code": {},
         },
-        "meta": {"error_iterations": 0, "workflow_trace": []},
+        "meta": {
+            "error_iterations": 0,
+            "workflow_trace": [],
+            "thread_id": st.session_state.thread_id,
+        },
     }
 
 
@@ -569,7 +578,18 @@ if submitted_question and user_text and not chat_submission_blocked:
     if has_graph_state:
         initial_payload = next_turn_payload(user_message)
     else:
-        initial_payload = initial_graph_state(user_message)
+        uploaded_artifact = None
+        if uploaded_csv and uploaded_schema:
+            uploaded_artifact = persist_dataset_artifact(
+                runtime_root=None,
+                thread_id=st.session_state.thread_id,
+                dataset_id=f"uploaded-{dataset_signature[:8]}",
+                kind="uploaded",
+                dataframe=df,
+                schema=schema,
+                provenance={"source": "upload", "dataset_signature": dataset_signature},
+            )
+        initial_payload = initial_graph_state(user_message, uploaded_artifact)
 
     submitted = run_manager.submit(
         thread_id=st.session_state.thread_id,

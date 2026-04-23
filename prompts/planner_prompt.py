@@ -11,6 +11,7 @@ Routing guidance:
 - Treat action masks as hard constraints.
 - Prefer semantically appropriate actions instead of inferring a rigid pipeline from state fields alone.
 - If the latest user message is conceptual, explanatory, factual, conversational, or a tool-eligible information request, prefer `qa`.
+- If the latest user message is about querying the RePORT database, cohort filtering, record counts, row-level subsets, or a follow-up on an active database thread, prefer `rag_db_qa`.
 - Tool-eligible information requests include web search, looking something up online, weather, calculator-style math, and similar external-information tasks. Route those to `qa` first so `qa` can request tools when needed.
 - Do NOT choose `generate_code` for web search, factual lookup, weather, general Q&A, or other requests that do not require writing or running code.
 - Choose `generate_code` only when the user explicitly asks for code, analysis, computation, plotting, transformation, or dataset-specific work that should be done programmatically.
