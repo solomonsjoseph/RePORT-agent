@@ -80,6 +80,24 @@ class ColumnSelectionCandidate:
     status: str = "awaiting_review"
 
 
+@dataclass
+class PreparedSqlCandidate:
+    question: str
+    sql: str
+    tables: list[str]
+    columns: list[dict[str, str]]
+    selection_id: str
+    status: str = "prepared"
+
+
+@dataclass
+class SqlExecutionResult:
+    answer: str
+    sql: str
+    dataframe: Any
+    source_tables: list[str]
+
+
 def _extract_sql(text: str) -> str:
     text = str(text or "").strip()
     match = re.search(r"```(?:sql)?\s*(.*?)```", text, re.DOTALL | re.IGNORECASE)
@@ -427,21 +445,39 @@ class DbRagService:
             feedback_history=normalized_feedback_history,
         )
 
-    def _generate_sql(self, question: str, context: dict[str, Any]) -> str:
+    def prepare_sql_candidate(
+        self,
+        question: str,
+        approved_selection: ColumnSelectionCandidate,
+    ) -> PreparedSqlCandidate:
+        if approved_selection.status != "approved":
+            raise ValueError("prepare_sql_candidate requires an approved column selection.")
+
+        approved_tables = list(approved_selection.tables)
+        approved_columns = [
+            {
+                "table": str(column["table"]),
+                "column": str(column["column"]),
+                "description": str(column.get("description", "") or ""),
+            }
+            for column in approved_selection.columns
+        ]
         response = self.llm.invoke(
             [
                 SystemMessage(
                     content=(
                         "You are a DuckDB SQL expert for the RePORT clinical research database. "
-                        "Use only retrieved tables and columns. Return only read-only DuckDB SQL using "
-                        "SELECT or WITH. Never emit mutating or DDL statements."
+                        "Use only the approved tables and approved columns listed in the prompt. "
+                        "Do not reference any other tables or columns. "
+                        "Return only read-only DuckDB SQL using SELECT or WITH. "
+                        "Never emit mutating or DDL statements."
                     )
                 ),
                 HumanMessage(
                     content=(
                         f"Question:\n{question}\n\n"
-                        f"Table context:\n{context['table_context'] or 'none'}\n\n"
-                        f"Column context:\n{context['column_context'] or 'none'}"
+                        f"Approved tables:\n{json.dumps(approved_tables, indent=2)}\n\n"
+                        f"Approved columns:\n{json.dumps(approved_columns, indent=2, sort_keys=True)}"
                     )
                 ),
             ]
@@ -450,25 +486,58 @@ class DbRagService:
         valid, error = _validate_sql(sql)
         if not valid:
             raise ValueError(error or "SQL validation failed.")
-        return sql
+        return PreparedSqlCandidate(
+            question=question,
+            sql=sql,
+            tables=approved_tables,
+            columns=approved_columns,
+            selection_id=approved_selection.selection_id,
+        )
 
-    def execute_sql_flow(self, question: str) -> dict[str, Any]:
+    def execute_prepared_sql(self, candidate: PreparedSqlCandidate) -> SqlExecutionResult:
         import duckdb
 
-        context = self.retrieve_context(question)
-        sql = self._generate_sql(
-            question,
-            {
-                "table_context": context.table_context,
-                "column_context": context.column_context,
-            },
-        )
+        valid, error = _validate_sql(candidate.sql)
+        if not valid:
+            raise ValueError(error or "SQL validation failed.")
+
         db = duckdb.connect(str(DUCKDB_PATH), read_only=True)
-        dataframe = db.execute(sql).fetchdf()
-        answer = f"Read-only SQL execution completed with {len(dataframe)} result row(s)."
+        try:
+            dataframe = db.execute(candidate.sql).fetchdf()
+        finally:
+            db.close()
+
+        return SqlExecutionResult(
+            answer=f"Read-only SQL execution completed with {len(dataframe)} result row(s).",
+            sql=candidate.sql,
+            dataframe=dataframe,
+            source_tables=list(candidate.tables),
+        )
+
+    def execute_sql_flow(self, question: str) -> dict[str, Any]:
+        context = self.retrieve_context(question)
+        prepared = self.prepare_sql_candidate(
+            question,
+            ColumnSelectionCandidate(
+                selection_id=_default_selection_id(question, context, []),
+                question=question,
+                tables=context.table_names,
+                columns=[
+                    {
+                        "table": entry.table,
+                        "column": entry.column,
+                        "description": entry.text,
+                    }
+                    for entry in context.columns
+                ],
+                rationale="Legacy execute_sql_flow compatibility path.",
+                status="approved",
+            ),
+        )
+        result = self.execute_prepared_sql(prepared)
         return {
-            "answer": answer,
-            "sql": sql,
-            "dataframe": dataframe,
-            "source_tables": context.table_names,
+            "answer": result.answer,
+            "sql": result.sql,
+            "dataframe": result.dataframe,
+            "source_tables": result.source_tables,
         }

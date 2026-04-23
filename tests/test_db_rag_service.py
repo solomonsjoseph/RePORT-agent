@@ -462,3 +462,70 @@ def test_prepare_column_selection_fails_closed_on_invalid_output(monkeypatch, co
     assert selection.columns == []
     assert selection.rationale == "Invalid structured response from the model."
     assert selection.feedback_history == [{"feedback": "Include gender explicitly."}]
+
+
+def test_prepare_sql_candidate_uses_approved_columns_only(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    from db_rag import service
+
+    captured: list[list[object]] = []
+
+    class _LLM:
+        def invoke(self, messages):
+            captured.append(messages)
+            return SimpleNamespace(content='SELECT "AGE", "SEX" FROM "Form 1A"')
+
+    selection = service.ColumnSelectionCandidate(
+        selection_id="sel-approved",
+        question="subset age and sex",
+        tables=["Form 1A"],
+        columns=[
+            {
+                "table": "Form 1A",
+                "column": "AGE",
+                "description": "Age in years",
+            },
+            {
+                "table": "Form 1A",
+                "column": "SEX",
+                "description": "Sex at enrollment",
+            },
+        ],
+        rationale="approved selection",
+        status="approved",
+    )
+    db_rag_service = service.DbRagService(llm=_LLM())
+
+    candidate = db_rag_service.prepare_sql_candidate("subset age and sex", selection)
+
+    assert candidate.sql == 'SELECT "AGE", "SEX" FROM "Form 1A"'
+    assert candidate.columns == selection.columns
+    message_text = "\n".join(getattr(message, "content", "") for message in captured[0])
+    assert "AGE" in message_text
+    assert "not approved" not in message_text
+
+
+def test_prepare_sql_candidate_rejects_unapproved_selection(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    from db_rag import service
+
+    selection = service.ColumnSelectionCandidate(
+        selection_id="sel-awaiting-review",
+        question="subset age and sex",
+        tables=["Form 1A"],
+        columns=[
+            {
+                "table": "Form 1A",
+                "column": "AGE",
+                "description": "Age in years",
+            }
+        ],
+        rationale="awaiting approval",
+        status="awaiting_review",
+    )
+    db_rag_service = service.DbRagService(llm=object())
+
+    with pytest.raises(ValueError, match="approved"):
+        db_rag_service.prepare_sql_candidate("subset age and sex", selection)
