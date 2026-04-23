@@ -268,3 +268,56 @@ def test_answer_from_context_sends_table_and_column_context_to_llm(monkeypatch) 
     message_text = "\n".join(getattr(message, "content", "") for message in llm.calls[0])
     assert "Table context:\nForm 1A summary text" in message_text
     assert "Column context:\nAGE summary text" in message_text
+
+
+def test_prepare_column_selection_uses_feedback_history(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    from db_rag import service
+
+    captured: list[list[object]] = []
+
+    class _LLM:
+        def invoke(self, messages):
+            captured.append(messages)
+            return SimpleNamespace(
+                content=json.dumps(
+                    {
+                        "selection_id": "sel-1",
+                        "rationale": "subset request needs age and sex columns",
+                        "tables": ["Form 1A"],
+                        "columns": [
+                            {
+                                "table": "Form 1A",
+                                "column": "AGE",
+                                "description": "Age in years",
+                            },
+                            {
+                                "table": "Form 1A",
+                                "column": "SEX",
+                                "description": "Sex at enrollment",
+                            },
+                        ],
+                    }
+                )
+            )
+
+    context = service.DbRagContext(
+        tables=[service.DbRagTableHit(table="Form 1A", text="Form 1A summary")],
+        columns=[service.DbRagColumnHit(table="Form 1A", column="AGE", text="AGE summary")],
+    )
+    db_rag_service = service.DbRagService(llm=_LLM())
+
+    selection = db_rag_service.prepare_column_selection(
+        "subset age and sex",
+        context,
+        feedback_history=[{"feedback": "Include gender explicitly."}],
+    )
+
+    assert selection.selection_id == "sel-1"
+    assert selection.tables == ["Form 1A"]
+    assert selection.columns[0]["column"] == "AGE"
+    assert selection.feedback_history == [{"feedback": "Include gender explicitly."}]
+
+    message_text = "\n".join(getattr(message, "content", "") for message in captured[0])
+    assert "Include gender explicitly." in message_text

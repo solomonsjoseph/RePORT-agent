@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -68,6 +69,17 @@ class DbRagQaAnswer:
     relevant_columns: list[str]
 
 
+@dataclass
+class ColumnSelectionCandidate:
+    selection_id: str
+    question: str
+    tables: list[str]
+    columns: list[dict[str, Any]]
+    rationale: str
+    feedback_history: list[dict[str, Any]] = field(default_factory=list)
+    status: str = "awaiting_review"
+
+
 def _extract_sql(text: str) -> str:
     text = str(text or "").strip()
     match = re.search(r"```(?:sql)?\s*(.*?)```", text, re.DOTALL | re.IGNORECASE)
@@ -97,6 +109,17 @@ def _parse_json_object(text: str) -> dict[str, Any]:
             return {}
 
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _default_selection_id(question: str, context: DbRagContext, feedback_history: list[dict[str, Any]]) -> str:
+    payload = {
+        "question": question,
+        "tables": context.table_names,
+        "columns": context.column_names,
+        "feedback_history": feedback_history,
+    }
+    digest = hashlib.sha1(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+    return f"sel-{digest[:12]}"
 
 
 def _validate_sql(sql: str) -> tuple[bool, str | None]:
@@ -299,6 +322,89 @@ class DbRagService:
             rationale=rationale,
             relevant_tables=context.table_names,
             relevant_columns=context.column_names,
+        )
+
+    def prepare_column_selection(
+        self,
+        question: str,
+        context: DbRagContext,
+        feedback_history: list[dict[str, Any]] | None = None,
+    ) -> ColumnSelectionCandidate:
+        normalized_feedback_history = list(feedback_history or [])
+        response = self.llm.invoke(
+            [
+                SystemMessage(
+                    content=(
+                        "You are preparing a column selection candidate for a RePORT database question. "
+                        "Use the retrieved table and column context plus any reviewer feedback to select only "
+                        "exact tables and exact table.column pairs relevant to the question. "
+                        "Return only a JSON object with exactly these keys: "
+                        '{"selection_id": string, "rationale": string, "tables": [string], '
+                        '"columns": [{"table": string, "column": string, "description": string}]}.'
+                    )
+                ),
+                HumanMessage(
+                    content=(
+                        f"Question:\n{question}\n\n"
+                        f"Table context:\n{context.table_context or 'none'}\n\n"
+                        f"Column context:\n{context.column_context or 'none'}\n\n"
+                        f"Feedback history:\n{json.dumps(normalized_feedback_history, indent=2, sort_keys=True)}"
+                    )
+                ),
+            ]
+        )
+        parsed = _parse_json_object(coerce_text_content(getattr(response, "content", "")))
+
+        raw_tables = parsed.get("tables")
+        tables: list[str] = []
+        if isinstance(raw_tables, list):
+            for value in raw_tables:
+                table = str(value or "").strip()
+                if table and table not in tables:
+                    tables.append(table)
+
+        raw_columns = parsed.get("columns")
+        columns: list[dict[str, Any]] = []
+        if isinstance(raw_columns, list):
+            for item in raw_columns:
+                if not isinstance(item, dict):
+                    continue
+                table = str(item.get("table", "") or "").strip()
+                column = str(item.get("column", "") or "").strip()
+                if not table or not column:
+                    continue
+                description = str(item.get("description", "") or "").strip()
+                columns.append(
+                    {
+                        "table": table,
+                        "column": column,
+                        "description": description,
+                    }
+                )
+
+        if not tables:
+            tables = []
+            for column in columns:
+                table = column["table"]
+                if table not in tables:
+                    tables.append(table)
+        if not tables:
+            tables = context.table_names
+
+        selection_id = str(parsed.get("selection_id", "") or "").strip() or _default_selection_id(
+            question,
+            context,
+            normalized_feedback_history,
+        )
+        rationale = str(parsed.get("rationale", "") or "").strip()
+
+        return ColumnSelectionCandidate(
+            selection_id=selection_id,
+            question=question,
+            tables=tables,
+            columns=columns,
+            rationale=rationale,
+            feedback_history=normalized_feedback_history,
         )
 
     def _generate_sql(self, question: str, context: dict[str, Any]) -> str:
