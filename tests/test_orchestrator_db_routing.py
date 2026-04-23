@@ -171,6 +171,42 @@ def test_orchestrator_routes_database_overview_to_rag_db_qa() -> None:
     assert updated["next_action"] == "rag_db_qa"
 
 
+def test_orchestrator_prefers_pending_rag_db_column_review_over_rag_db_qa() -> None:
+    orchestrator = _fresh_orchestrator()
+
+    state = {
+        "messages": [
+            SimpleNamespace(
+                type="human",
+                content="How many male participants are in the database cohort A?",
+            )
+        ],
+        "output": {},
+        "observations": [],
+        "last_action": None,
+        "orchestrator": {},
+        "agents": {
+            "executor": {"run_status": "idle"},
+            "human_review": {"before_run_decision": None, "final_decision": None},
+            "rag_db_qa": {
+                "pending_column_review": {
+                    "status": "awaiting_review",
+                    "selection_id": "sel-1",
+                }
+            },
+        },
+        "meta": {"error_iterations": 0, "workflow_trace": []},
+    }
+
+    updated = orchestrator.orchestrator_node(
+        state,
+        _LLM(json.dumps({"action": "rag_db_qa", "thought": "database question"})),
+        ["qa", "rag_db_qa", "human_review_rag_db_column_selection", "end"],
+    )
+
+    assert updated["next_action"] == "human_review_rag_db_column_selection"
+
+
 def test_orchestrator_prioritizes_rag_db_qa_for_database_question_when_no_uploaded_dataset() -> None:
     orchestrator = _fresh_orchestrator()
 

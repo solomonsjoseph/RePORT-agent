@@ -291,15 +291,15 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
     if not next_action and _should_end_for_completion(routing_state):
         next_action = "end"
 
-    if not next_action and "rag_db_qa" in available_action_set and should_prefer_rag_db_qa(routing_state):
-        next_action = "rag_db_qa"
-
     if not next_action and not defer_qa_followup_clarification_to_planner:
         next_action = _ready_deterministic_action(
             routing_state,
             available_action_list,
             fresh_unanswered_user_turn=fresh_unanswered_user_turn,
         )
+
+    if not next_action and "rag_db_qa" in available_action_set and should_prefer_rag_db_qa(routing_state):
+        next_action = "rag_db_qa"
 
     if not next_action:
         llm_choice, thought, planner_action, diagnostics = llm_plan_next_action(
