@@ -17,6 +17,7 @@ from llm_vllm import build_llm, detect_vllm_model
 from UI.ui_before_run_review import ui_before_run_review
 from UI.ui_after_error_review import ui_after_error_review
 from UI.ui_final_review import ui_final_review
+from UI.ui_human_review_rag_db_column_selection import ui_human_review_rag_db_column_selection
 from UI.load_openai import load_openai
 from UI.load_anthropic import load_anthropic
 from utils.openai_models import list_supported_openai_chat_models
@@ -505,6 +506,8 @@ if should_render_interrupt:
         ui_before_run_review(app, config, payload, interrupt_id, queue_interrupt_resume)
     elif ui_type == "after_error_review":
         ui_after_error_review(app, config, payload, interrupt_id, queue_interrupt_resume)
+    elif ui_type == "human_review_rag_db_column_selection":
+        ui_human_review_rag_db_column_selection(app, config, payload, interrupt_id, queue_interrupt_resume)
     elif ui_type == "final_review":
         ui_final_review(app, config, payload, interrupt_id, queue_interrupt_resume)
 

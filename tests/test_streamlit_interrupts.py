@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from utils.streamlit_interrupts import (
     blocking_review_notice,
     should_block_chat_submission,
+    should_render_review_interrupt,
 )
 
 
@@ -45,6 +46,19 @@ def test_should_not_block_chat_submission_when_review_already_answered() -> None
         dismissed_interrupt_id="",
         review_state={"final_decision": "approve"},
     ) is False
+
+
+def test_should_render_review_interrupt_for_db_column_selection_review() -> None:
+    interrupt_event = SimpleNamespace(
+        id="int-1",
+        value={"type": "human_review_rag_db_column_selection"},
+    )
+
+    assert should_render_review_interrupt(
+        interrupt_event,
+        dismissed_interrupt_id="",
+        review_state={"rag_db_column_review_decision": None},
+    ) is True
 
 
 def test_blocking_review_notice_matches_review_type() -> None:
