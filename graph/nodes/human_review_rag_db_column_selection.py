@@ -54,11 +54,15 @@ def human_review_rag_db_column_selection_node(state):
         rag_state.pop("pending_sql_candidate", None)
     else:
         review["status"] = "needs_revision"
-        if not feedback_text:
-            if action and action != "revise":
-                feedback_text = f'Received unsupported action "{action}" during DB-RAG column review; treating it as a revision.'
-            else:
-                feedback_text = "Human requested a revision."
+        explanation = (
+            f'Received unsupported action "{action}" during DB-RAG column review; treating it as a revision.'
+            if action and action != "revise"
+            else "Human requested a revision."
+        )
+        if feedback_text:
+            feedback_text = f"{explanation} Additional context: {feedback_text}"
+        else:
+            feedback_text = explanation
         history = list(review.get("feedback_history") or [])
         history.append(_review_feedback_entry(action or "revise", feedback_text))
         review["feedback_history"] = history

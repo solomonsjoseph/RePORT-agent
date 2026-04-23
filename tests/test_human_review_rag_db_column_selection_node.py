@@ -94,7 +94,8 @@ def test_human_review_rag_db_column_selection_revision_appends_feedback() -> Non
     review = updated["agents"]["rag_db_qa"]["pending_column_review"]
     assert review["status"] == "needs_revision"
     assert len(review["feedback_history"]) == 2
-    assert review["feedback_history"][-1]["feedback"] == "Include the age column too."
+    assert "Human requested a revision." in review["feedback_history"][-1]["feedback"]
+    assert "Include the age column too." in review["feedback_history"][-1]["feedback"]
     assert "timestamp" in review["feedback_history"][-1]
 
 
@@ -123,3 +124,30 @@ def test_human_review_rag_db_column_selection_cancel_clears_pending_sql_candidat
     review = updated["agents"]["rag_db_qa"]["pending_column_review"]
     assert review["status"] == "cancelled"
     assert "pending_sql_candidate" not in updated["agents"]["rag_db_qa"]
+
+
+def test_human_review_rag_db_column_selection_unknown_action_keeps_explanation_with_feedback() -> None:
+    mod, _ = _fresh_module(action="maybe later", feedback="focus on age and sex")
+
+    state = {
+        "agents": {
+            "rag_db_qa": {
+                "pending_column_review": {
+                    "selection_id": "sel-4",
+                    "question": "Which tables and columns should be used?",
+                    "tables": ["form_d"],
+                    "columns": [{"table": "form_d", "column": "sex", "description": "Sex"}],
+                    "rationale": "Need a broader selection.",
+                    "feedback_history": [],
+                    "status": "awaiting_review",
+                }
+            }
+        }
+    }
+
+    updated = mod.human_review_rag_db_column_selection_node(state)
+
+    entry = updated["agents"]["rag_db_qa"]["pending_column_review"]["feedback_history"][-1]
+    assert updated["agents"]["rag_db_qa"]["pending_column_review"]["status"] == "needs_revision"
+    assert "unsupported action" in entry["feedback"]
+    assert "Additional context: focus on age and sex" in entry["feedback"]
