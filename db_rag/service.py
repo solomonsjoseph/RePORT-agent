@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 from typing import Any
@@ -18,10 +19,18 @@ SOURCE_ROOT = PROJECT_ROOT / "local_data" / "db_rag_source"
 SCHEMA_DIR = SOURCE_ROOT / "reviewed_annotated_json_files"
 EXCEL_DIR = SOURCE_ROOT / "filtered_excel_files"
 RUNTIME_ROOT = PROJECT_ROOT / "runtime" / "db_rag"
+INDEX_ROOT = RUNTIME_ROOT / "indexes"
+MANIFEST_ROOT = RUNTIME_ROOT / "manifests"
 CHROMA_DIR = RUNTIME_ROOT / "chroma_db"
 DUCKDB_PATH = RUNTIME_ROOT / "report.duckdb"
 MANIFEST_PATH = RUNTIME_ROOT / "manifest.json"
-EMBEDDING_MODEL = "text-embedding-3-small"
+EMBEDDING_MODEL = "OpenAI/text-embedding-3-small"
+SUPPORTED_DB_RAG_EMBEDDING_MODELS = (
+    "OpenAI/text-embedding-3-small",
+    "Qwen/Qwen3-Embedding-4B",
+    "Qwen/Qwen3-Embedding-8B",
+)
+DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 _DB_RAG_CONTEXT_FALLBACK_ANSWER = "I could not answer from the retrieved DB-RAG context."
 _DB_RAG_CONTEXT_FALLBACK_RATIONALE = "Invalid structured response from the model."
 
@@ -174,13 +183,51 @@ def _validate_sql(sql: str) -> tuple[bool, str | None]:
     return True, None
 
 
+def embedding_model_slug(model: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", model.lower()).strip("_")
+
+
+def resolve_db_rag_embedding_model() -> str:
+    load_dotenv()
+    model = str(os.getenv("DB_RAG_EMBEDDING_MODEL", "") or "").strip()
+    if not model:
+        raise ValueError("DB_RAG_EMBEDDING_MODEL is not set. Set it in .env or export it in your shell.")
+    if model not in SUPPORTED_DB_RAG_EMBEDDING_MODELS:
+        supported = ", ".join(SUPPORTED_DB_RAG_EMBEDDING_MODELS)
+        raise ValueError(f"Unsupported DB_RAG_EMBEDDING_MODEL '{model}'. Supported values: {supported}.")
+    return model
+
+
+def chroma_dir_for_model(model: str) -> Path:
+    return INDEX_ROOT / embedding_model_slug(model)
+
+
+def manifest_path_for_model(model: str) -> Path:
+    return MANIFEST_ROOT / f"{embedding_model_slug(model)}.json"
+
+
+def load_manifest_for_model(model: str) -> dict[str, Any]:
+    path = manifest_path_for_model(model)
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
 class OpenAIEmbeddingFunction:
-    def __init__(self, model: str = EMBEDDING_MODEL):
+    def __init__(self, model: str | None = None):
         from openai import OpenAI
 
         load_dotenv()
-        self.client = OpenAI()
-        self.model = model
+        resolved_model = model or resolve_db_rag_embedding_model()
+        client_kwargs: dict[str, str] = {}
+        if resolved_model.startswith("Qwen/"):
+            api_key = str(os.getenv("DB_RAG_OPENROUTER_API_KEY", "") or "").strip()
+            if not api_key:
+                raise ValueError("DB_RAG_OPENROUTER_API_KEY is required for Qwen embeddings.")
+            client_kwargs["api_key"] = api_key
+            client_kwargs["base_url"] = str(
+                os.getenv("DB_RAG_OPENROUTER_BASE_URL", DEFAULT_OPENROUTER_BASE_URL) or DEFAULT_OPENROUTER_BASE_URL
+            ).strip()
+        self.client = OpenAI(**client_kwargs)
+        self.model = resolved_model
 
     @staticmethod
     def name() -> str:
@@ -203,8 +250,15 @@ class DbRagService:
     llm: Any
 
     def readiness(self) -> dict[str, Any]:
-        missing_runtime = [path for path in (DUCKDB_PATH, MANIFEST_PATH) if not path.exists()]
-        if missing_runtime or not CHROMA_DIR.exists():
+        try:
+            model = resolve_db_rag_embedding_model()
+        except ValueError as exc:
+            return {"ready": False, "message": str(exc)}
+
+        chroma_dir = chroma_dir_for_model(model)
+        manifest_path = manifest_path_for_model(model)
+        missing_runtime = [path for path in (DUCKDB_PATH, manifest_path) if not path.exists()]
+        if missing_runtime or not chroma_dir.exists():
             source_hint = ""
             if not SCHEMA_DIR.exists() or not EXCEL_DIR.exists():
                 source_hint = (
@@ -214,7 +268,7 @@ class DbRagService:
             return {
                 "ready": False,
                 "message": (
-                    "DB-RAG assets are not initialized in this repo."
+                    f"DB-RAG assets are not initialized for embedding model '{model}'."
                     f"{source_hint} Copy the source data into local_data/db_rag_source/ and run "
                     "`python -m db_rag.bootstrap --rebuild`."
                 ),
@@ -237,8 +291,10 @@ class DbRagService:
     def _load_collections(self):
         import chromadb
 
-        client = chromadb.PersistentClient(path=str(CHROMA_DIR))
-        ef = OpenAIEmbeddingFunction()
+        model = resolve_db_rag_embedding_model()
+        load_manifest_for_model(model)
+        client = chromadb.PersistentClient(path=str(chroma_dir_for_model(model)))
+        ef = OpenAIEmbeddingFunction(model=model)
         table_collection = client.get_collection("table_summaries", embedding_function=ef)
         column_collection = client.get_collection("column_chunks", embedding_function=ef)
         return table_collection, column_collection

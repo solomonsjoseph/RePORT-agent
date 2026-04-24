@@ -37,9 +37,9 @@ def test_openai_embedding_function_loads_dotenv_before_creating_client(monkeypat
     monkeypatch.setattr(service, "load_dotenv", fake_load_dotenv, raising=False)
     monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=_OpenAI))
 
-    embedding_function = service.OpenAIEmbeddingFunction()
+    embedding_function = service.OpenAIEmbeddingFunction(model="OpenAI/text-embedding-3-small")
 
-    assert embedding_function.model == "text-embedding-3-small"
+    assert embedding_function.model == "OpenAI/text-embedding-3-small"
 
 
 def test_openai_embedding_function_exposes_chroma_name(monkeypatch) -> None:
@@ -75,7 +75,7 @@ def test_openai_embedding_function_exposes_chroma_embed_query(monkeypatch) -> No
     monkeypatch.setattr(service, "load_dotenv", lambda: None, raising=False)
     monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=_OpenAI))
 
-    embedding_function = service.OpenAIEmbeddingFunction()
+    embedding_function = service.OpenAIEmbeddingFunction(model="OpenAI/text-embedding-3-small")
 
     assert embedding_function.embed_query(input=["household contact"]) == [[1.0, 2.0, 3.0]]
     assert calls == [["household contact"]]
