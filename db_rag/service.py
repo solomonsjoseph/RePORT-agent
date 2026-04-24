@@ -299,11 +299,33 @@ class DbRagService:
         column_collection = client.get_collection("column_chunks", embedding_function=ef)
         return table_collection, column_collection
 
-    def retrieve_context(self, question: str) -> DbRagContext:
-        table_collection, column_collection = self._load_collections()
+    def decompose_query(self, question: str) -> list[str]:
+        try:
+            response = self.llm.invoke(
+                [
+                    SystemMessage(
+                        content=(
+                            "You are a query decomposer for a clinical database. Extract the distinct concepts "
+                            "from the question and return each as a short search phrase (2-5 words). "
+                            "One per line. No numbering, no explanation, no commentary."
+                        )
+                    ),
+                    HumanMessage(content=question),
+                ]
+            )
+        except Exception:
+            return []
 
+        phrases: list[str] = []
+        for raw_line in coerce_text_content(getattr(response, "content", "")).splitlines():
+            line = raw_line.strip().lstrip("- ").lstrip("0123456789.)").strip()
+            if line and len(line) < 50 and not line.lower().startswith("question"):
+                phrases.append(line)
+        return phrases
+
+    def _retrieve_context_single_query(self, table_collection, column_collection, query: str) -> DbRagContext:
         table_result = table_collection.query(
-            query_texts=[question],
+            query_texts=[query],
             n_results=4,
             include=["documents", "metadatas"],
         )
@@ -313,7 +335,7 @@ class DbRagService:
 
         selected_tables = {entry.table for entry in tables}
         column_result = column_collection.query(
-            query_texts=[question],
+            query_texts=[query],
             n_results=12,
             include=["documents", "metadatas"],
         )
@@ -329,6 +351,52 @@ class DbRagService:
                 )
             )
 
+        return DbRagContext(
+            tables=tables,
+            columns=columns,
+            table_context="\n\n".join(entry.text for entry in tables),
+            column_context="\n\n".join(entry.text for entry in columns),
+        )
+
+    def retrieve_context(self, question: str) -> DbRagContext:
+        table_collection, column_collection = self._load_collections()
+        sub_queries = self.decompose_query(question)
+        if len(sub_queries) <= 1:
+            return self._retrieve_context_single_query(table_collection, column_collection, question)
+
+        merged_tables: dict[str, DbRagTableHit] = {}
+        for sub_query in sub_queries:
+            table_result = table_collection.query(
+                query_texts=[sub_query],
+                n_results=4,
+                include=["documents", "metadatas"],
+            )
+            for document, metadata in zip(table_result["documents"][0], table_result["metadatas"][0]):
+                merged_tables.setdefault(metadata["table"], DbRagTableHit(table=metadata["table"], text=document))
+
+        selected_tables = set(merged_tables)
+        merged_columns: dict[tuple[str, str], DbRagColumnHit] = {}
+        for sub_query in sub_queries:
+            column_result = column_collection.query(
+                query_texts=[sub_query],
+                n_results=12,
+                include=["documents", "metadatas"],
+            )
+            for document, metadata in zip(column_result["documents"][0], column_result["metadatas"][0]):
+                if metadata["table"] not in selected_tables:
+                    continue
+                key = (metadata["table"], metadata["column"])
+                merged_columns.setdefault(
+                    key,
+                    DbRagColumnHit(
+                        table=metadata["table"],
+                        column=metadata["column"],
+                        text=document,
+                    ),
+                )
+
+        tables = list(merged_tables.values())
+        columns = list(merged_columns.values())
         return DbRagContext(
             tables=tables,
             columns=columns,
