@@ -4,6 +4,7 @@ import argparse
 from hashlib import sha256
 import json
 from pathlib import Path
+import os
 
 import pandas as pd
 
@@ -12,12 +13,18 @@ from .service import (
     DUCKDB_PATH,
     EMBEDDING_MODEL,
     EXCEL_DIR,
+    INDEX_ROOT,
     MANIFEST_PATH,
+    MANIFEST_ROOT,
     PROJECT_ROOT,
     RUNTIME_ROOT,
     SCHEMA_DIR,
     SOURCE_ROOT,
     OpenAIEmbeddingFunction,
+    SUPPORTED_DB_RAG_EMBEDDING_MODELS,
+    chroma_dir_for_model,
+    manifest_path_for_model,
+    resolve_db_rag_embedding_model,
 )
 
 
@@ -35,7 +42,46 @@ def _profile_column(df: pd.DataFrame, column: str) -> dict[str, object]:
     profile["null_rate"] = f"{nulls}/{total}"
     profile["samples"] = ", ".join(str(value) for value in df[column].dropna().unique()[:8].tolist())
     profile["distinct_count"] = int(df[column].nunique())
+    if pd.api.types.is_numeric_dtype(df[column]):
+        profile["min"] = df[column].min()
+        profile["max"] = df[column].max()
     return profile
+
+
+def _write_env_key(project_root: Path, key: str, value: str) -> Path:
+    env_path = project_root / ".env"
+    lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
+    replacement = f"{key}={value}"
+    updated = False
+    new_lines: list[str] = []
+    for line in lines:
+        if line.startswith(f"{key}="):
+            new_lines.append(replacement)
+            updated = True
+        else:
+            new_lines.append(line)
+    if not updated:
+        new_lines.append(replacement)
+    env_path.write_text("\n".join(new_lines).rstrip() + "\n", encoding="utf-8")
+    return env_path
+
+
+def _prompt_for_embedding_model() -> str:
+    for index, model in enumerate(SUPPORTED_DB_RAG_EMBEDDING_MODELS):
+        print(f"[{index}] {model}")
+    choice = (input("Select DB-RAG embedding model: ").strip() or "0")
+    return SUPPORTED_DB_RAG_EMBEDDING_MODELS[int(choice)]
+
+
+def resolve_build_embedding_model() -> str:
+    try:
+        return resolve_db_rag_embedding_model()
+    except ValueError:
+        model = _prompt_for_embedding_model()
+        os.environ["DB_RAG_EMBEDDING_MODEL"] = model
+        env_path = _write_env_key(PROJECT_ROOT, "DB_RAG_EMBEDDING_MODEL", model)
+        print(f"Set DB_RAG_EMBEDDING_MODEL in {env_path}. Edit that file to change models later.")
+        return model
 
 
 def _load_excel_data() -> dict[str, pd.DataFrame]:
@@ -127,21 +173,27 @@ def _build_duckdb(excel_data: dict[str, pd.DataFrame]) -> None:
     db.close()
 
 
-def _build_chroma(table_chunks: list[dict[str, object]], column_chunks: list[dict[str, object]]) -> None:
+def _build_chroma(
+    table_chunks: list[dict[str, object]],
+    column_chunks: list[dict[str, object]],
+    *,
+    model: str,
+    chroma_dir: Path,
+) -> None:
     import chromadb
 
-    if CHROMA_DIR.exists():
-        for child in CHROMA_DIR.iterdir():
+    if chroma_dir.exists():
+        for child in chroma_dir.iterdir():
             if child.is_file():
                 child.unlink()
-    CHROMA_DIR.mkdir(parents=True, exist_ok=True)
-    client = chromadb.PersistentClient(path=str(CHROMA_DIR))
+    chroma_dir.mkdir(parents=True, exist_ok=True)
+    client = chromadb.PersistentClient(path=str(chroma_dir))
     for collection_name in ("table_summaries", "column_chunks"):
         try:
             client.delete_collection(collection_name)
         except Exception:
             pass
-    ef = OpenAIEmbeddingFunction()
+    ef = OpenAIEmbeddingFunction(model=model)
     table_collection = client.create_collection("table_summaries", embedding_function=ef)
     column_collection = client.create_collection("column_chunks", embedding_function=ef)
     table_collection.add(
@@ -194,22 +246,28 @@ def _format_rebuild_success(manifest: dict[str, object]) -> str:
 
 
 def rebuild() -> dict[str, object]:
+    model = resolve_build_embedding_model()
     excel_data = _load_excel_data()
     table_chunks = _build_table_chunks(excel_data)
     column_chunks = _build_column_chunks(excel_data)
     _build_duckdb(excel_data)
-    _build_chroma(table_chunks, column_chunks)
+    chroma_dir = chroma_dir_for_model(model)
+    manifest_path = manifest_path_for_model(model)
+    _build_chroma(table_chunks, column_chunks, model=model, chroma_dir=chroma_dir)
     manifest = {
         "source_fingerprint": _source_fingerprint(),
-        "embedding_model": EMBEDDING_MODEL,
+        "embedding_model": model,
         "source_root": str(SOURCE_ROOT),
         "duckdb_path": str(DUCKDB_PATH),
-        "chroma_path": str(CHROMA_DIR),
-        "manifest_path": str(MANIFEST_PATH),
+        "chroma_path": str(chroma_dir),
+        "manifest_path": str(manifest_path),
         "table_chunk_count": len(table_chunks),
         "column_chunk_count": len(column_chunks),
     }
-    MANIFEST_PATH.write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
+    INDEX_ROOT.mkdir(parents=True, exist_ok=True)
+    MANIFEST_ROOT.mkdir(parents=True, exist_ok=True)
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
     return manifest
 
 
