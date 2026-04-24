@@ -47,6 +47,7 @@ def retrieve_single_query(
     *,
     table_k: int = 4,
     column_k: int = 12,
+    debug: bool = False,
 ) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
     table_result = table_collection.query(
         query_texts=[query],
@@ -56,6 +57,10 @@ def retrieve_single_query(
     tables: list[dict[str, str]] = []
     for document, metadata in zip(table_result["documents"][0], table_result["metadatas"][0]):
         tables.append({"table": metadata["table"], "text": document})
+    if debug:
+        print("\nTable retrieval:")
+        for entry in tables:
+            print(f"  {entry['table']}")
 
     selected_tables = {entry["table"] for entry in tables}
     column_result = column_collection.query(
@@ -68,11 +73,15 @@ def retrieve_single_query(
         if metadata["table"] not in selected_tables:
             continue
         columns.append({"table": metadata["table"], "column": metadata["column"], "text": document})
+    if debug:
+        print("\nColumn retrieval:")
+        for entry in columns:
+            print(f"  {entry['table']}.{entry['column']}")
 
     return tables, columns
 
 
-def inject_paired_forms(merged_tables: dict[str, dict[str, str]], table_collection: Any) -> None:
+def inject_paired_forms(merged_tables: dict[str, dict[str, str]], table_collection: Any, *, debug: bool = False) -> None:
     for table_name in list(merged_tables):
         paired_form = PAIRED_FORMS.get(table_name)
         if not paired_form or paired_form in merged_tables:
@@ -85,6 +94,8 @@ def inject_paired_forms(merged_tables: dict[str, dict[str, str]], table_collecti
         for document, metadata in zip(result["documents"][0], result["metadatas"][0]):
             if metadata["table"] == paired_form:
                 merged_tables[paired_form] = {"table": metadata["table"], "text": document}
+                if debug:
+                    print(f"Injected paired form: {paired_form}")
                 break
 
 
@@ -96,10 +107,24 @@ def retrieve_context_records(
     *,
     table_k: int = 4,
     column_k: int = 12,
+    debug: bool = False,
 ) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
     sub_queries = decompose_query(llm, question)
+    if debug and len(sub_queries) > 1:
+        print("\nQuery decomposition:")
+        for sub_query in sub_queries:
+            print(f"  -> {sub_query}")
     if len(sub_queries) <= 1:
-        return retrieve_single_query(table_collection, column_collection, question, table_k=table_k, column_k=column_k)
+        if debug:
+            print("\nSingle-concept query, skipping decomposition")
+        return retrieve_single_query(
+            table_collection,
+            column_collection,
+            question,
+            table_k=table_k,
+            column_k=column_k,
+            debug=debug,
+        )
 
     merged_tables: dict[str, dict[str, str]] = {}
     for sub_query in sub_queries:
@@ -111,8 +136,12 @@ def retrieve_context_records(
         for document, metadata in zip(table_result["documents"][0], table_result["metadatas"][0]):
             merged_tables.setdefault(metadata["table"], {"table": metadata["table"], "text": document})
 
-    inject_paired_forms(merged_tables, table_collection)
+    inject_paired_forms(merged_tables, table_collection, debug=debug)
     selected_tables = set(merged_tables)
+    if debug:
+        print(f"\nMerged tables: {len(merged_tables)}")
+        for entry in merged_tables.values():
+            print(f"  {entry['table']}")
 
     merged_columns: dict[tuple[str, str], dict[str, str]] = {}
     for sub_query in sub_queries:
@@ -129,5 +158,9 @@ def retrieve_context_records(
                 key,
                 {"table": metadata["table"], "column": metadata["column"], "text": document},
             )
+    if debug:
+        print(f"Merged column candidates: {len(merged_columns)}")
+        for entry in merged_columns.values():
+            print(f"  {entry['table']}.{entry['column']}")
 
     return list(merged_tables.values()), list(merged_columns.values())

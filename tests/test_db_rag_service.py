@@ -246,6 +246,37 @@ def test_retrieve_context_falls_back_to_single_query_when_decomposition_returns_
     assert calls == [("tables", "age and sex"), ("columns", "age and sex")]
 
 
+def test_retrieve_context_debug_prints_single_query_fallback(monkeypatch, capsys) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    from db_rag import service
+
+    class _Collection:
+        def __init__(self, result):
+            self._result = result
+
+        def query(self, **kwargs):
+            return self._result
+
+    db_rag_service = service.DbRagService(llm=SimpleNamespace(invoke=lambda _: SimpleNamespace(content="age")))
+    monkeypatch.setattr(
+        db_rag_service,
+        "_load_collections",
+        lambda: (
+            _Collection({"documents": [["Table: Form 1A"]], "metadatas": [[{"table": "Form 1A"}]]}),
+            _Collection({"documents": [["Column: AGE"]], "metadatas": [[{"table": "Form 1A", "column": "AGE"}]]}),
+        ),
+    )
+
+    context = db_rag_service.retrieve_context("age and sex", debug=True)
+
+    output = capsys.readouterr().out
+    assert context.table_names == ["Form 1A"]
+    assert "Single-concept query, skipping decomposition" in output
+    assert "Table retrieval:" in output
+    assert "Column retrieval:" in output
+
+
 def test_retrieve_context_merges_multiquery_hits(monkeypatch) -> None:
     _install_langchain_message_stubs(monkeypatch)
 
@@ -279,6 +310,55 @@ def test_retrieve_context_merges_multiquery_hits(monkeypatch) -> None:
 
     assert context.table_names == ["Form 1A", "Final Outcome"]
     assert context.column_names == ["AGE", "OUTCOME"]
+
+
+def test_retrieve_context_debug_prints_multiconcept_merge(monkeypatch, capsys) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    from db_rag import service
+
+    table_queries = {
+        "age": {"documents": [["Table: Form 1A"]], "metadatas": [[{"table": "Form 1A"}]]},
+        "outcome": {
+            "documents": [["Table: Final Outcome Determination Form - Cohort A (Active Pulmonary TB)"]],
+            "metadatas": [[{"table": "Final Outcome Determination Form - Cohort A (Active Pulmonary TB)"}]],
+        },
+        "Form 1A - Index Case Screening": {
+            "documents": [["Table: Form 1A - Index Case Screening"]],
+            "metadatas": [[{"table": "Form 1A - Index Case Screening"}]],
+        },
+    }
+    column_queries = {
+        "age": {"documents": [["Column: AGE"]], "metadatas": [[{"table": "Form 1A", "column": "AGE"}]]},
+        "outcome": {
+            "documents": [["Column: OUTCOME"]],
+            "metadatas": [[{"table": "Final Outcome Determination Form - Cohort A (Active Pulmonary TB)", "column": "OUTCOME"}]],
+        },
+    }
+
+    class _Collection:
+        def __init__(self, result_map):
+            self.result_map = result_map
+
+        def query(self, **kwargs):
+            return self.result_map[kwargs["query_texts"][0]]
+
+    llm = SimpleNamespace(invoke=lambda _: SimpleNamespace(content="age\noutcome"))
+    db_rag_service = service.DbRagService(llm=llm)
+    monkeypatch.setattr(
+        db_rag_service,
+        "_load_collections",
+        lambda: (_Collection(table_queries), _Collection(column_queries)),
+    )
+
+    context = db_rag_service.retrieve_context("age and final outcome", debug=True)
+
+    output = capsys.readouterr().out
+    assert "Query decomposition:" in output
+    assert "Injected paired form: Form 1A - Index Case Screening" in output
+    assert "Merged tables:" in output
+    assert "Merged column candidates:" in output
+    assert "Form 1A - Index Case Screening" in context.table_names
 
 
 class _LLM:
@@ -665,3 +745,46 @@ def test_prepare_sql_candidate_rejects_unapproved_selection(monkeypatch) -> None
 
     with pytest.raises(ValueError, match="approved"):
         db_rag_service.prepare_sql_candidate("subset age and sex", selection)
+
+
+def test_execute_sql_flow_debug_returns_sql_preparation_details(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    from db_rag import service
+
+    context = service.DbRagContext(
+        tables=[service.DbRagTableHit(table="Form 1A", text="Form 1A summary")],
+        columns=[service.DbRagColumnHit(table="Form 1A", column="AGE", text="AGE summary")],
+    )
+
+    db_rag_service = service.DbRagService(llm=object())
+    monkeypatch.setattr(db_rag_service, "retrieve_context", lambda question, debug=False: context)
+    monkeypatch.setattr(
+        db_rag_service,
+        "prepare_sql_candidate",
+        lambda question, approved_selection: service.PreparedSqlCandidate(
+            question=question,
+            sql='SELECT "AGE" FROM "Form 1A"',
+            tables=["Form 1A"],
+            columns=[{"table": "Form 1A", "column": "AGE", "description": "Age in years"}],
+            selection_id="sel-1",
+        ),
+    )
+    monkeypatch.setattr(
+        db_rag_service,
+        "execute_prepared_sql",
+        lambda candidate: service.SqlExecutionResult(
+            answer="Read-only SQL execution completed with 1 result row(s).",
+            sql=candidate.sql,
+            dataframe=None,
+            source_tables=candidate.tables,
+        ),
+    )
+
+    result = db_rag_service.execute_sql_flow("subset age", debug=True)
+
+    assert result["debug"]["question"] == "subset age"
+    assert result["debug"]["retrieved_tables"] == ["Form 1A"]
+    assert result["debug"]["retrieved_columns"] == ["Form 1A.AGE"]
+    assert result["debug"]["sql_tables"] == ["Form 1A"]
+    assert result["debug"]["sql_columns"] == ["Form 1A.AGE"]

@@ -197,9 +197,15 @@ class DbRagService:
             column_context="\n\n".join(entry.text for entry in columns),
         )
 
-    def retrieve_context(self, question: str) -> DbRagContext:
+    def retrieve_context(self, question: str, *, debug: bool = False) -> DbRagContext:
         table_collection, column_collection = self._load_collections()
-        table_rows, column_rows = retrieve_context_records(self.llm, table_collection, column_collection, question)
+        table_rows, column_rows = retrieve_context_records(
+            self.llm,
+            table_collection,
+            column_collection,
+            question,
+            debug=debug,
+        )
         tables = [DbRagTableHit(**entry) for entry in table_rows]
         columns = [DbRagColumnHit(**entry) for entry in column_rows]
         return DbRagContext(
@@ -445,8 +451,8 @@ class DbRagService:
             source_tables=list(candidate.tables),
         )
 
-    def execute_sql_flow(self, question: str) -> dict[str, Any]:
-        context = self.retrieve_context(question)
+    def execute_sql_flow(self, question: str, *, debug: bool = False) -> dict[str, Any]:
+        context = self.retrieve_context(question, debug=debug)
         prepared = self.prepare_sql_candidate(
             question,
             ColumnSelectionCandidate(
@@ -472,4 +478,15 @@ class DbRagService:
             "sql": result.sql,
             "dataframe": result.dataframe,
             "source_tables": result.source_tables,
+            "debug": (
+                {
+                    "question": question,
+                    "retrieved_tables": context.table_names,
+                    "retrieved_columns": [entry.as_prompt_line() for entry in context.columns],
+                    "sql_tables": list(prepared.tables),
+                    "sql_columns": [f"{column['table']}.{column['column']}" for column in prepared.columns],
+                }
+                if debug
+                else {}
+            ),
         }

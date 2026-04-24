@@ -92,6 +92,7 @@ def run_query(
     temperature: float = DEFAULT_TEMPERATURE,
     top_p: float = DEFAULT_TOP_P,
     rebuild_if_missing: bool = True,
+    debug: bool = False,
 ) -> dict[str, Any]:
     DbRagService = _get_db_rag_service_class()
     ensure_assets_ready(rebuild_if_missing=rebuild_if_missing)
@@ -104,7 +105,20 @@ def run_query(
         top_p=top_p,
     )
     service = DbRagService(llm=llm)
-    return service.execute_sql_flow(question)
+    return service.execute_sql_flow(question, debug=debug)
+
+
+def _print_debug(result: dict[str, Any]) -> None:
+    debug = result.get("debug") or {}
+    if not debug:
+        return
+    print("\nRetrieval summary:")
+    print(f"Retrieved tables: {debug.get('retrieved_tables', [])}")
+    print(f"Retrieved columns: {debug.get('retrieved_columns', [])}")
+    print("\nSQL preparation:")
+    print(f"Question: {debug.get('question', '')}")
+    print(f"Tables: {debug.get('sql_tables', [])}")
+    print(f"Columns: {debug.get('sql_columns', [])}")
 
 
 def _print_result(result: dict[str, Any]) -> None:
@@ -178,6 +192,11 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Fail instead of rebuilding when DB-RAG assets are missing.",
     )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Print retrieval and SQL-generation details for the DB-RAG demo flow.",
+    )
     return parser
 
 
@@ -201,7 +220,10 @@ def main(argv: list[str] | None = None) -> int:
         temperature=args.temperature,
         top_p=args.top_p,
         rebuild_if_missing=not args.no_rebuild,
+        debug=args.debug,
     )
+    if args.debug:
+        _print_debug(result)
     _print_result(result)
     return 0
 
