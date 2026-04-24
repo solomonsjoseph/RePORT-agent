@@ -71,7 +71,7 @@ If you want to use the DB-RAG feature, place the source files in this repo under
 Build the DB-RAG assets from the repo root:
 
 ```bash
-python -m db_rag.bootstrap --rebuild
+python -m db_rag.build_index --rebuild
 ```
 
 Bootstrap behavior:
@@ -104,6 +104,12 @@ For Qwen embeddings through OpenRouter, use one of:
 ```env
 DB_RAG_EMBEDDING_MODEL=Qwen/Qwen3-Embedding-4B
 DB_RAG_EMBEDDING_MODEL=Qwen/Qwen3-Embedding-8B
+```
+
+If the selected embedding model index already exists, the command exits early and tells you how to switch models in `.env`. To rebuild that model anyway, run:
+
+```bash
+python -m db_rag.build_index --rebuild --force
 ```
 
 This creates the shared DuckDB asset plus model-specific DB-RAG index assets in `runtime/db_rag/`.

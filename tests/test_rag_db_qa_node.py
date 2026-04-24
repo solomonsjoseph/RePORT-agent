@@ -94,7 +94,7 @@ def test_rag_db_qa_returns_guided_init_message_when_assets_are_missing() -> None
         def readiness(self):
             return {
                 "ready": False,
-                "message": "DB-RAG assets are not initialized. Copy source data into local_data/db_rag_source/ and run python -m db_rag.bootstrap --rebuild.",
+                "message": "DB-RAG assets are not initialized. Copy source data into local_data/db_rag_source/ and run python -m db_rag.build_index --rebuild.",
             }
 
     state = {
@@ -108,7 +108,7 @@ def test_rag_db_qa_returns_guided_init_message_when_assets_are_missing() -> None
 
     updated = rag.rag_db_qa_node(state, llm=object(), provider="openai", service=_Service())
 
-    assert "python -m db_rag.bootstrap --rebuild" in updated["output"]["qa_response"]
+    assert "python -m db_rag.build_index --rebuild" in updated["output"]["qa_response"]
     assert updated["agents"]["rag_db_qa"]["status"] == "done"
 
 

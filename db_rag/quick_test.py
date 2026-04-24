@@ -25,10 +25,10 @@ def _get_db_rag_service_class():
     return DbRagService
 
 
-def _get_bootstrap_module():
-    from db_rag import bootstrap
+def _get_build_index_module():
+    from db_rag import build_index
 
-    return bootstrap
+    return build_index
 
 
 def _runtime_assets_ready() -> bool:
@@ -39,14 +39,14 @@ def _runtime_assets_ready() -> bool:
 
 def ensure_assets_ready(*, rebuild_if_missing: bool = True) -> dict[str, Any]:
     DbRagService = _get_db_rag_service_class()
-    bootstrap = _get_bootstrap_module()
+    build_index = _get_build_index_module()
 
     readiness = DbRagService(llm=object()).readiness()
     if readiness.get("ready"):
         return readiness
 
     if rebuild_if_missing:
-        bootstrap.rebuild()
+        build_index.rebuild()
         readiness = DbRagService(llm=object()).readiness()
 
     if not readiness.get("ready"):
