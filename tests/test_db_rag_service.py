@@ -23,7 +23,7 @@ def _install_langchain_message_stubs(monkeypatch) -> None:
 def test_openai_embedding_function_loads_dotenv_before_creating_client(monkeypatch) -> None:
     _install_langchain_message_stubs(monkeypatch)
 
-    import db_rag.service as service
+    import db_rag.vectorstore as vectorstore
 
     calls: list[str] = []
 
@@ -34,32 +34,33 @@ def test_openai_embedding_function_loads_dotenv_before_creating_client(monkeypat
         def __init__(self) -> None:
             assert calls == ["load_dotenv"]
 
-    monkeypatch.setattr(service, "load_dotenv", fake_load_dotenv, raising=False)
+    monkeypatch.setattr(vectorstore, "load_dotenv", fake_load_dotenv, raising=False)
     monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=_OpenAI))
 
-    embedding_function = service.OpenAIEmbeddingFunction(model="OpenAI/text-embedding-3-small")
+    embedding_function = vectorstore.OpenAIEmbeddingFunction(model="OpenAI/text-embedding-3-small")
 
-    assert embedding_function.model == "OpenAI/text-embedding-3-small"
+    assert embedding_function.model == "text-embedding-3-small"
+    assert embedding_function.config_model == "OpenAI/text-embedding-3-small"
 
 
 def test_openai_embedding_function_exposes_chroma_name(monkeypatch) -> None:
     _install_langchain_message_stubs(monkeypatch)
 
-    import db_rag.service as service
+    import db_rag.vectorstore as vectorstore
 
     class _OpenAI:
         pass
 
-    monkeypatch.setattr(service, "load_dotenv", lambda: None, raising=False)
+    monkeypatch.setattr(vectorstore, "load_dotenv", lambda: None, raising=False)
     monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=_OpenAI))
 
-    assert service.OpenAIEmbeddingFunction.name() == "openai"
+    assert vectorstore.OpenAIEmbeddingFunction.name() == "openai"
 
 
 def test_openai_embedding_function_exposes_chroma_embed_query(monkeypatch) -> None:
     _install_langchain_message_stubs(monkeypatch)
 
-    import db_rag.service as service
+    import db_rag.vectorstore as vectorstore
 
     calls: list[list[str]] = []
 
@@ -72,10 +73,10 @@ def test_openai_embedding_function_exposes_chroma_embed_query(monkeypatch) -> No
         def __init__(self) -> None:
             self.embeddings = _Embeddings()
 
-    monkeypatch.setattr(service, "load_dotenv", lambda: None, raising=False)
+    monkeypatch.setattr(vectorstore, "load_dotenv", lambda: None, raising=False)
     monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=_OpenAI))
 
-    embedding_function = service.OpenAIEmbeddingFunction(model="OpenAI/text-embedding-3-small")
+    embedding_function = vectorstore.OpenAIEmbeddingFunction(model="OpenAI/text-embedding-3-small")
 
     assert embedding_function.embed_query(input=["household contact"]) == [[1.0, 2.0, 3.0]]
     assert calls == [["household contact"]]
@@ -86,7 +87,10 @@ def test_resolve_embedding_model_requires_env_at_runtime(monkeypatch) -> None:
 
     from db_rag import service
 
-    monkeypatch.delenv("DB_RAG_EMBEDDING_MODEL", raising=False)
+    def _raise_missing():
+        raise ValueError("DB_RAG_EMBEDDING_MODEL is not set. Set it in .env or export it in your shell.")
+
+    monkeypatch.setattr(service, "resolve_db_rag_embedding_model", _raise_missing)
 
     db_rag_service = service.DbRagService(llm=object())
     readiness = db_rag_service.readiness()
@@ -99,7 +103,7 @@ def test_resolve_embedding_model_requires_env_at_runtime(monkeypatch) -> None:
 def test_openrouter_qwen_embedding_uses_openrouter_credentials(monkeypatch) -> None:
     _install_langchain_message_stubs(monkeypatch)
 
-    from db_rag import service
+    import db_rag.vectorstore as vectorstore
 
     captured: dict[str, str] = {}
 
@@ -108,14 +112,15 @@ def test_openrouter_qwen_embedding_uses_openrouter_credentials(monkeypatch) -> N
             captured.update(kwargs)
             self.embeddings = SimpleNamespace(create=lambda **_: SimpleNamespace(data=[]))
 
-    monkeypatch.setattr(service, "load_dotenv", lambda: None, raising=False)
+    monkeypatch.setattr(vectorstore, "load_dotenv", lambda: None, raising=False)
     monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=_OpenAI))
     monkeypatch.setenv("DB_RAG_OPENROUTER_API_KEY", "or-key")
     monkeypatch.setenv("DB_RAG_OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
 
-    embedding_function = service.OpenAIEmbeddingFunction(model="Qwen/Qwen3-Embedding-4B")
+    embedding_function = vectorstore.OpenAIEmbeddingFunction(model="Qwen/Qwen3-Embedding-4B")
 
     assert embedding_function.model == "Qwen/Qwen3-Embedding-4B"
+    assert embedding_function.config_model == "Qwen/Qwen3-Embedding-4B"
     assert captured["api_key"] == "or-key"
     assert captured["base_url"] == "https://openrouter.ai/api/v1"
 

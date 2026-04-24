@@ -71,10 +71,16 @@ If you want to use the DB-RAG feature, place the source files in this repo under
 Then build the index from the repo root:
 
 ```bash
-python -m db_rag.bootstrap --rebuild
+python -m db_rag.build_index --rebuild
 ```
 
 If `DB_RAG_EMBEDDING_MODEL` is not set yet, the rebuild flow prompts you to choose one and writes that selection to `.env`. Edit `.env` later to change `DB_RAG_EMBEDDING_MODEL`.
+
+If the selected embedding model index already exists, the command exits early and tells you how to switch models in `.env`. To rebuild that model anyway, run:
+
+```bash
+python -m db_rag.build_index --rebuild --force
+```
 
 This creates the shared DuckDB asset plus model-specific DB-RAG index assets in `runtime/db_rag/`.
 
