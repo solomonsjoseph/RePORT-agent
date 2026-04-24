@@ -68,24 +68,33 @@ If you want to use the DB-RAG feature, place the source files in this repo under
 - `local_data/db_rag_source/reviewed_annotated_json_files/`
 - `local_data/db_rag_source/filtered_excel_files/`
 
-Build the DB-RAG assets from the repo root:
+Supported DB-RAG indexing models:
+
+- `OpenAI/text-embedding-3-small`
+- `Qwen/Qwen3-Embedding-4B`
+- `Qwen/Qwen3-Embedding-8B`
+
+Build the DB-RAG assets from the repo root by selecting one of the supported indexing models:
 
 ```bash
-python -m db_rag.build_index --rebuild
+python -m db_rag.build_index --indexing-model Qwen/Qwen3-Embedding-4B
 ```
 
-Bootstrap behavior:
-
-- Every rebuild call prints the active `DB_RAG_EMBEDDING_MODEL` and tells you to edit `.env` if you want to switch models later.
-- If `DB_RAG_EMBEDDING_MODEL` is not set yet, the rebuild flow prompts you to choose one and writes that selection to `.env`.
-- If the selected model index already exists, bootstrap exits without rebuilding and explains how to switch models by editing `.env`.
-- If you want to rebuild that model anyway, for example because the source data changed, run:
+To rebuild that model even if the index already exists, add `--rebuild`:
 
 ```bash
-python -m db_rag.bootstrap --rebuild --force
+python -m db_rag.build_index --indexing-model Qwen/Qwen3-Embedding-4B --rebuild
 ```
 
-Relevant `.env` keys:
+Build behavior:
+
+- `--indexing-model` is required.
+- The selected indexing model is written to `.env` as `DB_RAG_EMBEDDING_MODEL=...`.
+- Every run prints the active `.env` value so you can confirm which indexing model is primary for DB-RAG.
+- If the selected model-specific Chroma index and manifest already exist, the command exits without rebuilding and prints the exact `--rebuild` command to rerun.
+- A rebuild prints step-level progress while it loads source files, builds chunks, writes DuckDB, builds Chroma, and writes the manifest.
+
+Relevant `.env` keys for DB-RAG:
 
 ```env
 DB_RAG_EMBEDDING_MODEL=OpenAI/text-embedding-3-small
@@ -93,23 +102,17 @@ DB_RAG_OPENROUTER_API_KEY=...
 DB_RAG_OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
 ```
 
-For OpenAI embeddings, use:
+For OpenAI indexing:
 
 ```env
 DB_RAG_EMBEDDING_MODEL=OpenAI/text-embedding-3-small
 ```
 
-For Qwen embeddings through OpenRouter, use one of:
+For Qwen indexing through OpenRouter, use one of:
 
 ```env
 DB_RAG_EMBEDDING_MODEL=Qwen/Qwen3-Embedding-4B
 DB_RAG_EMBEDDING_MODEL=Qwen/Qwen3-Embedding-8B
-```
-
-If the selected embedding model index already exists, the command exits early and tells you how to switch models in `.env`. To rebuild that model anyway, run:
-
-```bash
-python -m db_rag.build_index --rebuild --force
 ```
 
 This creates the shared DuckDB asset plus model-specific DB-RAG index assets in `runtime/db_rag/`.
@@ -122,6 +125,19 @@ python -m db_rag.quick_test "your question here"
 
 If you omit the question, the script drops into interactive mode. If the runtime
 assets are missing, it rebuilds them first.
+
+To run the sibling-style retrieval benchmark against prebuilt DB-RAG assets:
+
+```bash
+python -m db_rag.benchmark.evaluate --benchmark db_rag/benchmark/data/retrieval_benchmark_100.csv --indexing-model Qwen/Qwen3-Embedding-4B
+```
+
+Benchmark behavior:
+
+- `--indexing-model` is required.
+- The benchmark uses the prebuilt DuckDB, Chroma index, and manifest for the selected indexing model.
+- The benchmark does not rebuild assets.
+- If the selected assets are missing, it exits immediately and tells you to run `db_rag.build_index` first.
 
 ### Notes:
 - Synthetic demo data are included under `data/` folder.

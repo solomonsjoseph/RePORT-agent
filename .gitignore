@@ -6,7 +6,6 @@
 __pycache__/
 .env
 .streamlit/secrets.toml
-report-env/
 .venv/
 .DS_Store
 data/.DS_Store
@@ -17,5 +16,7 @@ docs/superpowers/
 slides/
 local_data/db_rag_source/
 runtime/db_rag/
+db_rag/benchmark/
+db_rag/__pycache__/
 runtime/datasets/
 todo.md

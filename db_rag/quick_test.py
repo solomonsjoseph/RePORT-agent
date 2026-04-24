@@ -62,6 +62,18 @@ def _default_model_name(provider: str, base_url: str) -> str:
     return os.getenv("OPENAI_MODEL", DEFAULT_OPENAI_MODEL)
 
 
+def _resolve_api_key(provider: str, override: str | None) -> str:
+    if override:
+        return override
+    if provider == "anthropic":
+        return os.getenv("ANTHROPIC_API_KEY", "")
+    if provider == "gemini":
+        return os.getenv("GOOGLE_API_KEY", "")
+    if provider == "openai":
+        return os.getenv("OPENAI_API_KEY", "")
+    return ""
+
+
 def build_runtime_llm(
     *,
     provider: str,
@@ -206,7 +218,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     question = _resolve_query(args)
-    api_key = args.api_key or os.getenv("OPENAI_API_KEY", "") or os.getenv("ANTHROPIC_API_KEY", "")
+    api_key = _resolve_api_key(args.provider, args.api_key)
 
     if not _runtime_assets_ready():
         print("DB-RAG assets are missing. Rebuilding runtime assets...")

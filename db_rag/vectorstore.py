@@ -18,6 +18,7 @@ class OpenAIEmbeddingFunction:
         resolved_model = str(model or "").strip()
         api_model = resolved_model.split("/", 1)[1] if resolved_model.startswith("OpenAI/") else resolved_model
         client_kwargs: dict[str, str] = {}
+        self._embedding_create_kwargs: dict[str, str] = {}
         if resolved_model.startswith("Qwen/"):
             api_key = str(os.getenv("DB_RAG_OPENROUTER_API_KEY", "") or "").strip()
             if not api_key:
@@ -26,6 +27,8 @@ class OpenAIEmbeddingFunction:
             client_kwargs["base_url"] = str(
                 os.getenv("DB_RAG_OPENROUTER_BASE_URL", DEFAULT_OPENROUTER_BASE_URL) or DEFAULT_OPENROUTER_BASE_URL
             ).strip()
+            api_model = resolved_model.lower()
+            self._embedding_create_kwargs["encoding_format"] = "float"
         self.client = OpenAI(**client_kwargs)
         self.model = api_model
         self.config_model = resolved_model
@@ -34,14 +37,25 @@ class OpenAIEmbeddingFunction:
     def name() -> str:
         return "openai"
 
-    def embed_query(self, input: list[str]) -> list[list[float]]:
+    @staticmethod
+    def _normalize_input(input: str | list[str]) -> list[str]:
+        if isinstance(input, str):
+            return [input]
+        return list(input)
+
+    def embed_query(self, input: str | list[str]) -> list[list[float]]:
         return self.__call__(input)
 
-    def __call__(self, input: list[str]) -> list[list[float]]:
+    def __call__(self, input: str | list[str]) -> list[list[float]]:
+        normalized_input = self._normalize_input(input)
         embeddings: list[list[float]] = []
-        for start in range(0, len(input), 100):
-            batch = input[start : start + 100]
-            response = self.client.embeddings.create(model=self.model, input=batch)
+        for start in range(0, len(normalized_input), 100):
+            batch = normalized_input[start : start + 100]
+            response = self.client.embeddings.create(
+                model=self.model,
+                input=batch,
+                **self._embedding_create_kwargs,
+            )
             embeddings.extend(item.embedding for item in response.data)
         return embeddings
 

@@ -5,6 +5,7 @@ import sys
 from types import ModuleType
 
 import pandas as pd
+import pytest
 
 
 def _install_langchain_message_stubs(monkeypatch) -> None:
@@ -38,7 +39,7 @@ def test_build_index_main_prints_success_summary(monkeypatch, capsys) -> None:
     build_index = _fresh_build_index_module(monkeypatch)
     manifest = {
         "source_fingerprint": "abc123",
-        "embedding_model": "text-embedding-3-small",
+        "embedding_model": "OpenAI/text-embedding-3-small",
         "duckdb_path": str(build_index.DUCKDB_PATH),
         "chroma_path": str(build_index.CHROMA_DIR),
         "manifest_path": str(build_index.MANIFEST_PATH),
@@ -47,14 +48,22 @@ def test_build_index_main_prints_success_summary(monkeypatch, capsys) -> None:
         "column_chunk_count": 30,
     }
 
-    monkeypatch.setattr(build_index, "rebuild", lambda force=False: manifest)
-    monkeypatch.setattr(sys, "argv", ["python -m db_rag.build_index", "--rebuild"])
+    monkeypatch.setattr(build_index, "rebuild", lambda *, indexing_model, force=False: manifest)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "python -m db_rag.build_index",
+            "--indexing-model",
+            "OpenAI/text-embedding-3-small",
+        ],
+    )
 
     build_index.main()
 
     output = capsys.readouterr().out
-    assert "DB-RAG rebuild completed successfully." in output
-    assert "Embedding model: text-embedding-3-small" in output
+    assert "DB-RAG build completed successfully." in output
+    assert "Indexing model: OpenAI/text-embedding-3-small" in output
     assert "Source data:" in output
     assert "local_data/db_rag_source" in output
     assert "DuckDB database:" in output
@@ -62,6 +71,39 @@ def test_build_index_main_prints_success_summary(monkeypatch, capsys) -> None:
     assert "Chroma index:" in output
     assert "Manifest:" in output
     assert "Indexed chunks: 2 table summaries, 30 column chunks" in output
+
+
+def test_build_index_main_requires_indexing_model(monkeypatch, capsys) -> None:
+    build_index = _fresh_build_index_module(monkeypatch)
+
+    monkeypatch.setattr(sys, "argv", ["python -m db_rag.build_index"])
+
+    with pytest.raises(SystemExit) as excinfo:
+        build_index.main()
+
+    error_output = capsys.readouterr().err
+    assert excinfo.value.code == 2
+    assert "--indexing-model is required" in error_output
+    assert "Available indexing models:" in error_output
+    assert "python -m db_rag.build_index --indexing-model Qwen/Qwen3-Embedding-4B" in error_output
+
+
+def test_build_index_main_rejects_unsupported_indexing_model(monkeypatch, capsys) -> None:
+    build_index = _fresh_build_index_module(monkeypatch)
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["python -m db_rag.build_index", "--indexing-model", "Foo/Bar"],
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        build_index.main()
+
+    error_output = capsys.readouterr().err
+    assert excinfo.value.code == 2
+    assert "unsupported indexing model: Foo/Bar" in error_output
+    assert "Available indexing models:" in error_output
 
 
 def test_profile_column_adds_min_and_max_for_numeric_data() -> None:
@@ -75,32 +117,41 @@ def test_profile_column_adds_min_and_max_for_numeric_data() -> None:
     assert profile["max"] == 34
 
 
-def test_rebuild_prompts_for_missing_embedding_model_and_writes_env(monkeypatch, tmp_path, capsys) -> None:
+def test_resolve_build_embedding_model_writes_env_from_explicit_selection(monkeypatch, tmp_path, capsys) -> None:
     build_index = _fresh_build_index_module(monkeypatch)
 
-    monkeypatch.delenv("DB_RAG_EMBEDDING_MODEL", raising=False)
-    monkeypatch.setattr("builtins.input", lambda _: "0")
     monkeypatch.setattr(build_index, "PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(build_index, "env_path_for_project", lambda project_root=tmp_path: tmp_path / ".env")
-    monkeypatch.setattr(
-        build_index,
-        "resolve_db_rag_embedding_model",
-        lambda: (_ for _ in ()).throw(ValueError("DB_RAG_EMBEDDING_MODEL is not set.")),
-    )
-    monkeypatch.setattr(build_index, "load_excel_data", lambda: {})
-    monkeypatch.setattr(build_index, "build_table_chunks", lambda _: [])
-    monkeypatch.setattr(build_index, "build_column_chunks", lambda _: [])
-    monkeypatch.setattr(build_index, "build_duckdb", lambda _: None)
-    monkeypatch.setattr(build_index, "build_chroma", lambda *args, **kwargs: None)
-    monkeypatch.setattr(build_index, "source_fingerprint", lambda: "fp")
-    monkeypatch.setattr(build_index, "chroma_dir_for_model", lambda model: tmp_path / "indexes" / "openai_text_embedding_3_small")
-    monkeypatch.setattr(build_index, "manifest_path_for_model", lambda model: tmp_path / "manifests" / "openai_text_embedding_3_small.json")
 
-    manifest = build_index.rebuild(force=True)
+    model, env_path = build_index.resolve_build_embedding_model("OpenAI/text-embedding-3-small")
 
-    assert manifest["embedding_model"] == "OpenAI/text-embedding-3-small"
-    assert "DB_RAG_EMBEDDING_MODEL=OpenAI/text-embedding-3-small" in (tmp_path / ".env").read_text()
-    assert "Active DB_RAG_EMBEDDING_MODEL" in capsys.readouterr().out
+    assert model == "OpenAI/text-embedding-3-small"
+    assert env_path == tmp_path / ".env"
+    assert "DB_RAG_EMBEDDING_MODEL=OpenAI/text-embedding-3-small" in env_path.read_text()
+    output = capsys.readouterr().out
+    assert (
+        ".env:DB_RAG_EMBEDDING_MODEL=OpenAI/text-embedding-3-small, "
+        "this will be used as your primary indexing model in the RAG"
+    ) in output
+
+
+def test_resolve_build_embedding_model_reports_when_env_value_changes(monkeypatch, tmp_path, capsys) -> None:
+    build_index = _fresh_build_index_module(monkeypatch)
+
+    env_path = tmp_path / ".env"
+    env_path.write_text("DB_RAG_EMBEDDING_MODEL=OpenAI/text-embedding-3-small\n", encoding="utf-8")
+
+    monkeypatch.setattr(build_index, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(build_index, "env_path_for_project", lambda project_root=tmp_path: env_path)
+
+    build_index.resolve_build_embedding_model("Qwen/Qwen3-Embedding-4B")
+
+    output = capsys.readouterr().out
+    assert "Updated .env: DB_RAG_EMBEDDING_MODEL changed from OpenAI/text-embedding-3-small to Qwen/Qwen3-Embedding-4B" in output
+    assert (
+        ".env:DB_RAG_EMBEDDING_MODEL=Qwen/Qwen3-Embedding-4B, "
+        "this will be used as your primary indexing model in the RAG"
+    ) in output
 
 
 def test_rebuild_skips_existing_index_without_force(monkeypatch, tmp_path, capsys) -> None:
@@ -112,34 +163,20 @@ def test_rebuild_skips_existing_index_without_force(monkeypatch, tmp_path, capsy
     manifest_path.parent.mkdir(parents=True)
     manifest_path.write_text("{}", encoding="utf-8")
 
-    monkeypatch.setattr(build_index, "resolve_build_embedding_model", lambda: ("Qwen/Qwen3-Embedding-4B", tmp_path / ".env"))
+    monkeypatch.setattr(build_index, "resolve_build_embedding_model", lambda indexing_model: (indexing_model, tmp_path / ".env"))
     monkeypatch.setattr(build_index, "chroma_dir_for_model", lambda model: chroma_dir)
     monkeypatch.setattr(build_index, "manifest_path_for_model", lambda model: manifest_path)
 
-    manifest = build_index.rebuild()
+    manifest = build_index.rebuild(indexing_model="Qwen/Qwen3-Embedding-4B")
 
     output = capsys.readouterr().out
     assert manifest["embedding_model"] == "Qwen/Qwen3-Embedding-4B"
     assert "DB-RAG index already exists" in output
-    assert "--force" in output
+    assert "--rebuild" in output
+    assert "Edit that file to change models later." not in output
 
 
-def test_resolve_build_embedding_model_prints_guidance_when_env_already_set(monkeypatch, capsys) -> None:
-    build_index = _fresh_build_index_module(monkeypatch)
-
-    monkeypatch.setenv("DB_RAG_EMBEDDING_MODEL", "OpenAI/text-embedding-3-small")
-    monkeypatch.setattr(build_index, "resolve_db_rag_embedding_model", lambda: "OpenAI/text-embedding-3-small")
-
-    model, env_path = build_index.resolve_build_embedding_model()
-
-    output = capsys.readouterr().out
-    assert model == "OpenAI/text-embedding-3-small"
-    assert env_path == build_index.PROJECT_ROOT / ".env"
-    assert "Active DB_RAG_EMBEDDING_MODEL: OpenAI/text-embedding-3-small" in output
-    assert "Edit that file to change models later." in output
-
-
-def test_rebuild_force_bypasses_existing_index_skip(monkeypatch, tmp_path) -> None:
+def test_rebuild_flag_bypasses_existing_index_skip(monkeypatch, tmp_path) -> None:
     build_index = _fresh_build_index_module(monkeypatch)
 
     chroma_dir = tmp_path / "indexes" / "openai_text_embedding_3_small"
@@ -152,7 +189,7 @@ def test_rebuild_force_bypasses_existing_index_skip(monkeypatch, tmp_path) -> No
     monkeypatch.setattr(
         build_index,
         "resolve_build_embedding_model",
-        lambda: ("OpenAI/text-embedding-3-small", tmp_path / ".env"),
+        lambda indexing_model: (indexing_model, tmp_path / ".env"),
     )
     monkeypatch.setattr(build_index, "chroma_dir_for_model", lambda _: chroma_dir)
     monkeypatch.setattr(build_index, "manifest_path_for_model", lambda _: manifest_path)
@@ -163,7 +200,7 @@ def test_rebuild_force_bypasses_existing_index_skip(monkeypatch, tmp_path) -> No
     monkeypatch.setattr(build_index, "build_chroma", lambda *args, **kwargs: calls.append("chroma"))
     monkeypatch.setattr(build_index, "source_fingerprint", lambda: "fp")
 
-    manifest = build_index.rebuild(force=True)
+    manifest = build_index.rebuild(indexing_model="OpenAI/text-embedding-3-small", force=True)
 
     assert manifest["embedding_model"] == "OpenAI/text-embedding-3-small"
     assert calls == ["duckdb", "chroma"]

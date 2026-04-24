@@ -3,8 +3,8 @@
 DEFAULT_BASE_URL = "http://localhost:8000/v1"
 DEFAULT_PROVIDER = "openai"
 DEFAULT_API_KEY = ""
-DEFAULT_OPENAI_MODEL = "gpt-4.1-mini-2025-04-14"
-DEFAULT_ANTHROPIC_MODEL = "claude-3-5-sonnet-20240620"
+DEFAULT_OPENAI_MODEL = "gpt-5.4"
+DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-5"
 ANTHROPIC_API_VERSION = "2023-06-01"
 
 PROVIDER_OPTIONS = ("openai", "anthropic", "vllm")

@@ -79,3 +79,25 @@ def test_print_debug_shows_retrieval_sections(capsys):
     assert "Retrieval summary:" in output
     assert "Retrieved tables: ['Form 1A', 'Final Outcome']" in output
     assert "Retrieved columns: ['Form 1A.AGE', 'Final Outcome.OUTCOME']" in output
+
+
+def test_resolve_api_key_uses_provider_specific_env(monkeypatch):
+    from db_rag import quick_test
+
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-key")
+    monkeypatch.setenv("GOOGLE_API_KEY", "google-key")
+
+    assert quick_test._resolve_api_key("openai", None) == "openai-key"
+    assert quick_test._resolve_api_key("anthropic", None) == "anthropic-key"
+    assert quick_test._resolve_api_key("gemini", None) == "google-key"
+    assert quick_test._resolve_api_key("vllm", None) == ""
+
+
+def test_resolve_api_key_prefers_explicit_override(monkeypatch):
+    from db_rag import quick_test
+
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-key")
+
+    assert quick_test._resolve_api_key("anthropic", "override-key") == "override-key"

@@ -82,6 +82,31 @@ def test_openai_embedding_function_exposes_chroma_embed_query(monkeypatch) -> No
     assert calls == [["household contact"]]
 
 
+def test_openai_embedding_function_normalizes_single_query_string(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    import db_rag.vectorstore as vectorstore
+
+    calls: list[list[str]] = []
+
+    class _Embeddings:
+        def create(self, *, model, input):
+            calls.append(input)
+            return SimpleNamespace(data=[SimpleNamespace(embedding=[1.0, 2.0, 3.0]) for _ in input])
+
+    class _OpenAI:
+        def __init__(self) -> None:
+            self.embeddings = _Embeddings()
+
+    monkeypatch.setattr(vectorstore, "load_dotenv", lambda: None, raising=False)
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=_OpenAI))
+
+    embedding_function = vectorstore.OpenAIEmbeddingFunction(model="OpenAI/text-embedding-3-small")
+
+    assert embedding_function.embed_query(input="household contact") == [[1.0, 2.0, 3.0]]
+    assert calls == [["household contact"]]
+
+
 def test_resolve_embedding_model_requires_env_at_runtime(monkeypatch) -> None:
     _install_langchain_message_stubs(monkeypatch)
 
@@ -119,7 +144,7 @@ def test_openrouter_qwen_embedding_uses_openrouter_credentials(monkeypatch) -> N
 
     embedding_function = vectorstore.OpenAIEmbeddingFunction(model="Qwen/Qwen3-Embedding-4B")
 
-    assert embedding_function.model == "Qwen/Qwen3-Embedding-4B"
+    assert embedding_function.model == "qwen/qwen3-embedding-4b"
     assert embedding_function.config_model == "Qwen/Qwen3-Embedding-4B"
     assert captured["api_key"] == "or-key"
     assert captured["base_url"] == "https://openrouter.ai/api/v1"
@@ -144,10 +169,43 @@ def test_openrouter_qwen_8b_embedding_uses_openrouter_credentials(monkeypatch) -
 
     embedding_function = vectorstore.OpenAIEmbeddingFunction(model="Qwen/Qwen3-Embedding-8B")
 
-    assert embedding_function.model == "Qwen/Qwen3-Embedding-8B"
+    assert embedding_function.model == "qwen/qwen3-embedding-8b"
     assert embedding_function.config_model == "Qwen/Qwen3-Embedding-8B"
     assert captured["api_key"] == "or-key"
     assert captured["base_url"] == "https://openrouter.ai/api/v1"
+
+
+def test_openrouter_qwen_embedding_requests_float_embeddings(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    import db_rag.vectorstore as vectorstore
+
+    calls: list[dict[str, object]] = []
+
+    class _Embeddings:
+        def create(self, **kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(data=[SimpleNamespace(embedding=[1.0, 2.0, 3.0])])
+
+    class _OpenAI:
+        def __init__(self, **kwargs) -> None:
+            self.embeddings = _Embeddings()
+
+    monkeypatch.setattr(vectorstore, "load_dotenv", lambda: None, raising=False)
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=_OpenAI))
+    monkeypatch.setenv("DB_RAG_OPENROUTER_API_KEY", "or-key")
+    monkeypatch.setenv("DB_RAG_OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+
+    embedding_function = vectorstore.OpenAIEmbeddingFunction(model="Qwen/Qwen3-Embedding-4B")
+    embedding_function(["semantic search query"])
+
+    assert calls == [
+        {
+            "model": "qwen/qwen3-embedding-4b",
+            "input": ["semantic search query"],
+            "encoding_format": "float",
+        }
+    ]
 
 
 def test_db_rag_context_dataclasses_round_trip(monkeypatch) -> None:
