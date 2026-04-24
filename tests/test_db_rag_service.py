@@ -184,6 +184,73 @@ def test_retrieve_context_returns_typed_hits(monkeypatch) -> None:
     assert "Column: OTHER" not in context.column_context
 
 
+def test_retrieve_context_falls_back_to_single_query_when_decomposition_returns_one_phrase(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    from db_rag import service
+
+    calls: list[tuple[str, str]] = []
+
+    class _Collection:
+        def __init__(self, name: str, result: dict[str, list[list[object]]]) -> None:
+            self.name = name
+            self._result = result
+
+        def query(self, **kwargs):
+            calls.append((self.name, kwargs["query_texts"][0]))
+            return self._result
+
+    db_rag_service = service.DbRagService(llm=SimpleNamespace(invoke=lambda _: SimpleNamespace(content="age")))
+    monkeypatch.setattr(
+        db_rag_service,
+        "_load_collections",
+        lambda: (
+            _Collection("tables", {"documents": [["Table: Form 1A"]], "metadatas": [[{"table": "Form 1A"}]]}),
+            _Collection("columns", {"documents": [["Column: AGE"]], "metadatas": [[{"table": "Form 1A", "column": "AGE"}]]}),
+        ),
+    )
+
+    context = db_rag_service.retrieve_context("age and sex")
+
+    assert context.table_names == ["Form 1A"]
+    assert calls == [("tables", "age and sex"), ("columns", "age and sex")]
+
+
+def test_retrieve_context_merges_multiquery_hits(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    from db_rag import service
+
+    table_queries = {
+        "age": {"documents": [["Table: Form 1A"]], "metadatas": [[{"table": "Form 1A"}]]},
+        "outcome": {"documents": [["Table: Final Outcome"]], "metadatas": [[{"table": "Final Outcome"}]]},
+    }
+    column_queries = {
+        "age": {"documents": [["Column: AGE"]], "metadatas": [[{"table": "Form 1A", "column": "AGE"}]]},
+        "outcome": {"documents": [["Column: OUTCOME"]], "metadatas": [[{"table": "Final Outcome", "column": "OUTCOME"}]]},
+    }
+
+    class _Collection:
+        def __init__(self, result_map: dict[str, dict[str, list[list[object]]]]) -> None:
+            self.result_map = result_map
+
+        def query(self, **kwargs):
+            return self.result_map[kwargs["query_texts"][0]]
+
+    llm = SimpleNamespace(invoke=lambda _: SimpleNamespace(content="age\noutcome"))
+    db_rag_service = service.DbRagService(llm=llm)
+    monkeypatch.setattr(
+        db_rag_service,
+        "_load_collections",
+        lambda: (_Collection(table_queries), _Collection(column_queries)),
+    )
+
+    context = db_rag_service.retrieve_context("age and final outcome")
+
+    assert context.table_names == ["Form 1A", "Final Outcome"]
+    assert context.column_names == ["AGE", "OUTCOME"]
+
+
 class _LLM:
     def __init__(self, content: str):
         self.content = content
