@@ -81,6 +81,45 @@ def test_openai_embedding_function_exposes_chroma_embed_query(monkeypatch) -> No
     assert calls == [["household contact"]]
 
 
+def test_resolve_embedding_model_requires_env_at_runtime(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    from db_rag import service
+
+    monkeypatch.delenv("DB_RAG_EMBEDDING_MODEL", raising=False)
+
+    db_rag_service = service.DbRagService(llm=object())
+    readiness = db_rag_service.readiness()
+
+    assert readiness["ready"] is False
+    assert "DB_RAG_EMBEDDING_MODEL" in readiness["message"]
+    assert ".env" in readiness["message"]
+
+
+def test_openrouter_qwen_embedding_uses_openrouter_credentials(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    from db_rag import service
+
+    captured: dict[str, str] = {}
+
+    class _OpenAI:
+        def __init__(self, **kwargs) -> None:
+            captured.update(kwargs)
+            self.embeddings = SimpleNamespace(create=lambda **_: SimpleNamespace(data=[]))
+
+    monkeypatch.setattr(service, "load_dotenv", lambda: None, raising=False)
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=_OpenAI))
+    monkeypatch.setenv("DB_RAG_OPENROUTER_API_KEY", "or-key")
+    monkeypatch.setenv("DB_RAG_OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+
+    embedding_function = service.OpenAIEmbeddingFunction(model="Qwen/Qwen3-Embedding-4B")
+
+    assert embedding_function.model == "Qwen/Qwen3-Embedding-4B"
+    assert captured["api_key"] == "or-key"
+    assert captured["base_url"] == "https://openrouter.ai/api/v1"
+
+
 def test_db_rag_context_dataclasses_round_trip(monkeypatch) -> None:
     _install_langchain_message_stubs(monkeypatch)
 
