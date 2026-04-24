@@ -23,6 +23,7 @@ The desired workflow is to build each embedding model once, keep the prebuilt in
 ## Design Principles
 
 - `DB_RAG_EMBEDDING_MODEL` is the single source of truth for the active DB-RAG embedding model.
+- `DB_RAG_EMBEDDING_MODEL` has no code default.
 - DuckDB is shared because it depends on tabular source data, not embedding geometry.
 - Chroma indexes are model-specific because stored vectors are only valid for the model that created them.
 - OpenAI-backed and OpenRouter-backed embeddings use the same OpenAI-compatible client interface, but with different credentials and base URL routing.
@@ -59,6 +60,18 @@ For Qwen embeddings through OpenRouter:
 
 - `DB_RAG_OPENROUTER_BASE_URL`
   - default: `https://openrouter.ai/api/v1`
+
+### Missing Model Selection
+
+If `DB_RAG_EMBEDDING_MODEL` is missing during `python -m db_rag.bootstrap --rebuild`:
+
+1. the rebuild flow presents the supported model options as a numbered prompt
+2. the user selects one model for the current build
+3. the selected value is written into the repo `.env`
+4. the rebuild continues using that selected model
+5. after selection, the script prints a short instruction telling the operator that `DB_RAG_EMBEDDING_MODEL` can be changed later by editing `.env`
+
+If `DB_RAG_EMBEDDING_MODEL` is missing during runtime, readiness fails with a clear configuration message. Runtime does not prompt interactively.
 
 ### Provider Routing
 
@@ -115,12 +128,16 @@ The manifest exists to answer:
 
 `python -m db_rag.bootstrap --rebuild` follows this order:
 
-1. resolve and validate `DB_RAG_EMBEDDING_MODEL`
-2. compute the current source fingerprint
-3. ensure shared DuckDB exists for the current source fingerprint
-4. resolve the manifest path and Chroma directory for the selected model
-5. if the manifest exists and the source fingerprint matches and the Chroma directory exists, reuse the existing model-specific index
-6. otherwise rebuild only the selected model-specific Chroma index and write the manifest
+1. resolve `DB_RAG_EMBEDDING_MODEL`
+2. if missing, prompt for a supported model, persist it to `.env`, and print where to edit it later
+3. validate the resolved model
+4. compute the current source fingerprint
+5. ensure shared DuckDB exists for the current source fingerprint
+6. resolve the manifest path and Chroma directory for the selected model
+7. if the manifest exists and the source fingerprint matches and the Chroma directory exists, reuse the existing model-specific index
+8. otherwise rebuild only the selected model-specific Chroma index and write the manifest
+
+The operator-facing message after interactive selection should explicitly name the `.env` path in the repo and mention the `DB_RAG_EMBEDDING_MODEL` key.
 
 Rebuild rules:
 
@@ -134,14 +151,14 @@ The system does not delete other model-specific indexes during a rebuild of one 
 
 `DbRagService` resolves the active model from `DB_RAG_EMBEDDING_MODEL`, then:
 
-1. validates that the model is supported
+1. validates that the model is present and supported
 2. resolves the manifest path for that model
 3. loads that manifest and matching Chroma directory
 4. uses the same model to embed incoming user questions
 
 This preserves the required invariant: query embeddings and stored vectors always come from the same embedding model.
 
-If the selected model has no valid manifest or no matching Chroma directory, readiness returns a clear message instructing the operator to rebuild with that model.
+If `DB_RAG_EMBEDDING_MODEL` is unset, readiness returns a message instructing the operator to set it in `.env` or export it in the shell. If the selected model has no valid manifest or no matching Chroma directory, readiness returns a clear message instructing the operator to rebuild with that model.
 
 ## Code Structure
 
@@ -156,6 +173,10 @@ If the selected model has no valid manifest or no matching Chroma directory, rea
 
 `db_rag/bootstrap.py` will own:
 
+- selected-model resolution
+- interactive prompt when the model env var is missing
+- `.env` persistence helper for `DB_RAG_EMBEDDING_MODEL`
+- post-selection instruction message that points to `.env`
 - selected-model rebuild flow
 - manifest write/update
 - shared DuckDB rebuild logic
@@ -165,6 +186,7 @@ No change is required to the answer-generation model configuration in `db_rag/qu
 
 ## Error Handling
 
+- missing `DB_RAG_EMBEDDING_MODEL` during runtime: fail fast with a message pointing to `.env`
 - unsupported `DB_RAG_EMBEDDING_MODEL`: fail fast with the supported values
 - missing `OPENAI_API_KEY` for `OpenAI/...`: fail with a provider-specific message
 - missing `DB_RAG_OPENROUTER_API_KEY` for `Qwen/...`: fail with a provider-specific message
@@ -173,7 +195,8 @@ No change is required to the answer-generation model configuration in `db_rag/qu
 
 ## Non-Goals
 
-- no interactive picker during build
+- no code-level default for `DB_RAG_EMBEDDING_MODEL`
+- no interactive runtime prompt in Streamlit or service readiness
 - no reranker support
 - no automatic fallback from one embedding model to another
 - no duplicated DuckDB per embedding model
@@ -183,8 +206,10 @@ No change is required to the answer-generation model configuration in `db_rag/qu
 
 Manual verification should cover:
 
-1. build with `OpenAI/text-embedding-3-small`
-2. build with `Qwen/Qwen3-Embedding-4B`
-3. switch back to `OpenAI/text-embedding-3-small` without rebuilding and confirm readiness succeeds
-4. switch to `Qwen/Qwen3-Embedding-8B` before it exists and confirm readiness reports the missing model-specific index
-5. rebuild `Qwen/Qwen3-Embedding-8B` and confirm the new index is stored without deleting the 4B and OpenAI indexes
+1. run rebuild with no `DB_RAG_EMBEDDING_MODEL`, choose a model interactively, and confirm `.env` is updated
+2. confirm the rebuild output tells the operator where to edit `DB_RAG_EMBEDDING_MODEL` later
+3. build with `OpenAI/text-embedding-3-small`
+4. build with `Qwen/Qwen3-Embedding-4B`
+5. switch back to `OpenAI/text-embedding-3-small` without rebuilding and confirm readiness succeeds
+6. switch to `Qwen/Qwen3-Embedding-8B` before it exists and confirm readiness reports the missing model-specific index
+7. rebuild `Qwen/Qwen3-Embedding-8B` and confirm the new index is stored without deleting the 4B and OpenAI indexes
