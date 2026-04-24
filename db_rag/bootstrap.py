@@ -73,15 +73,35 @@ def _prompt_for_embedding_model() -> str:
     return SUPPORTED_DB_RAG_EMBEDDING_MODELS[int(choice)]
 
 
-def resolve_build_embedding_model() -> str:
+def _print_env_guidance(model: str, env_path: Path) -> None:
+    print(f"Active DB_RAG_EMBEDDING_MODEL: {model}")
+    print(f"Set DB_RAG_EMBEDDING_MODEL in {env_path}. Edit that file to change models later.")
+
+
+def _print_existing_index_message(model: str, chroma_dir: Path, manifest_path: Path, env_path: Path) -> None:
+    print(f"DB-RAG index already exists for the selected embedding model: {model}")
+    print(f"Existing index: {chroma_dir}")
+    print(f"Manifest: {manifest_path}")
+    print()
+    print("No rebuild was performed.")
+    print()
+    print(f"To switch to a different embedding model, edit {env_path} and change:")
+    print("DB_RAG_EMBEDDING_MODEL=...")
+    print()
+    print("If your source data changed, or you want to rebuild this model anyway, run:")
+    print("python -m db_rag.bootstrap --rebuild --force")
+
+
+def resolve_build_embedding_model() -> tuple[str, Path]:
+    env_path = PROJECT_ROOT / ".env"
     try:
-        return resolve_db_rag_embedding_model()
+        model = resolve_db_rag_embedding_model()
     except ValueError:
         model = _prompt_for_embedding_model()
         os.environ["DB_RAG_EMBEDDING_MODEL"] = model
         env_path = _write_env_key(PROJECT_ROOT, "DB_RAG_EMBEDDING_MODEL", model)
-        print(f"Set DB_RAG_EMBEDDING_MODEL in {env_path}. Edit that file to change models later.")
-        return model
+    _print_env_guidance(model, env_path)
+    return model, env_path
 
 
 def _load_excel_data() -> dict[str, pd.DataFrame]:
@@ -245,14 +265,17 @@ def _format_rebuild_success(manifest: dict[str, object]) -> str:
     )
 
 
-def rebuild() -> dict[str, object]:
-    model = resolve_build_embedding_model()
+def rebuild(*, force: bool = False) -> dict[str, object] | None:
+    model, env_path = resolve_build_embedding_model()
+    chroma_dir = chroma_dir_for_model(model)
+    manifest_path = manifest_path_for_model(model)
+    if chroma_dir.exists() and manifest_path.exists() and not force:
+        _print_existing_index_message(model, chroma_dir, manifest_path, env_path)
+        return None
     excel_data = _load_excel_data()
     table_chunks = _build_table_chunks(excel_data)
     column_chunks = _build_column_chunks(excel_data)
     _build_duckdb(excel_data)
-    chroma_dir = chroma_dir_for_model(model)
-    manifest_path = manifest_path_for_model(model)
     _build_chroma(table_chunks, column_chunks, model=model, chroma_dir=chroma_dir)
     manifest = {
         "source_fingerprint": _source_fingerprint(),
@@ -274,10 +297,13 @@ def rebuild() -> dict[str, object]:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--rebuild", action="store_true", help="Rebuild DuckDB and Chroma assets from local source data.")
+    parser.add_argument("--force", action="store_true", help="Force rebuild even if the selected embedding model index already exists.")
     args = parser.parse_args()
     if not args.rebuild:
         parser.error("Use --rebuild to initialize DB-RAG assets.")
-    manifest = rebuild()
+    manifest = rebuild(force=args.force)
+    if manifest is None:
+        return
     print(_format_rebuild_success(manifest))
 
 

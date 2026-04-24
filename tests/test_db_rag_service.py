@@ -39,7 +39,7 @@ def test_openai_embedding_function_loads_dotenv_before_creating_client(monkeypat
 
     embedding_function = service.OpenAIEmbeddingFunction(model="OpenAI/text-embedding-3-small")
 
-    assert embedding_function.model == "OpenAI/text-embedding-3-small"
+    assert embedding_function.model == "text-embedding-3-small"
 
 
 def test_openai_embedding_function_exposes_chroma_name(monkeypatch) -> None:
@@ -86,6 +86,7 @@ def test_resolve_embedding_model_requires_env_at_runtime(monkeypatch) -> None:
 
     from db_rag import service
 
+    monkeypatch.setattr(service, "load_dotenv", lambda: None, raising=False)
     monkeypatch.delenv("DB_RAG_EMBEDDING_MODEL", raising=False)
 
     db_rag_service = service.DbRagService(llm=object())
@@ -116,6 +117,30 @@ def test_openrouter_qwen_embedding_uses_openrouter_credentials(monkeypatch) -> N
     embedding_function = service.OpenAIEmbeddingFunction(model="Qwen/Qwen3-Embedding-4B")
 
     assert embedding_function.model == "Qwen/Qwen3-Embedding-4B"
+    assert captured["api_key"] == "or-key"
+    assert captured["base_url"] == "https://openrouter.ai/api/v1"
+
+
+def test_openrouter_qwen_8b_embedding_uses_openrouter_credentials(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    from db_rag import service
+
+    captured: dict[str, str] = {}
+
+    class _OpenAI:
+        def __init__(self, **kwargs) -> None:
+            captured.update(kwargs)
+            self.embeddings = SimpleNamespace(create=lambda **_: SimpleNamespace(data=[]))
+
+    monkeypatch.setattr(service, "load_dotenv", lambda: None, raising=False)
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=_OpenAI))
+    monkeypatch.setenv("DB_RAG_OPENROUTER_API_KEY", "or-key")
+    monkeypatch.setenv("DB_RAG_OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+
+    embedding_function = service.OpenAIEmbeddingFunction(model="Qwen/Qwen3-Embedding-8B")
+
+    assert embedding_function.model == "Qwen/Qwen3-Embedding-8B"
     assert captured["api_key"] == "or-key"
     assert captured["base_url"] == "https://openrouter.ai/api/v1"
 
@@ -249,6 +274,129 @@ def test_retrieve_context_merges_multiquery_hits(monkeypatch) -> None:
 
     assert context.table_names == ["Form 1A", "Final Outcome"]
     assert context.column_names == ["AGE", "OUTCOME"]
+
+
+def test_retrieve_context_injects_paired_screening_form_for_final_outcome(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    from db_rag import service
+
+    table_queries = {
+        "outcome": {
+            "documents": [["Table: Final Outcome Determination Form - Cohort A (Active Pulmonary TB)"]],
+            "metadatas": [[{"table": "Final Outcome Determination Form - Cohort A (Active Pulmonary TB)"}]],
+        },
+        "status": {"documents": [[]], "metadatas": [[]]},
+        "Form 1A - Index Case Screening": {
+            "documents": [["Table: Form 1A - Index Case Screening"]],
+            "metadatas": [[{"table": "Form 1A - Index Case Screening"}]],
+        },
+    }
+    column_queries = {
+        "outcome": {
+            "documents": [["Column: OUTCOME"]],
+            "metadatas": [[{"table": "Final Outcome Determination Form - Cohort A (Active Pulmonary TB)", "column": "OUTCOME"}]],
+        },
+        "status": {"documents": [[]], "metadatas": [[]]},
+    }
+
+    class _TableCollection:
+        def query(self, **kwargs):
+            return table_queries[kwargs["query_texts"][0]]
+
+    class _ColumnCollection:
+        def query(self, **kwargs):
+            return column_queries[kwargs["query_texts"][0]]
+
+    llm = SimpleNamespace(invoke=lambda _: SimpleNamespace(content="outcome\nstatus"))
+    db_rag_service = service.DbRagService(llm=llm)
+    monkeypatch.setattr(db_rag_service, "_load_collections", lambda: (_TableCollection(), _ColumnCollection()))
+
+    context = db_rag_service.retrieve_context("final outcome")
+
+    assert "Final Outcome Determination Form - Cohort A (Active Pulmonary TB)" in context.table_names
+    assert "Form 1A - Index Case Screening" in context.table_names
+
+
+def test_retrieve_context_does_not_duplicate_paired_form_if_already_present(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    from db_rag import service
+
+    table_queries = {
+        "outcome": {
+            "documents": [[
+                "Table: Final Outcome Determination Form - Cohort A (Active Pulmonary TB)",
+                "Table: Form 1A - Index Case Screening",
+            ]],
+            "metadatas": [[
+                {"table": "Final Outcome Determination Form - Cohort A (Active Pulmonary TB)"},
+                {"table": "Form 1A - Index Case Screening"},
+            ]],
+        },
+        "status": {"documents": [[]], "metadatas": [[]]},
+    }
+
+    class _TableCollection:
+        def query(self, **kwargs):
+            return table_queries[kwargs["query_texts"][0]]
+
+    class _ColumnCollection:
+        def query(self, **kwargs):
+            return {"documents": [[]], "metadatas": [[]]}
+
+    llm = SimpleNamespace(invoke=lambda _: SimpleNamespace(content="outcome\nstatus"))
+    db_rag_service = service.DbRagService(llm=llm)
+    monkeypatch.setattr(db_rag_service, "_load_collections", lambda: (_TableCollection(), _ColumnCollection()))
+
+    context = db_rag_service.retrieve_context("final outcome")
+
+    assert context.table_names.count("Form 1A - Index Case Screening") == 1
+
+
+def test_retrieve_context_includes_columns_from_injected_paired_form(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    from db_rag import service
+
+    table_queries = {
+        "outcome": {
+            "documents": [["Table: Final Outcome Determination Form - Cohort A (Active Pulmonary TB)"]],
+            "metadatas": [[{"table": "Final Outcome Determination Form - Cohort A (Active Pulmonary TB)"}]],
+        },
+        "status": {"documents": [[]], "metadatas": [[]]},
+        "Form 1A - Index Case Screening": {
+            "documents": [["Table: Form 1A - Index Case Screening"]],
+            "metadatas": [[{"table": "Form 1A - Index Case Screening"}]],
+        },
+    }
+    column_queries = {
+        "outcome": {
+            "documents": [["Column: OUTCOME", "Column: AGE"]],
+            "metadatas": [[
+                {"table": "Final Outcome Determination Form - Cohort A (Active Pulmonary TB)", "column": "OUTCOME"},
+                {"table": "Form 1A - Index Case Screening", "column": "AGE"},
+            ]],
+        },
+        "status": {"documents": [[]], "metadatas": [[]]},
+    }
+
+    class _TableCollection:
+        def query(self, **kwargs):
+            return table_queries[kwargs["query_texts"][0]]
+
+    class _ColumnCollection:
+        def query(self, **kwargs):
+            return column_queries[kwargs["query_texts"][0]]
+
+    llm = SimpleNamespace(invoke=lambda _: SimpleNamespace(content="outcome\nstatus"))
+    db_rag_service = service.DbRagService(llm=llm)
+    monkeypatch.setattr(db_rag_service, "_load_collections", lambda: (_TableCollection(), _ColumnCollection()))
+
+    context = db_rag_service.retrieve_context("final outcome")
+
+    assert "AGE" in context.column_names
+    assert "OUTCOME" in context.column_names
 
 
 class _LLM:

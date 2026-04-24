@@ -62,19 +62,49 @@ python -m streamlit run streamlit_app.py
 ### Activate Langraph
 In the pop up webpage, enter the API key in the field and click submit. If `.env` was set up previously, click submit directly.
 
-### DB-RAG setup
+### RAG DB
 If you want to use the DB-RAG feature, place the source files in this repo under:
 
 - `local_data/db_rag_source/reviewed_annotated_json_files/`
 - `local_data/db_rag_source/filtered_excel_files/`
 
-Then build the index from the repo root:
+Build the DB-RAG assets from the repo root:
 
 ```bash
 python -m db_rag.bootstrap --rebuild
 ```
 
-If `DB_RAG_EMBEDDING_MODEL` is not set yet, the rebuild flow prompts you to choose one and writes that selection to `.env`. Edit `.env` later to change `DB_RAG_EMBEDDING_MODEL`.
+Bootstrap behavior:
+
+- Every rebuild call prints the active `DB_RAG_EMBEDDING_MODEL` and tells you to edit `.env` if you want to switch models later.
+- If `DB_RAG_EMBEDDING_MODEL` is not set yet, the rebuild flow prompts you to choose one and writes that selection to `.env`.
+- If the selected model index already exists, bootstrap exits without rebuilding and explains how to switch models by editing `.env`.
+- If you want to rebuild that model anyway, for example because the source data changed, run:
+
+```bash
+python -m db_rag.bootstrap --rebuild --force
+```
+
+Relevant `.env` keys:
+
+```env
+DB_RAG_EMBEDDING_MODEL=OpenAI/text-embedding-3-small
+DB_RAG_OPENROUTER_API_KEY=...
+DB_RAG_OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+```
+
+For OpenAI embeddings, use:
+
+```env
+DB_RAG_EMBEDDING_MODEL=OpenAI/text-embedding-3-small
+```
+
+For Qwen embeddings through OpenRouter, use one of:
+
+```env
+DB_RAG_EMBEDDING_MODEL=Qwen/Qwen3-Embedding-4B
+DB_RAG_EMBEDDING_MODEL=Qwen/Qwen3-Embedding-8B
+```
 
 This creates the shared DuckDB asset plus model-specific DB-RAG index assets in `runtime/db_rag/`.
 

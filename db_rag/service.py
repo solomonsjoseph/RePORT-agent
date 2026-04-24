@@ -33,6 +33,12 @@ SUPPORTED_DB_RAG_EMBEDDING_MODELS = (
 DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 _DB_RAG_CONTEXT_FALLBACK_ANSWER = "I could not answer from the retrieved DB-RAG context."
 _DB_RAG_CONTEXT_FALLBACK_RATIONALE = "Invalid structured response from the model."
+PAIRED_FORMS = {
+    "Off Study Form for Cohort A (Form F99A)": "Form 1A - Index Case Screening",
+    "Off Study Form for Cohort B (Form 99B)": "Form 1B - Household Contact Screening Form",
+    "Final Outcome Determination Form - Cohort A (Active Pulmonary TB)": "Form 1A - Index Case Screening",
+    "Final Outcome Determination Form - Cohort B (Household Contacts)": "Form 1B - Household Contact Screening Form",
+}
 
 _DANGEROUS_SQL = ("DROP", "DELETE", "UPDATE", "INSERT", "ALTER", "TRUNCATE", "ATTACH", "DETACH", "CREATE", "REPLACE")
 
@@ -217,6 +223,7 @@ class OpenAIEmbeddingFunction:
 
         load_dotenv()
         resolved_model = model or resolve_db_rag_embedding_model()
+        api_model = resolved_model.split("/", 1)[1] if resolved_model.startswith("OpenAI/") else resolved_model
         client_kwargs: dict[str, str] = {}
         if resolved_model.startswith("Qwen/"):
             api_key = str(os.getenv("DB_RAG_OPENROUTER_API_KEY", "") or "").strip()
@@ -227,7 +234,7 @@ class OpenAIEmbeddingFunction:
                 os.getenv("DB_RAG_OPENROUTER_BASE_URL", DEFAULT_OPENROUTER_BASE_URL) or DEFAULT_OPENROUTER_BASE_URL
             ).strip()
         self.client = OpenAI(**client_kwargs)
-        self.model = resolved_model
+        self.model = api_model
 
     @staticmethod
     def name() -> str:
@@ -358,6 +365,25 @@ class DbRagService:
             column_context="\n\n".join(entry.text for entry in columns),
         )
 
+    def _inject_paired_forms(self, table_collection, merged_tables: dict[str, DbRagTableHit]) -> None:
+        for table_name in list(merged_tables):
+            paired = PAIRED_FORMS.get(table_name)
+            if not paired or paired in merged_tables:
+                continue
+            result = table_collection.query(
+                query_texts=[paired],
+                n_results=1,
+                include=["documents", "metadatas"],
+            )
+            metadatas = result.get("metadatas", [[]])
+            documents = result.get("documents", [[]])
+            if not metadatas or not metadatas[0]:
+                continue
+            merged_tables[paired] = DbRagTableHit(
+                table=metadatas[0][0]["table"],
+                text=documents[0][0],
+            )
+
     def retrieve_context(self, question: str) -> DbRagContext:
         table_collection, column_collection = self._load_collections()
         sub_queries = self.decompose_query(question)
@@ -374,6 +400,7 @@ class DbRagService:
             for document, metadata in zip(table_result["documents"][0], table_result["metadatas"][0]):
                 merged_tables.setdefault(metadata["table"], DbRagTableHit(table=metadata["table"], text=document))
 
+        self._inject_paired_forms(table_collection, merged_tables)
         selected_tables = set(merged_tables)
         merged_columns: dict[tuple[str, str], DbRagColumnHit] = {}
         for sub_query in sub_queries:
