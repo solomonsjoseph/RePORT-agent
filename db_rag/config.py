@@ -25,6 +25,10 @@ SUPPORTED_DB_RAG_EMBEDDING_MODELS = (
     "Qwen/Qwen3-Embedding-4B",
     "Qwen/Qwen3-Embedding-8B",
 )
+SUPPORTED_DB_RAG_RERANKER_MODELS = (
+    "Qwen/Qwen3-Reranker-4B",
+    "Qwen/Qwen3-Reranker-8B",
+)
 DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 

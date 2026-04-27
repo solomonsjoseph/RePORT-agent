@@ -6,6 +6,10 @@ from typing import Any
 
 from dotenv import load_dotenv
 
+from db_rag.config import (
+    SUPPORTED_DB_RAG_RERANKER_MODELS,
+    resolve_db_rag_embedding_model,
+)
 from llm_vllm import build_llm, detect_vllm_model
 from utils.streamlit_config import (
     DEFAULT_ANTHROPIC_MODEL,
@@ -94,6 +98,17 @@ def build_runtime_llm(
     )
 
 
+def resolve_query_llm_label(*, provider: str, model_name: str | None, base_url: str) -> str:
+    provider_labels = {
+        "openai": "OpenAI",
+        "anthropic": "Anthropic",
+        "vllm": "vLLM",
+    }
+    provider_label = provider_labels.get(provider, str(provider))
+    resolved_model = model_name or _default_model_name(provider, base_url)
+    return f"{provider_label} / {resolved_model}"
+
+
 def run_query(
     question: str,
     *,
@@ -103,6 +118,7 @@ def run_query(
     api_key: str = DEFAULT_API_KEY,
     temperature: float = DEFAULT_TEMPERATURE,
     top_p: float = DEFAULT_TOP_P,
+    reranker_model: str | None = None,
     rebuild_if_missing: bool = True,
     debug: bool = False,
 ) -> dict[str, Any]:
@@ -117,7 +133,10 @@ def run_query(
         top_p=top_p,
     )
     service = DbRagService(llm=llm)
-    return service.execute_sql_flow(question, debug=debug)
+    kwargs: dict[str, Any] = {"debug": debug}
+    if reranker_model is not None:
+        kwargs["reranker_model"] = reranker_model
+    return service.execute_sql_flow(question, **kwargs)
 
 
 def _print_debug(result: dict[str, Any]) -> None:
@@ -149,6 +168,29 @@ def _print_result(result: dict[str, Any]) -> None:
     if source_tables:
         print("\nSource tables:")
         print(", ".join(source_tables))
+
+
+def _print_runtime_banner(
+    *,
+    question: str,
+    indexing_model: str,
+    reranker_model: str | None,
+    provider: str,
+    model_name: str | None,
+    base_url: str,
+) -> None:
+    print("\nRunning quick test:")
+    print(f"Question: {question}")
+    print(f"Indexing model: {indexing_model}")
+    if reranker_model:
+        print(f"Reranker: {reranker_model}")
+    else:
+        print("Reranker: none (ChromaDB ordering)")
+        available = ", ".join(SUPPORTED_DB_RAG_RERANKER_MODELS)
+        print("To enable reranking, pass --reranker <model>.")
+        print(f"Available reranker models: {available}")
+    print(f"Query LLM: {resolve_query_llm_label(provider=provider, model_name=model_name, base_url=base_url)}")
+    print()
 
 
 def _resolve_query(args: argparse.Namespace) -> str:
@@ -209,6 +251,12 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print retrieval and SQL-generation details for the DB-RAG demo flow.",
     )
+    parser.add_argument(
+        "--reranker",
+        choices=SUPPORTED_DB_RAG_RERANKER_MODELS,
+        default=None,
+        help="Optional column reranker. Omit to preserve ChromaDB ordering.",
+    )
     return parser
 
 
@@ -219,6 +267,16 @@ def main(argv: list[str] | None = None) -> int:
 
     question = _resolve_query(args)
     api_key = _resolve_api_key(args.provider, args.api_key)
+    indexing_model = resolve_db_rag_embedding_model()
+
+    _print_runtime_banner(
+        question=question,
+        indexing_model=indexing_model,
+        reranker_model=args.reranker,
+        provider=args.provider,
+        model_name=args.model,
+        base_url=args.base_url,
+    )
 
     if not _runtime_assets_ready():
         print("DB-RAG assets are missing. Rebuilding runtime assets...")
@@ -231,6 +289,7 @@ def main(argv: list[str] | None = None) -> int:
         api_key=api_key,
         temperature=args.temperature,
         top_p=args.top_p,
+        reranker_model=args.reranker,
         rebuild_if_missing=not args.no_rebuild,
         debug=args.debug,
     )

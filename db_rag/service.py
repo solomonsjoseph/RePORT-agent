@@ -197,13 +197,20 @@ class DbRagService:
             column_context="\n\n".join(entry.text for entry in columns),
         )
 
-    def retrieve_context(self, question: str, *, debug: bool = False) -> DbRagContext:
+    def retrieve_context(
+        self,
+        question: str,
+        *,
+        debug: bool = False,
+        reranker_model: str | None = None,
+    ) -> DbRagContext:
         table_collection, column_collection = self._load_collections()
         table_rows, column_rows = retrieve_context_records(
             self.llm,
             table_collection,
             column_collection,
             question,
+            reranker_model=reranker_model,
             debug=debug,
         )
         tables = [DbRagTableHit(**entry) for entry in table_rows]
@@ -451,8 +458,14 @@ class DbRagService:
             source_tables=list(candidate.tables),
         )
 
-    def execute_sql_flow(self, question: str, *, debug: bool = False) -> dict[str, Any]:
-        context = self.retrieve_context(question, debug=debug)
+    def execute_sql_flow(
+        self,
+        question: str,
+        *,
+        debug: bool = False,
+        reranker_model: str | None = None,
+    ) -> dict[str, Any]:
+        context = self.retrieve_context(question, debug=debug, reranker_model=reranker_model)
         prepared = self.prepare_sql_candidate(
             question,
             ColumnSelectionCandidate(

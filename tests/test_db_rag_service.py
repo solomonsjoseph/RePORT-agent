@@ -107,6 +107,35 @@ def test_openai_embedding_function_normalizes_single_query_string(monkeypatch) -
     assert calls == [["household contact"]]
 
 
+def test_openai_embedding_function_retries_when_provider_returns_no_embedding_data(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    import db_rag.vectorstore as vectorstore
+
+    calls: list[list[str]] = []
+    responses = [
+        SimpleNamespace(data=None),
+        SimpleNamespace(data=[SimpleNamespace(embedding=[1.0, 2.0, 3.0])]),
+    ]
+
+    class _Embeddings:
+        def create(self, *, model, input):
+            calls.append(input)
+            return responses.pop(0)
+
+    class _OpenAI:
+        def __init__(self) -> None:
+            self.embeddings = _Embeddings()
+
+    monkeypatch.setattr(vectorstore, "load_dotenv", lambda: None, raising=False)
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=_OpenAI))
+
+    embedding_function = vectorstore.OpenAIEmbeddingFunction(model="OpenAI/text-embedding-3-small")
+
+    assert embedding_function.embed_query(input="household contact") == [[1.0, 2.0, 3.0]]
+    assert calls == [["household contact"], ["household contact"]]
+
+
 def test_resolve_embedding_model_requires_env_at_runtime(monkeypatch) -> None:
     _install_langchain_message_stubs(monkeypatch)
 
@@ -123,6 +152,18 @@ def test_resolve_embedding_model_requires_env_at_runtime(monkeypatch) -> None:
     assert readiness["ready"] is False
     assert "DB_RAG_EMBEDDING_MODEL" in readiness["message"]
     assert ".env" in readiness["message"]
+
+
+def test_supported_reranker_models_only_include_actual_rerankers(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    from db_rag import config
+
+    assert config.SUPPORTED_DB_RAG_RERANKER_MODELS == (
+        "Qwen/Qwen3-Reranker-4B",
+        "Qwen/Qwen3-Reranker-8B",
+    )
+    assert not hasattr(config, "DEFAULT_DB_RAG_RERANKER_BY_EMBEDDING")
 
 
 def test_openrouter_qwen_embedding_uses_openrouter_credentials(monkeypatch) -> None:
@@ -417,6 +458,58 @@ def test_retrieve_context_debug_prints_multiconcept_merge(monkeypatch, capsys) -
     assert "Merged tables:" in output
     assert "Merged column candidates:" in output
     assert "Form 1A - Index Case Screening" in context.table_names
+
+
+def test_retrieve_context_records_reranks_merged_columns(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    from db_rag import retrieval
+
+    table_queries = {
+        "gender": {"documents": [["Table: Form 1A"]], "metadatas": [[{"table": "Form 1A"}]]},
+        "outcome": {"documents": [["Table: Final Outcome"]], "metadatas": [[{"table": "Final Outcome"}]]},
+    }
+    column_queries = {
+        "gender": {
+            "documents": [["Column: SEX", "Column: AGE"]],
+            "metadatas": [[
+                {"table": "Form 1A", "column": "SEX"},
+                {"table": "Form 1A", "column": "AGE"},
+            ]],
+        },
+        "outcome": {
+            "documents": [["Column: OUTCOME", "Column: STATUS"]],
+            "metadatas": [[
+                {"table": "Final Outcome", "column": "OUTCOME"},
+                {"table": "Final Outcome", "column": "STATUS"},
+            ]],
+        },
+    }
+
+    class _Collection:
+        def __init__(self, result_map):
+            self.result_map = result_map
+
+        def query(self, **kwargs):
+            return self.result_map[kwargs["query_texts"][0]]
+
+    monkeypatch.setattr(retrieval, "decompose_query", lambda llm, question: ["gender", "outcome"])
+    monkeypatch.setattr(
+        retrieval,
+        "rerank_columns",
+        lambda query, column_hits, *, reranker_model, top_k, debug=False: list(reversed(column_hits)),
+    )
+
+    tables, columns = retrieval.retrieve_context_records(
+        object(),
+        _Collection(table_queries),
+        _Collection(column_queries),
+        "gender outcome question",
+        reranker_model="Qwen/Qwen3-Reranker-4B",
+    )
+
+    assert [entry["table"] for entry in tables] == ["Form 1A", "Final Outcome"]
+    assert [entry["column"] for entry in columns] == ["AGE", "SEX", "STATUS", "OUTCOME"]
 
 
 class _LLM:
@@ -816,7 +909,11 @@ def test_execute_sql_flow_debug_returns_sql_preparation_details(monkeypatch) -> 
     )
 
     db_rag_service = service.DbRagService(llm=object())
-    monkeypatch.setattr(db_rag_service, "retrieve_context", lambda question, debug=False: context)
+    monkeypatch.setattr(
+        db_rag_service,
+        "retrieve_context",
+        lambda question, debug=False, reranker_model="none": context,
+    )
     monkeypatch.setattr(
         db_rag_service,
         "prepare_sql_candidate",

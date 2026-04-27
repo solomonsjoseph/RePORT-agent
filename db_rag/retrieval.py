@@ -4,6 +4,8 @@ from typing import Any
 
 from utils.llm_response import coerce_text_content
 
+from .vectorstore import OpenAIReranker
+
 
 PAIRED_FORMS = {
     "Off Study Form for Cohort A (Form F99A)": "Form 1A - Index Case Screening",
@@ -11,6 +13,7 @@ PAIRED_FORMS = {
     "Final Outcome Determination Form - Cohort A (Active Pulmonary TB)": "Form 1A - Index Case Screening",
     "Final Outcome Determination Form - Cohort B (Household Contacts)": "Form 1B - Household Contact Screening Form",
 }
+RESERVED_PER_CONCEPT = 2
 
 
 def decompose_query(llm: Any, question: str) -> list[str]:
@@ -81,6 +84,34 @@ def retrieve_single_query(
     return tables, columns
 
 
+def rerank_columns(
+    query: str,
+    column_hits: list[dict[str, str]],
+    *,
+    reranker_model: str | None,
+    top_k: int,
+    debug: bool = False,
+) -> list[dict[str, str]]:
+    if not column_hits:
+        return []
+
+    if not reranker_model:
+        if debug:
+            print("\nReranking disabled, using ChromaDB ordering")
+        return column_hits[:top_k]
+
+    reranker = OpenAIReranker(model=reranker_model)
+    scores = reranker.rerank(query, [hit["text"] for hit in column_hits])
+    scored_hits = sorted(zip(scores, column_hits), key=lambda item: item[0], reverse=True)
+
+    if debug:
+        print("\nReranker scores (after reranking):")
+        for score, hit in scored_hits[:top_k]:
+            print(f"  score={score:.4f}  {hit['table']}.{hit['column']}")
+
+    return [hit for _, hit in scored_hits[:top_k]]
+
+
 def inject_paired_forms(merged_tables: dict[str, dict[str, str]], table_collection: Any, *, debug: bool = False) -> None:
     for table_name in list(merged_tables):
         paired_form = PAIRED_FORMS.get(table_name)
@@ -107,6 +138,7 @@ def retrieve_context_records(
     *,
     table_k: int = 4,
     column_k: int = 12,
+    reranker_model: str | None = None,
     debug: bool = False,
 ) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
     sub_queries = decompose_query(llm, question)
@@ -117,12 +149,19 @@ def retrieve_context_records(
     if len(sub_queries) <= 1:
         if debug:
             print("\nSingle-concept query, skipping decomposition")
-        return retrieve_single_query(
+        tables, columns = retrieve_single_query(
             table_collection,
             column_collection,
             question,
             table_k=table_k,
             column_k=column_k,
+            debug=debug,
+        )
+        return tables, rerank_columns(
+            question,
+            columns,
+            reranker_model=reranker_model,
+            top_k=column_k,
             debug=debug,
         )
 
@@ -144,6 +183,7 @@ def retrieve_context_records(
             print(f"  {entry['table']}")
 
     merged_columns: dict[tuple[str, str], dict[str, str]] = {}
+    column_to_subquery: dict[tuple[str, str], str] = {}
     for sub_query in sub_queries:
         column_result = column_collection.query(
             query_texts=[sub_query],
@@ -158,9 +198,47 @@ def retrieve_context_records(
                 key,
                 {"table": metadata["table"], "column": metadata["column"], "text": document},
             )
+            column_to_subquery.setdefault(key, sub_query)
     if debug:
         print(f"Merged column candidates: {len(merged_columns)}")
         for entry in merged_columns.values():
             print(f"  {entry['table']}.{entry['column']}")
 
-    return list(merged_tables.values()), list(merged_columns.values())
+    all_reranked = rerank_columns(
+        question,
+        list(merged_columns.values()),
+        reranker_model=reranker_model,
+        top_k=len(merged_columns),
+        debug=debug,
+    )
+
+    reserved: dict[tuple[str, str], dict[str, str]] = {}
+    for sub_query in sub_queries:
+        sub_query_hits = [
+            hit
+            for hit in all_reranked
+            if column_to_subquery.get((hit["table"], hit["column"])) == sub_query
+        ]
+        for hit in sub_query_hits[:RESERVED_PER_CONCEPT]:
+            reserved[(hit["table"], hit["column"])] = hit
+
+    final_columns = list(reserved.values())
+    seen = set(reserved)
+    for hit in all_reranked:
+        if len(final_columns) >= column_k:
+            break
+        key = (hit["table"], hit["column"])
+        if key in seen:
+            continue
+        final_columns.append(hit)
+        seen.add(key)
+
+    if debug:
+        print(f"\nFinal columns ({len(final_columns)}) with guaranteed concept coverage:")
+        for hit in final_columns:
+            key = (hit["table"], hit["column"])
+            source = column_to_subquery.get(key, "?")
+            marker = " [reserved]" if key in reserved else ""
+            print(f"  {hit['table']}.{hit['column']} (from: {source}){marker}")
+
+    return list(merged_tables.values()), final_columns

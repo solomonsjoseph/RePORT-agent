@@ -13,6 +13,15 @@ def test_quick_test_parser_accepts_debug_flag():
     assert args.debug is True
 
 
+def test_quick_test_parser_leaves_reranker_unset_by_default():
+    from db_rag import quick_test
+
+    parser = quick_test._build_parser()
+    args = parser.parse_args(["what columns track age"])
+
+    assert args.reranker is None
+
+
 def test_run_query_passes_debug_to_service(monkeypatch):
     from db_rag import quick_test
 
@@ -36,6 +45,58 @@ def test_run_query_passes_debug_to_service(monkeypatch):
     assert result == {"answer": "ok"}
     assert calls["question"] == "age and outcome"
     assert calls["debug"] is True
+
+
+def test_main_prints_runtime_banner_without_reranker(monkeypatch, capsys):
+    from db_rag import quick_test
+
+    monkeypatch.setattr(quick_test, "load_dotenv", lambda: None)
+    monkeypatch.setattr(quick_test, "_runtime_assets_ready", lambda: True)
+    monkeypatch.setattr(quick_test, "resolve_db_rag_embedding_model", lambda: "Qwen/Qwen3-Embedding-4B")
+    monkeypatch.setattr(quick_test, "_default_model_name", lambda provider, base_url: "gpt-5.4", raising=False)
+    monkeypatch.setattr(
+        quick_test,
+        "run_query",
+        lambda *args, **kwargs: {"answer": "ok", "sql": "", "dataframe": None, "source_tables": []},
+    )
+
+    exit_code = quick_test.main(["what columns track age"])
+    output = capsys.readouterr().out
+
+    assert exit_code == 0
+    assert "Running quick test:" in output
+    assert "Question: what columns track age" in output
+    assert "Indexing model: Qwen/Qwen3-Embedding-4B" in output
+    assert "Reranker: none (ChromaDB ordering)" in output
+    assert "To enable reranking, pass --reranker <model>." in output
+    assert "Available reranker models: Qwen/Qwen3-Reranker-4B, Qwen/Qwen3-Reranker-8B" in output
+    assert "Query LLM: OpenAI / gpt-5.4" in output
+
+
+def test_main_prints_runtime_banner_with_reranker(monkeypatch, capsys):
+    from db_rag import quick_test
+
+    monkeypatch.setattr(quick_test, "load_dotenv", lambda: None)
+    monkeypatch.setattr(quick_test, "_runtime_assets_ready", lambda: True)
+    monkeypatch.setattr(quick_test, "resolve_db_rag_embedding_model", lambda: "Qwen/Qwen3-Embedding-4B")
+    monkeypatch.setattr(quick_test, "_default_model_name", lambda provider, base_url: "gpt-5.4", raising=False)
+    monkeypatch.setattr(
+        quick_test,
+        "run_query",
+        lambda *args, **kwargs: {"answer": "ok", "sql": "", "dataframe": None, "source_tables": []},
+    )
+
+    exit_code = quick_test.main(
+        ["what columns track age", "--reranker", "Qwen/Qwen3-Reranker-4B", "--provider", "openai"]
+    )
+    output = capsys.readouterr().out
+
+    assert exit_code == 0
+    assert "Running quick test:" in output
+    assert "Indexing model: Qwen/Qwen3-Embedding-4B" in output
+    assert "Reranker: Qwen/Qwen3-Reranker-4B" in output
+    assert "To enable reranking, pass --reranker <model>." not in output
+    assert "Query LLM: OpenAI / gpt-5.4" in output
 
 
 def test_print_debug_shows_sql_sections(capsys):

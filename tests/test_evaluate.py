@@ -15,6 +15,38 @@ def test_evaluate_parser_accepts_benchmark_and_debug():
     assert args.debug is True
 
 
+def test_resolve_output_tag_includes_reranker():
+    from db_rag.benchmark import evaluate
+
+    args = type(
+        "_Args",
+        (),
+        {
+            "indexing_model": "Qwen/Qwen3-Embedding-4B",
+            "reranker": "Qwen/Qwen3-Reranker-4B",
+            "provider": "openai",
+            "model": None,
+        },
+    )()
+
+    assert evaluate.resolve_output_tag(args) == "Qwen_Qwen3-Embedding-4B__Qwen_Qwen3-Reranker-4B__openai_default"
+
+
+def test_resolve_reranker_model_requires_explicit_choice():
+    from db_rag.benchmark import evaluate
+
+    args = type(
+        "_Args",
+        (),
+        {
+            "indexing_model": "Qwen/Qwen3-Embedding-4B",
+            "reranker": None,
+        },
+    )()
+
+    assert evaluate.resolve_reranker_model(args) is None
+
+
 def test_evaluate_main_requires_indexing_model(capsys):
     from db_rag.benchmark import evaluate
 
@@ -85,6 +117,74 @@ def test_evaluate_retrieval_computes_summary(tmp_path):
     assert details.iloc[1]["table_hit"] == "N/A"
 
 
+def test_evaluate_retrieval_prints_question_progress(tmp_path, capsys):
+    from db_rag.benchmark import evaluate
+
+    benchmark = tmp_path / "benchmark.csv"
+    benchmark.write_text(
+        "\n".join(
+            [
+                "question,expected_tables,expected_columns,difficulty",
+                "Question one,Form 1A,AGE,easy",
+                "Question two,Form 1A,AGE,easy",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    def retriever(question: str, *, debug: bool = False):
+        return (
+            [{"table": "Form 1A", "text": "table context"}],
+            [{"table": "Form 1A", "column": "AGE", "text": "age column"}],
+        )
+
+    evaluate.evaluate_retrieval(benchmark, retriever=retriever)
+
+    output = capsys.readouterr().out
+    assert "Evaluating question [1/2]" in output
+    assert "Evaluating question [2/2]" in output
+
+
+def test_evaluate_retrieval_marks_failed_question_as_na_and_continues(tmp_path):
+    from db_rag.benchmark import evaluate
+
+    benchmark = tmp_path / "benchmark.csv"
+    benchmark.write_text(
+        "\n".join(
+            [
+                "question,expected_tables,expected_columns,difficulty",
+                "Broken question,Form 1A,AGE,easy",
+                "Working question,Form 1A,AGE,easy",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    def retriever(question: str, *, debug: bool = False):
+        if question == "Broken question":
+            raise RuntimeError("temporary embedding failure")
+        return (
+            [{"table": "Form 1A", "text": "table context"}],
+            [{"table": "Form 1A", "column": "AGE", "text": "age column"}],
+        )
+
+    summary, details = evaluate.evaluate_retrieval(benchmark, retriever=retriever)
+
+    assert summary["total_questions"] == 2
+    assert summary["scored_questions"] == 1
+    assert summary["unanswerable"] == 0
+    assert summary["errored_questions"] == 1
+    assert summary["table_recall@k"] == 1.0
+    assert summary["column_recall@k"] == 1.0
+    assert details.iloc[0]["table_hit"] == "N/A"
+    assert details.iloc[0]["table_rank"] == "N/A"
+    assert details.iloc[0]["column_recall"] == "N/A"
+    assert details.iloc[0]["column_precision"] == "N/A"
+    assert details.iloc[0]["column_mrr"] == "N/A"
+    assert details.iloc[0]["error"] == "temporary embedding failure"
+    assert details.iloc[1]["table_hit"] is True
+
+
 def test_main_writes_summary_and_detail_files(monkeypatch, tmp_path, capsys):
     from db_rag.benchmark import evaluate
 
@@ -110,12 +210,6 @@ def test_main_writes_summary_and_detail_files(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(evaluate, "resolve_output_tag", lambda args: "test-tag")
     monkeypatch.setattr(evaluate, "_default_model_name", lambda provider, base_url: "gpt-4.1-mini", raising=False)
     monkeypatch.setattr(evaluate, "ensure_prebuilt_assets", lambda indexing_model: None)
-    monkeypatch.setattr(
-        evaluate.db_rag_config,
-        "resolve_db_rag_embedding_model",
-        lambda: "Qwen/Qwen3-Embedding-4B",
-    )
-
     exit_code = evaluate.main(
         [
             "--benchmark",
@@ -128,6 +222,9 @@ def test_main_writes_summary_and_detail_files(monkeypatch, tmp_path, capsys):
 
     assert exit_code == 0
     assert "Indexing model: Qwen/Qwen3-Embedding-4B" in output
+    assert "Reranker: none (ChromaDB ordering)" in output
+    assert "To enable reranking, pass --reranker <model>." in output
+    assert "Available reranker models: Qwen/Qwen3-Reranker-4B, Qwen/Qwen3-Reranker-8B" in output
     assert "Query LLM: OpenAI / gpt-4.1-mini" in output
     assert "Embedding:" not in output
     assert "Provider:" not in output
@@ -140,6 +237,51 @@ def test_main_writes_summary_and_detail_files(monkeypatch, tmp_path, capsys):
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
     assert summary["table_recall@k"] == 1.0
     assert summary["column_recall@k"] == 1.0
+    assert summary["reranker_model"] is None
+
+
+def test_main_prints_selected_reranker_without_no_rerank_hint(monkeypatch, tmp_path, capsys):
+    from db_rag.benchmark import evaluate
+
+    benchmark = tmp_path / "benchmark.csv"
+    benchmark.write_text(
+        "\n".join(
+            [
+                "question,expected_tables,expected_columns,difficulty",
+                "Which fields track age?,Form 1A,AGE,easy",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    def retriever(question: str, *, debug: bool = False):
+        return (
+            [{"table": "Form 1A", "text": "table context"}],
+            [{"table": "Form 1A", "column": "AGE", "text": "age column"}],
+        )
+
+    monkeypatch.setattr(evaluate, "build_runtime_retriever", lambda args: retriever)
+    monkeypatch.setattr(evaluate, "RESULTS_DIR", tmp_path / "results")
+    monkeypatch.setattr(evaluate, "resolve_output_tag", lambda args: "test-tag")
+    monkeypatch.setattr(evaluate, "_default_model_name", lambda provider, base_url: "gpt-4.1-mini", raising=False)
+    monkeypatch.setattr(evaluate, "ensure_prebuilt_assets", lambda indexing_model: None)
+
+    exit_code = evaluate.main(
+        [
+            "--benchmark",
+            str(benchmark),
+            "--indexing-model",
+            "Qwen/Qwen3-Embedding-4B",
+            "--reranker",
+            "Qwen/Qwen3-Reranker-4B",
+        ]
+    )
+    output = capsys.readouterr().out
+
+    assert exit_code == 0
+    assert "Reranker: Qwen/Qwen3-Reranker-4B" in output
+    assert "To enable reranking, pass --reranker <model>." not in output
+    assert "Available reranker models:" not in output
 
 
 def test_build_runtime_retriever_uses_current_db_rag_runtime(monkeypatch):
@@ -165,12 +307,21 @@ def test_build_runtime_retriever_uses_current_db_rag_runtime(monkeypatch):
         calls["embedding_model"] = model
         return "embedding-function"
 
-    def fake_retrieve_context_records(llm, table_collection, column_collection, question, *, debug=False):
+    def fake_retrieve_context_records(
+        llm,
+        table_collection,
+        column_collection,
+        question,
+        *,
+        reranker_model="none",
+        debug=False,
+    ):
         calls["retrieval_args"] = {
             "llm": llm,
             "table_collection": table_collection,
             "column_collection": column_collection,
             "question": question,
+            "reranker_model": reranker_model,
             "debug": debug,
         }
         return ([{"table": "Form 1A", "text": "table context"}], [])
@@ -194,6 +345,7 @@ def test_build_runtime_retriever_uses_current_db_rag_runtime(monkeypatch):
         "table_collection": "table_summaries-collection",
         "column_collection": "column_chunks-collection",
         "question": "age",
+        "reranker_model": None,
         "debug": True,
     }
 
