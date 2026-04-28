@@ -223,3 +223,44 @@ def test_clarification_node_resumes_rag_db_qa_with_pending_question_context() ->
     assert captured["reranker_model"] == "cohere/rerank-v3.5"
     assert "awaiting_user_clarification" not in captured["state"]["meta"]
     assert updated["output"]["qa_response"] == "I extracted the requested subset."
+
+
+def test_clarification_node_resumes_rag_db_extraction_opt_in_with_refinement() -> None:
+    clarification = _fresh_clarification_module()
+    captured: dict[str, object] = {}
+
+    def _fake_rag_db_qa_node(state, llm, *, provider, service, question_override=None, reranker_model=None):
+        captured["question_override"] = question_override
+        captured["meta"] = state["meta"]
+        return {
+            **state,
+            "agents": {"rag_db_qa": {"status": "done"}},
+            "output": {"qa_response": "ok"},
+        }
+
+    clarification.rag_db_qa_node = _fake_rag_db_qa_node
+
+    state = {
+        "messages": [
+            _HumanMessage("subset age and final outcome"),
+            _AIMessage("Would you like me to identify the tables and columns suitable for this extraction?"),
+            _HumanMessage("yes, but only among confirmed index cases"),
+        ],
+        "meta": {
+            "awaiting_user_clarification": True,
+            "clarification_return_node": "rag_db_qa",
+            "clarification_kind": "rag_db_extraction_opt_in",
+            "pending_question": "Would you like me to identify the tables and columns suitable for this extraction?",
+        },
+        "agents": {"rag_db_qa": {"active_intent": {"goal_text": "subset age and final outcome"}}},
+        "output": {},
+    }
+
+    clarification.clarification_node(
+        state,
+        llm=object(),
+        context={"provider": "openai", "db_rag_service": object(), "db_rag_reranker_model": None},
+    )
+
+    assert captured["question_override"] == "yes, but only among confirmed index cases"
+    assert "awaiting_user_clarification" not in captured["meta"]

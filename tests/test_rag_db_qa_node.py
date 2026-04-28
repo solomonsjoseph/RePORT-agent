@@ -441,6 +441,76 @@ def test_rag_db_sql_needed_request_creates_column_review_without_sql() -> None:
     assert calls == ["retrieve_context", "answer_from_context", "prepare_column_selection"]
 
 
+def test_rag_db_sql_needed_request_asks_opt_in_before_column_review() -> None:
+    rag = _fresh_rag_module()
+
+    class _Service:
+        def readiness(self):
+            return {"ready": True, "message": ""}
+
+        def retrieve_context(self, question, *, reranker_model=None):
+            return SimpleNamespace(
+                tables=[SimpleNamespace(table="Form 2A - INDEX CASE: Clinical/Demographic Form", text="table summary")],
+                columns=[
+                    SimpleNamespace(
+                        table="Form 2A - INDEX CASE: Clinical/Demographic Form",
+                        column="IS_AGE",
+                        text="age summary",
+                    ),
+                    SimpleNamespace(
+                        table="Form 2A - INDEX CASE: Clinical/Demographic Form",
+                        column="IS_SEX",
+                        text="sex summary",
+                    ),
+                ],
+                table_names=["Form 2A - INDEX CASE: Clinical/Demographic Form"],
+                column_names=["IS_AGE", "IS_SEX"],
+            )
+
+        def answer_from_context(self, question, context):
+            return SimpleNamespace(
+                answer="This request needs row-level extraction. Would you like me to identify the tables and columns suitable for this extraction?",
+                needs_sql=True,
+                rationale="subset request",
+                relevant_tables=context.table_names,
+                relevant_columns=context.column_names,
+            )
+
+        def resolve_intent(self, question, context, prior_intent=None):
+            return SimpleNamespace(
+                intent_id="intent-1",
+                source_question=question,
+                goal_text="subset age and sex among index cases",
+                mode="extraction",
+                population="index cases",
+                requested_fields=["age", "sex"],
+                filters=[],
+                required_tables=[],
+                required_columns=[],
+                excluded_tables=[],
+                excluded_columns=[],
+                feedback_history=[],
+                status="active",
+            )
+
+    state = {
+        "messages": [_HumanMessage("Subset age and sex among index cases")],
+        "output": {},
+        "observations": [],
+        "meta": {},
+        "agents": {"rag_db_qa": {}},
+        "artifacts": {"datasets": {}},
+    }
+
+    updated = rag.rag_db_qa_node(state, llm=object(), provider="openai", service=_Service())
+
+    assert updated["agents"]["rag_db_qa"]["thread_status"] == "awaiting_extraction_opt_in"
+    assert updated["agents"]["rag_db_qa"]["pending_extraction_opt_in"]["intent_id"] == "intent-1"
+    assert "pending_column_review" not in updated["agents"]["rag_db_qa"]
+    assert updated["meta"]["clarification_kind"] == "rag_db_extraction_opt_in"
+    assert "identify the tables and columns suitable for this extraction" in updated["output"]["qa_response"]
+
+
 def test_rag_db_approved_column_review_generates_sql_candidate() -> None:
     rag = _fresh_rag_module()
 
