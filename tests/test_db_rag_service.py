@@ -154,6 +154,14 @@ def test_resolve_embedding_model_requires_env_at_runtime(monkeypatch) -> None:
     assert ".env" in readiness["message"]
 
 
+def test_supported_embedding_models_include_voyage_large(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    from db_rag import config
+
+    assert "voyage-4-large" in config.SUPPORTED_DB_RAG_EMBEDDING_MODELS
+
+
 def test_supported_reranker_models_only_include_actual_rerankers(monkeypatch) -> None:
     _install_langchain_message_stubs(monkeypatch)
 
@@ -163,8 +171,17 @@ def test_supported_reranker_models_only_include_actual_rerankers(monkeypatch) ->
         "cohere/rerank-v3.5",
         "cohere/rerank-4-fast",
         "cohere/rerank-4-pro",
+        "rerank-2.5",
     )
     assert not hasattr(config, "DEFAULT_DB_RAG_RERANKER_BY_EMBEDDING")
+
+
+def test_supported_reranker_models_include_voyage_rerank(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    from db_rag import config
+
+    assert "rerank-2.5" in config.SUPPORTED_DB_RAG_RERANKER_MODELS
 
 
 def test_resolve_db_rag_reranker_model_returns_none_when_unset(monkeypatch) -> None:
@@ -190,6 +207,18 @@ def test_resolve_db_rag_reranker_model_validates_supported_values(monkeypatch) -
         config.resolve_db_rag_reranker_model()
 
 
+def test_resolve_db_rag_models_accept_voyage_values(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    from db_rag import config
+
+    monkeypatch.setenv("DB_RAG_EMBEDDING_MODEL", "voyage-4-large")
+    monkeypatch.setenv("DB_RAG_RERANKER_MODEL", "rerank-2.5")
+
+    assert config.resolve_db_rag_embedding_model() == "voyage-4-large"
+    assert config.resolve_db_rag_reranker_model() == "rerank-2.5"
+
+
 def test_openrouter_reranker_uses_openrouter_credentials(monkeypatch) -> None:
     _install_langchain_message_stubs(monkeypatch)
 
@@ -205,6 +234,33 @@ def test_openrouter_reranker_uses_openrouter_credentials(monkeypatch) -> None:
     assert reranker.config_model == "cohere/rerank-v3.5"
     assert reranker.api_key == "or-key"
     assert reranker.base_url == "https://openrouter.ai/api/v1"
+
+
+def test_voyage_reranker_uses_voyage_client(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    import db_rag.vectorstore as vectorstore
+
+    class _VoyageResultItem:
+        def __init__(self, index, relevance_score):
+            self.index = index
+            self.relevance_score = relevance_score
+
+    class _VoyageClient:
+        def rerank(self, query, documents, model, top_k):
+            assert query == "age among index cases"
+            assert documents == ["doc1", "doc2"]
+            assert model == "rerank-2.5"
+            assert top_k == 2
+            return SimpleNamespace(results=[_VoyageResultItem(index=1, relevance_score=0.8)])
+
+    monkeypatch.setattr(vectorstore, "load_dotenv", lambda: None, raising=False)
+    monkeypatch.setitem(sys.modules, "voyageai", SimpleNamespace(Client=lambda api_key=None: _VoyageClient()))
+    monkeypatch.setenv("VOYAGE_API_KEY", "voyage-key")
+
+    reranker = vectorstore.OpenAIReranker(model="rerank-2.5")
+
+    assert reranker.rerank("age among index cases", ["doc1", "doc2"]) == [0.0, 0.8]
 
 
 def test_openrouter_qwen_embedding_uses_openrouter_credentials(monkeypatch) -> None:
@@ -230,6 +286,29 @@ def test_openrouter_qwen_embedding_uses_openrouter_credentials(monkeypatch) -> N
     assert embedding_function.config_model == "Qwen/Qwen3-Embedding-4B"
     assert captured["api_key"] == "or-key"
     assert captured["base_url"] == "https://openrouter.ai/api/v1"
+
+
+def test_voyage_embedding_function_uses_voyage_client(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    import db_rag.vectorstore as vectorstore
+
+    calls: list[tuple[list[str], str, str]] = []
+
+    class _VoyageClient:
+        def embed(self, texts, model, input_type):
+            calls.append((list(texts), model, input_type))
+            return SimpleNamespace(embeddings=[[0.1, 0.2, 0.3] for _ in texts])
+
+    monkeypatch.setattr(vectorstore, "load_dotenv", lambda: None, raising=False)
+    monkeypatch.setitem(sys.modules, "voyageai", SimpleNamespace(Client=lambda api_key=None: _VoyageClient()))
+    monkeypatch.setenv("VOYAGE_API_KEY", "voyage-key")
+
+    embedding_function = vectorstore.OpenAIEmbeddingFunction(model="voyage-4-large")
+
+    assert embedding_function.config_model == "voyage-4-large"
+    assert embedding_function(["index case"]) == [[0.1, 0.2, 0.3]]
+    assert calls == [(["index case"], "voyage-4-large", "document")]
 
 
 def test_openrouter_qwen_8b_embedding_uses_openrouter_credentials(monkeypatch) -> None:
