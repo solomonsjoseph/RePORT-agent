@@ -733,6 +733,82 @@ def test_prepare_column_selection_uses_feedback_history(monkeypatch) -> None:
     assert "Include gender explicitly." in message_text
 
 
+def test_resolve_intent_returns_extraction_intent(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    from db_rag import service
+
+    class _LLM:
+        def invoke(self, _messages):
+            return SimpleNamespace(
+                content=json.dumps(
+                    {
+                        "intent_id": "intent-1",
+                        "goal_text": "subset age and sex among index cases",
+                        "mode": "extraction",
+                        "population": "index cases",
+                        "requested_fields": ["age", "sex"],
+                        "filters": [],
+                    }
+                )
+            )
+
+    db_rag_service = service.DbRagService(llm=_LLM())
+    context = service.DbRagContext(
+        tables=[service.DbRagTableHit(table="Form 2A - INDEX CASE: Clinical/Demographic Form", text="table summary")],
+        columns=[
+            service.DbRagColumnHit(
+                table="Form 2A - INDEX CASE: Clinical/Demographic Form",
+                column="IS_AGE",
+                text="age summary",
+            )
+        ],
+    )
+
+    intent = db_rag_service.resolve_intent("subset age and sex among index cases", context)
+
+    assert intent.intent_id == "intent-1"
+    assert intent.mode == "extraction"
+    assert intent.population == "index cases"
+    assert intent.requested_fields == ["age", "sex"]
+
+
+def test_validate_selection_against_intent_rejects_excluded_table(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    from db_rag import service
+
+    db_rag_service = service.DbRagService(llm=object())
+    intent = service.DbRagIntent(
+        intent_id="intent-1",
+        source_question="subset age",
+        goal_text="subset age",
+        mode="extraction",
+        population=None,
+        requested_fields=["age"],
+        filters=[],
+        required_tables=[],
+        required_columns=[],
+        excluded_tables=["Form 13 - TB Treatment Compliance Form"],
+        excluded_columns=[],
+        feedback_history=[],
+        status="active",
+    )
+
+    candidate = service.ColumnSelectionCandidate(
+        selection_id="sel-1",
+        question="subset age",
+        tables=["Form 13 - TB Treatment Compliance Form"],
+        columns=[{"table": "Form 13 - TB Treatment Compliance Form", "column": "EXTRPERI", "description": ""}],
+        rationale="bad selection",
+    )
+
+    ok, error_message = db_rag_service.validate_selection_against_intent(candidate, intent)
+
+    assert ok is False
+    assert "excluded table" in error_message.lower()
+
+
 def test_prepare_column_selection_filters_invented_pairs(monkeypatch) -> None:
     _install_langchain_message_stubs(monkeypatch)
 

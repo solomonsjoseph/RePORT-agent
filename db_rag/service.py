@@ -82,6 +82,23 @@ class DbRagQaAnswer:
 
 
 @dataclass
+class DbRagIntent:
+    intent_id: str
+    source_question: str
+    goal_text: str
+    mode: str
+    population: str | None
+    requested_fields: list[str] = field(default_factory=list)
+    filters: list[str] = field(default_factory=list)
+    required_tables: list[str] = field(default_factory=list)
+    required_columns: list[str] = field(default_factory=list)
+    excluded_tables: list[str] = field(default_factory=list)
+    excluded_columns: list[str] = field(default_factory=list)
+    feedback_history: list[dict[str, str]] = field(default_factory=list)
+    status: str = "active"
+
+
+@dataclass
 class ColumnSelectionCandidate:
     selection_id: str
     question: str
@@ -407,6 +424,64 @@ class DbRagService:
             relevant_tables=context.table_names,
             relevant_columns=context.column_names,
         )
+
+    def resolve_intent(
+        self,
+        question: str,
+        context: DbRagContext,
+        prior_intent: dict[str, Any] | None = None,
+    ) -> DbRagIntent:
+        from langchain_core.messages import HumanMessage, SystemMessage
+
+        response = self.llm.invoke(
+            [
+                SystemMessage(
+                    content=(
+                        "You are normalizing a RePORT DB-RAG request into a structured intent. "
+                        "Return only JSON with keys intent_id, goal_text, mode, population, requested_fields, filters."
+                    )
+                ),
+                HumanMessage(
+                    content=(
+                        f"Question:\n{question}\n\n"
+                        f"Table context:\n{context.table_context or 'none'}\n\n"
+                        f"Column context:\n{context.column_context or 'none'}\n\n"
+                        f"Prior intent:\n{json.dumps(prior_intent or {}, indent=2, sort_keys=True)}"
+                    )
+                ),
+            ]
+        )
+        parsed = parse_json_object(coerce_text_content(getattr(response, "content", ""))) or {}
+        return DbRagIntent(
+            intent_id=str(parsed.get("intent_id") or default_selection_id(question, context.table_names, [], [])),
+            source_question=question,
+            goal_text=str(parsed.get("goal_text") or question).strip(),
+            mode=str(parsed.get("mode") or "metadata").strip(),
+            population=str(parsed.get("population") or "").strip() or None,
+            requested_fields=[str(value).strip() for value in list(parsed.get("requested_fields") or []) if str(value).strip()],
+            filters=[str(value).strip() for value in list(parsed.get("filters") or []) if str(value).strip()],
+        )
+
+    def validate_selection_against_intent(
+        self,
+        candidate: ColumnSelectionCandidate,
+        intent: DbRagIntent,
+    ) -> tuple[bool, str]:
+        selected_tables = set(candidate.tables)
+        selected_columns = {f'{entry["table"]}.{entry["column"]}' for entry in candidate.columns}
+        for table in intent.required_tables:
+            if table not in selected_tables:
+                return False, f"Missing required table: {table}"
+        for column in intent.required_columns:
+            if column not in selected_columns:
+                return False, f"Missing required column: {column}"
+        for table in intent.excluded_tables:
+            if table in selected_tables:
+                return False, f"Selection includes excluded table: {table}"
+        for column in intent.excluded_columns:
+            if column in selected_columns:
+                return False, f"Selection includes excluded column: {column}"
+        return True, ""
 
     def prepare_column_selection(
         self,
