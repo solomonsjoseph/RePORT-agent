@@ -15,21 +15,48 @@ def test_evaluate_parser_accepts_benchmark_and_debug():
     assert args.debug is True
 
 
-def test_resolve_output_tag_includes_reranker():
+def test_resolve_output_tag_includes_labels_and_resolved_default_model(monkeypatch):
     from db_rag.benchmark import evaluate
 
+    monkeypatch.setattr(evaluate, "_default_model_name", lambda provider, base_url: "gpt-5.4", raising=False)
     args = type(
         "_Args",
         (),
         {
             "indexing_model": "Qwen/Qwen3-Embedding-4B",
-            "reranker": "Qwen/Qwen3-Reranker-4B",
+            "reranker": "cohere/rerank-v3.5",
             "provider": "openai",
             "model": None,
+            "base_url": "https://example.com/v1",
         },
     )()
 
-    assert evaluate.resolve_output_tag(args) == "Qwen_Qwen3-Embedding-4B__Qwen_Qwen3-Reranker-4B__openai_default"
+    assert (
+        evaluate.resolve_output_tag(args)
+        == "embed=Qwen_Qwen3-Embedding-4B__reranker=cohere_rerank-v3.5__query_llm=openai_gpt-5.4"
+    )
+
+
+def test_resolve_output_tag_marks_disabled_reranker(monkeypatch):
+    from db_rag.benchmark import evaluate
+
+    monkeypatch.setattr(evaluate, "_default_model_name", lambda provider, base_url: "gpt-5.4", raising=False)
+    args = type(
+        "_Args",
+        (),
+        {
+            "indexing_model": "Qwen/Qwen3-Embedding-4B",
+            "reranker": None,
+            "provider": "openai",
+            "model": None,
+            "base_url": "https://example.com/v1",
+        },
+    )()
+
+    assert (
+        evaluate.resolve_output_tag(args)
+        == "embed=Qwen_Qwen3-Embedding-4B__reranker=disabled__query_llm=openai_gpt-5.4"
+    )
 
 
 def test_resolve_reranker_model_requires_explicit_choice():
@@ -224,13 +251,14 @@ def test_main_writes_summary_and_detail_files(monkeypatch, tmp_path, capsys):
     assert "Indexing model: Qwen/Qwen3-Embedding-4B" in output
     assert "Reranker: none (ChromaDB ordering)" in output
     assert "To enable reranking, pass --reranker <model>." in output
-    assert "Available reranker models: Qwen/Qwen3-Reranker-4B, Qwen/Qwen3-Reranker-8B" in output
+    assert "Available reranker models: cohere/rerank-v3.5, cohere/rerank-4-fast, cohere/rerank-4-pro" in output
     assert "Query LLM: OpenAI / gpt-4.1-mini" in output
     assert "Embedding:" not in output
     assert "Provider:" not in output
     assert "Model:" not in output
-    detail_path = evaluate.RESULTS_DIR / "eval_detail__test-tag.csv"
-    summary_path = evaluate.RESULTS_DIR / "eval_summary__test-tag.json"
+    run_dir = evaluate.RESULTS_DIR / "test-tag"
+    detail_path = run_dir / "details.csv"
+    summary_path = run_dir / "summary.json"
     assert detail_path.exists()
     assert summary_path.exists()
 
@@ -273,13 +301,13 @@ def test_main_prints_selected_reranker_without_no_rerank_hint(monkeypatch, tmp_p
             "--indexing-model",
             "Qwen/Qwen3-Embedding-4B",
             "--reranker",
-            "Qwen/Qwen3-Reranker-4B",
+            "cohere/rerank-v3.5",
         ]
     )
     output = capsys.readouterr().out
 
     assert exit_code == 0
-    assert "Reranker: Qwen/Qwen3-Reranker-4B" in output
+    assert "Reranker: cohere/rerank-v3.5" in output
     assert "To enable reranking, pass --reranker <model>." not in output
     assert "Available reranker models:" not in output
 

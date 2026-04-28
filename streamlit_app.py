@@ -18,8 +18,13 @@ from UI.ui_before_run_review import ui_before_run_review
 from UI.ui_after_error_review import ui_after_error_review
 from UI.ui_final_review import ui_final_review
 from UI.ui_human_review_rag_db_column_selection import ui_human_review_rag_db_column_selection
+from UI.ui_human_review_rag_db_sql_execution import ui_human_review_rag_db_sql_execution
 from UI.load_openai import load_openai
 from UI.load_anthropic import load_anthropic
+from db_rag.config import (
+    resolve_db_rag_embedding_model,
+    resolve_db_rag_reranker_model,
+)
 from utils.openai_models import list_supported_openai_chat_models
 from utils.execution_mode import (
     apply_execution_mode,
@@ -86,6 +91,20 @@ default_openai_model = os.getenv("OPENAI_MODEL", DEFAULT_OPENAI_MODEL)
 default_anthropic_model = os.getenv("ANTHROPIC_MODEL", DEFAULT_ANTHROPIC_MODEL)
 openai_env_key = os.getenv("OPENAI_API_KEY", "")
 anthropic_env_key = os.getenv("ANTHROPIC_API_KEY", "")
+
+try:
+    active_db_rag_embedding_model = resolve_db_rag_embedding_model()
+    db_rag_embedding_error = ""
+except Exception as exc:
+    active_db_rag_embedding_model = None
+    db_rag_embedding_error = str(exc)
+
+try:
+    active_db_rag_reranker_model = resolve_db_rag_reranker_model()
+    db_rag_reranker_error = ""
+except Exception as exc:
+    active_db_rag_reranker_model = None
+    db_rag_reranker_error = str(exc)
 
 provider = st.sidebar.selectbox(
     "Provider",
@@ -209,6 +228,24 @@ top_p = st.sidebar.slider(
 )
 if provider == "anthropic":
     st.sidebar.caption("Anthropic models in this app use temperature only; top-p is ignored.")
+
+st.sidebar.divider()
+st.sidebar.markdown("**DB-RAG Runtime**")
+if db_rag_embedding_error:
+    st.sidebar.error(f"Embedding index: {db_rag_embedding_error}")
+else:
+    st.sidebar.caption("Embedding index")
+    st.sidebar.code(str(active_db_rag_embedding_model), language=None)
+
+if db_rag_reranker_error:
+    st.sidebar.error(f"Column reranker: {db_rag_reranker_error}")
+elif active_db_rag_reranker_model:
+    st.sidebar.caption("Column reranker")
+    st.sidebar.code(str(active_db_rag_reranker_model), language=None)
+else:
+    st.sidebar.caption("Column reranker")
+    st.sidebar.code("disabled", language=None)
+    st.sidebar.caption("Set `DB_RAG_RERANKER_MODEL` in `.env` to enable reranking in the app.")
 
 # ============================================================
 # 1. File Upload UI
@@ -508,6 +545,8 @@ if should_render_interrupt:
         ui_after_error_review(app, config, payload, interrupt_id, queue_interrupt_resume)
     elif ui_type == "human_review_rag_db_column_selection":
         ui_human_review_rag_db_column_selection(app, config, payload, interrupt_id, queue_interrupt_resume)
+    elif ui_type == "human_review_rag_db_sql_execution":
+        ui_human_review_rag_db_sql_execution(app, config, payload, interrupt_id, queue_interrupt_resume)
     elif ui_type == "final_review":
         ui_final_review(app, config, payload, interrupt_id, queue_interrupt_resume)
 

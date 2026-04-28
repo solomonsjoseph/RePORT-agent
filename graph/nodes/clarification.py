@@ -131,6 +131,7 @@ def clarification_node(state: AgentState, llm, context: str = "") -> AgentState:
                 llm,
                 provider=str(context.get("provider") or ""),
                 service=context.get("db_rag_service"),
+                reranker_model=context.get("db_rag_reranker_model"),
                 question_override=effective_question,
             )
         raise ValueError("rag_db_qa clarification resume requires a context mapping with provider and db_rag_service")

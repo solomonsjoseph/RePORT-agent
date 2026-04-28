@@ -160,10 +160,51 @@ def test_supported_reranker_models_only_include_actual_rerankers(monkeypatch) ->
     from db_rag import config
 
     assert config.SUPPORTED_DB_RAG_RERANKER_MODELS == (
-        "Qwen/Qwen3-Reranker-4B",
-        "Qwen/Qwen3-Reranker-8B",
+        "cohere/rerank-v3.5",
+        "cohere/rerank-4-fast",
+        "cohere/rerank-4-pro",
     )
     assert not hasattr(config, "DEFAULT_DB_RAG_RERANKER_BY_EMBEDDING")
+
+
+def test_resolve_db_rag_reranker_model_returns_none_when_unset(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    from db_rag import config
+
+    monkeypatch.delenv("DB_RAG_RERANKER_MODEL", raising=False)
+
+    assert config.resolve_db_rag_reranker_model() is None
+
+
+def test_resolve_db_rag_reranker_model_validates_supported_values(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    from db_rag import config
+
+    monkeypatch.setenv("DB_RAG_RERANKER_MODEL", "cohere/rerank-v3.5")
+    assert config.resolve_db_rag_reranker_model() == "cohere/rerank-v3.5"
+
+    monkeypatch.setenv("DB_RAG_RERANKER_MODEL", "bad/model")
+    with pytest.raises(ValueError, match="Unsupported DB_RAG_RERANKER_MODEL"):
+        config.resolve_db_rag_reranker_model()
+
+
+def test_openrouter_reranker_uses_openrouter_credentials(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    import db_rag.vectorstore as vectorstore
+
+    monkeypatch.setattr(vectorstore, "load_dotenv", lambda: None, raising=False)
+    monkeypatch.setenv("DB_RAG_OPENROUTER_API_KEY", "or-key")
+    monkeypatch.setenv("DB_RAG_OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+
+    reranker = vectorstore.OpenAIReranker(model="cohere/rerank-v3.5")
+
+    assert reranker.model == "cohere/rerank-v3.5"
+    assert reranker.config_model == "cohere/rerank-v3.5"
+    assert reranker.api_key == "or-key"
+    assert reranker.base_url == "https://openrouter.ai/api/v1"
 
 
 def test_openrouter_qwen_embedding_uses_openrouter_credentials(monkeypatch) -> None:
@@ -505,7 +546,7 @@ def test_retrieve_context_records_reranks_merged_columns(monkeypatch) -> None:
         _Collection(table_queries),
         _Collection(column_queries),
         "gender outcome question",
-        reranker_model="Qwen/Qwen3-Reranker-4B",
+        reranker_model="cohere/rerank-v3.5",
     )
 
     assert [entry["table"] for entry in tables] == ["Form 1A", "Final Outcome"]
@@ -829,6 +870,167 @@ def test_prepare_column_selection_fails_closed_on_invalid_output(monkeypatch, co
     assert selection.columns == []
     assert selection.rationale == "Invalid structured response from the model."
     assert selection.feedback_history == [{"feedback": "Include gender explicitly."}]
+
+
+def test_prepare_column_selection_fails_closed_when_model_returns_tables_but_no_columns(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    from db_rag import service
+
+    class _LLM:
+        def invoke(self, messages):
+            return SimpleNamespace(
+                content=json.dumps(
+                    {
+                        "selection_id": "sel-empty-columns",
+                        "rationale": "picked a table but no exact columns",
+                        "tables": ["Form 1A"],
+                        "columns": [],
+                    }
+                )
+            )
+
+    context = service.DbRagContext(
+        tables=[service.DbRagTableHit(table="Form 1A", text="Form 1A summary")],
+        columns=[service.DbRagColumnHit(table="Form 1A", column="AGE", text="AGE summary")],
+    )
+    db_rag_service = service.DbRagService(llm=_LLM())
+
+    selection = db_rag_service.prepare_column_selection("subset age", context)
+
+    assert selection.tables == []
+    assert selection.columns == []
+    assert selection.rationale == "Invalid structured response from the model."
+
+
+def test_prepare_column_selection_preserves_explicit_schema_column_mentions(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    from db_rag import service
+
+    class _LLM:
+        def invoke(self, messages):
+            return SimpleNamespace(
+                content=json.dumps(
+                    {
+                        "selection_id": "sel-explicit",
+                        "rationale": "model only returned one retrieved column",
+                        "tables": ["Form 1A - Index Case Screening"],
+                        "columns": [
+                            {
+                                "table": "Form 1A - Index Case Screening",
+                                "column": "IS_AGE",
+                                "description": "Age in years",
+                            }
+                        ],
+                    }
+                )
+            )
+
+    monkeypatch.setattr(
+        service,
+        "_schema_column_catalog",
+        lambda: (
+            {
+                ("Form 1A - Index Case Screening", "IS_AGE"): {
+                    "table": "Form 1A - Index Case Screening",
+                    "column": "IS_AGE",
+                    "description": "Age in years",
+                },
+                ("Form 2A - INDEX CASE: Clinical/Demographic Form", "IC_DMDX"): {
+                    "table": "Form 2A - INDEX CASE: Clinical/Demographic Form",
+                    "column": "IC_DMDX",
+                    "description": "Diabetes diagnosis status",
+                },
+            },
+            {
+                "IS_AGE": [
+                    {
+                        "table": "Form 1A - Index Case Screening",
+                        "column": "IS_AGE",
+                        "description": "Age in years",
+                    }
+                ],
+                "IC_DMDX": [
+                    {
+                        "table": "Form 2A - INDEX CASE: Clinical/Demographic Form",
+                        "column": "IC_DMDX",
+                        "description": "Diabetes diagnosis status",
+                    }
+                ],
+            },
+        ),
+    )
+
+    context = service.DbRagContext(
+        tables=[service.DbRagTableHit(table="Form 1A - Index Case Screening", text="Form 1A summary")],
+        columns=[service.DbRagColumnHit(table="Form 1A - Index Case Screening", column="IS_AGE", text="IS_AGE summary")],
+    )
+    db_rag_service = service.DbRagService(llm=_LLM())
+
+    selection = db_rag_service.prepare_column_selection(
+        "Subset Form 2A - INDEX CASE: Clinical/Demographic Form.IC_DMDX and IS_AGE among index cases",
+        context,
+    )
+
+    assert ("Form 1A - Index Case Screening", "IS_AGE") in {
+        (column["table"], column["column"]) for column in selection.columns
+    }
+    assert ("Form 2A - INDEX CASE: Clinical/Demographic Form", "IC_DMDX") in {
+        (column["table"], column["column"]) for column in selection.columns
+    }
+    assert "Form 2A - INDEX CASE: Clinical/Demographic Form" in selection.tables
+
+
+def test_prepare_column_selection_includes_previous_selection_in_prompt(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    from db_rag import service
+
+    captured: list[list[object]] = []
+
+    class _LLM:
+        def invoke(self, messages):
+            captured.append(messages)
+            return SimpleNamespace(
+                content=json.dumps(
+                    {
+                        "selection_id": "sel-prev",
+                        "rationale": "preserved reviewed columns",
+                        "tables": ["Form 1A"],
+                        "columns": [
+                            {"table": "Form 1A", "column": "AGE", "description": "Age in years"},
+                        ],
+                    }
+                )
+            )
+
+    context = service.DbRagContext(
+        tables=[service.DbRagTableHit(table="Form 1A", text="Form 1A summary")],
+        columns=[service.DbRagColumnHit(table="Form 1A", column="AGE", text="AGE summary")],
+    )
+    db_rag_service = service.DbRagService(llm=_LLM())
+
+    previous_selection = {
+        "selection_id": "sel-old",
+        "question": "subset age",
+        "tables": ["Form 1A"],
+        "columns": [{"table": "Form 1A", "column": "AGE", "description": "Age in years"}],
+        "rationale": "previous reviewed candidate",
+        "status": "needs_revision",
+    }
+    selection = db_rag_service.prepare_column_selection(
+        "subset age",
+        context,
+        feedback_history=[{"feedback": "keep AGE"}],
+        previous_selection=previous_selection,
+    )
+
+    assert selection.selection_id == "sel-prev"
+    message_text = "\n".join(getattr(message, "content", "") for message in captured[0])
+    assert "Previous selection candidate:" in message_text
+    assert "sel-old" in message_text
+    assert '"column": "AGE"' in message_text
 
 
 def test_prepare_sql_candidate_uses_approved_columns_only(monkeypatch) -> None:

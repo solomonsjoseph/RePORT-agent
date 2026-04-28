@@ -92,9 +92,9 @@ class OpenAIReranker:
 
         api_key = str(os.getenv("DB_RAG_OPENROUTER_API_KEY", "") or "").strip()
         if not api_key:
-            raise ValueError("DB_RAG_OPENROUTER_API_KEY is required for Qwen reranking.")
+            raise ValueError("DB_RAG_OPENROUTER_API_KEY is required for OpenRouter reranking.")
 
-        self.model = resolved_model.lower()
+        self.model = resolved_model
         self.config_model = resolved_model
         self.api_key = api_key
         self.base_url = str(

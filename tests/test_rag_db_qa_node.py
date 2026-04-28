@@ -114,12 +114,14 @@ def test_rag_db_qa_returns_guided_init_message_when_assets_are_missing() -> None
 
 def test_rag_db_metadata_qa_answers_without_pending_sql_state() -> None:
     rag = _fresh_rag_module()
+    captured: dict[str, object] = {}
 
     class _Service:
         def readiness(self):
             return {"ready": True, "message": ""}
 
-        def retrieve_context(self, question):
+        def retrieve_context(self, question, *, reranker_model=None):
+            captured["reranker_model"] = reranker_model
             assert "cohort A" in question
             return SimpleNamespace(
                 tables=[SimpleNamespace(table="Form 1A", text="table summary")],
@@ -151,22 +153,23 @@ def test_rag_db_metadata_qa_answers_without_pending_sql_state() -> None:
     updated = rag.rag_db_qa_node(state, llm=object(), provider="openai", service=_Service())
 
     assert "cohort membership and sex" in updated["output"]["qa_response"]
+    assert captured["reranker_model"] is None
     assert "pending_sql_candidate" not in updated["agents"]["rag_db_qa"]
     assert "pending_column_review" not in updated["agents"]["rag_db_qa"]
     assert "awaiting_user_clarification" not in updated["meta"]
 
 
-def test_rag_db_qa_treats_bare_yes_as_fresh_message_without_executing_sql() -> None:
+def test_rag_db_qa_passes_reranker_model_to_retrieval() -> None:
     rag = _fresh_rag_module()
-    calls: list[str] = []
+    captured: dict[str, object] = {}
 
     class _Service:
         def readiness(self):
             return {"ready": True, "message": ""}
 
-        def retrieve_context(self, question):
-            calls.append("retrieve_context")
-            assert question == "yes"
+        def retrieve_context(self, question, *, reranker_model=None):
+            captured["question"] = question
+            captured["reranker_model"] = reranker_model
             return SimpleNamespace(
                 tables=[SimpleNamespace(table="Form 1A", text="table summary")],
                 columns=[SimpleNamespace(table="Form 1A", column="SEX", text="column summary")],
@@ -175,16 +178,45 @@ def test_rag_db_qa_treats_bare_yes_as_fresh_message_without_executing_sql() -> N
             )
 
         def answer_from_context(self, question, context):
-            calls.append("answer_from_context")
-            assert question == "yes"
-            assert context.table_names == ["Form 1A"]
             return SimpleNamespace(
-                answer="Fresh metadata answer from the new message.",
+                answer="Metadata answer.",
                 needs_sql=False,
                 rationale="metadata answer",
                 relevant_tables=["Form 1A"],
                 relevant_columns=["SEX"],
             )
+
+    state = {
+        "messages": [_HumanMessage("How many male participants are in cohort A?")],
+        "output": {},
+        "observations": [],
+        "meta": {},
+        "agents": {"rag_db_qa": {}},
+        "artifacts": {},
+    }
+
+    updated = rag.rag_db_qa_node(
+        state,
+        llm=object(),
+        provider="openai",
+        service=_Service(),
+        reranker_model="cohere/rerank-v3.5",
+    )
+
+    assert updated["output"]["qa_response"] == "Metadata answer."
+    assert captured["question"] == "How many male participants are in cohort A?"
+    assert captured["reranker_model"] == "cohere/rerank-v3.5"
+
+
+def test_rag_db_qa_treats_bare_yes_as_fresh_message_without_executing_sql() -> None:
+    rag = _fresh_rag_module()
+
+    class _Service:
+        def readiness(self):
+            return {"ready": True, "message": ""}
+
+        def retrieve_context(self, question, *, reranker_model=None):
+            raise AssertionError("retrieve_context should not run while a SQL candidate is pending")
 
         def execute_prepared_sql(self, candidate):
             raise AssertionError("execute_prepared_sql should not run for bare yes")
@@ -214,13 +246,13 @@ def test_rag_db_qa_treats_bare_yes_as_fresh_message_without_executing_sql() -> N
 
     updated = rag.rag_db_qa_node(state, llm=object(), provider="openai", service=_Service())
 
-    assert updated["output"]["qa_response"] == "Fresh metadata answer from the new message."
-    assert "pending_sql_candidate" not in updated["agents"]["rag_db_qa"]
+    assert "Please review the SQL before execution." in updated["output"]["qa_response"]
+    assert "pending_sql_candidate" in updated["agents"]["rag_db_qa"]
+    assert updated["agents"]["rag_db_qa"]["pending_sql_candidate"]["selection_id"] == "sel-bare-yes"
     assert "pending_column_review" not in updated["agents"]["rag_db_qa"]
-    assert calls == ["retrieve_context", "answer_from_context"]
 
 
-def test_rag_db_qa_decline_with_pending_sql_candidate_skips_execution_and_retrieval() -> None:
+def test_rag_db_qa_replays_pending_sql_candidate_without_execution() -> None:
     rag = _fresh_rag_module()
 
     class _Service:
@@ -228,16 +260,16 @@ def test_rag_db_qa_decline_with_pending_sql_candidate_skips_execution_and_retrie
             return {"ready": True, "message": ""}
 
         def retrieve_context(self, question):
-            raise AssertionError("retrieve_context should not run for an explicit decline")
+            raise AssertionError("retrieve_context should not run while a SQL candidate is pending")
 
         def execute_prepared_sql(self, candidate):
-            raise AssertionError("execute_prepared_sql should not run for an explicit decline")
+            raise AssertionError("execute_prepared_sql should not run while a SQL candidate is pending")
 
     state = {
         "messages": [
             _HumanMessage("How many male participants are in cohort A?"),
             _AIMessage('SELECT "AGE", "SEX" FROM "Form 1A"\n\nDo you want me to run the read-only SQL?'),
-            _HumanMessage("no"),
+            _HumanMessage("please review the prepared SQL"),
         ],
         "output": {},
         "observations": [],
@@ -275,9 +307,10 @@ def test_rag_db_qa_decline_with_pending_sql_candidate_skips_execution_and_retrie
 
     updated = rag.rag_db_qa_node(state, llm=object(), provider="openai", service=_Service())
 
-    assert updated["output"]["qa_response"] == "Okay. I will not run the read-only SQL."
+    assert "Please review the SQL before execution." in updated["output"]["qa_response"]
+    assert "```sql" in updated["output"]["qa_response"]
+    assert updated["agents"]["rag_db_qa"]["pending_sql_candidate"]["selection_id"] == "sel-decline"
     assert updated["agents"]["rag_db_qa"]["pending_column_review"]["status"] == "approved"
-    assert "pending_sql_candidate" not in updated["agents"]["rag_db_qa"]
     assert updated["agents"]["rag_db_qa"]["last_database_question"] == "How many male participants are in cohort A?"
 
 
@@ -289,7 +322,7 @@ def test_rag_db_qa_combines_stale_qa_followup_context_when_taking_over() -> None
         def readiness(self):
             return {"ready": True, "message": ""}
 
-        def retrieve_context(self, question):
+        def retrieve_context(self, question, *, reranker_model=None):
             captured["question"] = question
             return SimpleNamespace(
                 tables=[SimpleNamespace(table="Form 1A", text="table summary")],
@@ -343,7 +376,7 @@ def test_rag_db_sql_needed_request_creates_column_review_without_sql() -> None:
         def readiness(self):
             return {"ready": True, "message": ""}
 
-        def retrieve_context(self, question):
+        def retrieve_context(self, question, *, reranker_model=None):
             calls.append("retrieve_context")
             assert "subset age and sex" in question
             return SimpleNamespace(
@@ -367,9 +400,10 @@ def test_rag_db_sql_needed_request_creates_column_review_without_sql() -> None:
                 relevant_columns=["AGE", "SEX"],
             )
 
-        def prepare_column_selection(self, question, context, feedback_history=None):
+        def prepare_column_selection(self, question, context, feedback_history=None, previous_selection=None):
             calls.append("prepare_column_selection")
             assert feedback_history == []
+            assert previous_selection is None
             return SimpleNamespace(
                 selection_id="sel-1",
                 question=question,
@@ -462,248 +496,59 @@ def test_rag_db_approved_column_review_generates_sql_candidate() -> None:
     assert candidate["status"] == "prepared"
     assert candidate["selection_id"] == "sel-approved"
     assert candidate["sql"] == 'SELECT "AGE", "SEX" FROM "Form 1A"'
-    assert "run the read-only SQL" in updated["output"]["qa_response"]
+    assert updated["output"]["generated_sql"] == 'SELECT "AGE", "SEX" FROM "Form 1A"'
+    assert updated["output"]["prepared_sql_candidate"]["sql"] == 'SELECT "AGE", "SEX" FROM "Form 1A"'
+    assert "Please review the SQL before execution." in updated["output"]["qa_response"]
+    assert "```sql" in updated["output"]["qa_response"]
     assert 'SELECT "AGE", "SEX" FROM "Form 1A"' in updated["output"]["qa_response"]
 
 
-def test_rag_db_executes_prepared_sql_after_explicit_confirmation() -> None:
+def test_rag_db_revision_passes_previous_selection_into_prepare_column_selection() -> None:
     rag = _fresh_rag_module()
+    captured: dict[str, object] = {}
 
     class _Service:
         def readiness(self):
             return {"ready": True, "message": ""}
 
-        def execute_prepared_sql(self, candidate):
-            assert candidate.selection_id == "sel-prepared"
-            assert candidate.sql == 'SELECT "AGE", "SEX" FROM "Form 1A"'
-            return SimpleNamespace(
-                answer="Read-only SQL execution completed with 1 result row(s).",
-                sql=candidate.sql,
-                dataframe=pd.DataFrame({"AGE": [42], "SEX": ["Male"]}),
-                source_tables=["Form 1A"],
-            )
-
-    state = {
-        "messages": [
-            _HumanMessage("Help me subset age and sex for the matching participants"),
-            _AIMessage('SELECT "AGE", "SEX" FROM "Form 1A"\n\nDo you want me to run the read-only SQL?'),
-            _HumanMessage("run the prepared sql"),
-        ],
-        "output": {},
-        "observations": [],
-        "meta": {"thread_id": "thread-execute"},
-        "agents": {
-            "rag_db_qa": {
-                "pending_sql_candidate": {
-                    "question": "Help me subset age and sex for the matching participants",
-                    "sql": 'SELECT "AGE", "SEX" FROM "Form 1A"',
-                    "tables": ["Form 1A"],
-                    "columns": [
-                        {"table": "Form 1A", "column": "AGE", "description": "Age in years"},
-                        {"table": "Form 1A", "column": "SEX", "description": "Sex at enrollment"},
-                    ],
-                    "selection_id": "sel-prepared",
-                    "status": "prepared",
-                },
-                "last_database_question": "Help me subset age and sex for the matching participants",
-            }
-        },
-        "artifacts": {"datasets": {}},
-    }
-
-    updated = rag.rag_db_qa_node(state, llm=object(), provider="openai", service=_Service())
-
-    assert "Read-only SQL execution completed with 1 result row" in updated["output"]["qa_response"]
-    assert updated["agents"]["rag_db_qa"]["status"] == "done"
-    assert "pending_sql_candidate" not in updated["agents"]["rag_db_qa"]
-
-
-def test_rag_db_execution_persists_subset_artifact_with_db_rag_provenance(
-    tmp_path,
-    monkeypatch,
-) -> None:
-    rag = _fresh_rag_module()
-    monkeypatch.setattr(rag, "DEFAULT_RUNTIME_ROOT", tmp_path)
-
-    class _Service:
-        def readiness(self):
-            return {"ready": True, "message": ""}
-
-        def execute_prepared_sql(self, candidate):
-            assert candidate.selection_id == "sel-approved"
-            return SimpleNamespace(
-                answer="Read-only SQL execution completed with 2 result row(s).",
-                sql=candidate.sql,
-                dataframe=pd.DataFrame({"AGE": [42, 37]}),
-                source_tables=["Form 1A"],
-            )
-
-    feedback_history = [
-        {"role": "user", "content": "Keep only AGE for the first pass."},
-        {"role": "assistant", "content": "Updated the approved column selection."},
-    ]
-    state = {
-        "messages": [
-            _HumanMessage("Help me subset age for the matching participants"),
-            _AIMessage('SELECT "AGE" FROM "Form 1A"\n\nDo you want me to run the read-only SQL?'),
-            _HumanMessage("run the prepared sql"),
-        ],
-        "output": {},
-        "observations": [],
-        "meta": {"thread_id": "thread-persist"},
-        "agents": {
-            "rag_db_qa": {
-                "pending_column_review": {
-                    "selection_id": "sel-approved",
-                    "question": "Help me subset age for the matching participants",
-                    "tables": ["Form 1A"],
-                    "columns": [
-                        {"table": "Form 1A", "column": "AGE", "description": "Age in years"},
-                    ],
-                    "rationale": "approved columns",
-                    "feedback_history": feedback_history,
-                    "status": "approved",
-                },
-                "pending_sql_candidate": {
-                    "question": "Help me subset age for the matching participants",
-                    "sql": 'SELECT "AGE" FROM "Form 1A"',
-                    "tables": ["Form 1A"],
-                    "columns": [
-                        {"table": "Form 1A", "column": "AGE", "description": "Age in years"},
-                    ],
-                    "selection_id": "sel-approved",
-                    "status": "prepared",
-                },
-                "last_database_question": "Help me subset age for the matching participants",
-            }
-        },
-        "artifacts": {"datasets": {}},
-    }
-
-    updated = rag.rag_db_qa_node(state, llm=object(), provider="openai", service=_Service())
-
-    dataset_id = updated["artifacts"]["active_dataset_id"]
-    artifact = updated["artifacts"]["datasets"][dataset_id]
-
-    assert artifact["kind"] == "subset"
-    assert artifact["provenance"]["source"] == "db_rag_sql"
-    assert artifact["provenance"]["feedback_history"] == feedback_history
-    assert artifact["provenance"]["selected_columns"][0]["column"] == "AGE"
-    assert "pending_sql_candidate" not in updated["agents"]["rag_db_qa"]
-    assert "pending_column_review" not in updated["agents"]["rag_db_qa"]
-    assert dataset_id in updated["output"]["qa_response"]
-
-
-def test_rag_db_treats_contentful_followup_as_new_question_when_sql_candidate_exists() -> None:
-    rag = _fresh_rag_module()
-    captured: dict[str, str] = {}
-
-    class _Service:
-        def readiness(self):
-            return {"ready": True, "message": ""}
-
-        def retrieve_context(self, question):
-            captured["question"] = question
+        def retrieve_context(self, question, *, reranker_model=None):
             return SimpleNamespace(
                 tables=[SimpleNamespace(table="Form 1A", text="table summary")],
-                columns=[
-                    SimpleNamespace(table="Form 1A", column="AGE", text="age summary"),
-                    SimpleNamespace(table="Form 1A", column="SEX", text="sex summary"),
-                ],
+                columns=[SimpleNamespace(table="Form 1A", column="AGE", text="age summary")],
                 table_names=["Form 1A"],
-                column_names=["AGE", "SEX"],
+                column_names=["AGE"],
             )
 
-        def answer_from_context(self, question, context):
-            assert context.column_names == ["AGE", "SEX"]
+        def prepare_column_selection(self, question, context, feedback_history=None, previous_selection=None):
+            captured["question"] = question
+            captured["feedback_history"] = feedback_history
+            captured["previous_selection"] = previous_selection
             return SimpleNamespace(
-                answer="This new request needs SQL, so I prepared a fresh column review.",
-                needs_sql=True,
-                rationale="new subset request",
-                relevant_tables=["Form 1A"],
-                relevant_columns=["AGE", "SEX"],
-            )
-
-        def prepare_column_selection(self, question, context, feedback_history=None):
-            return SimpleNamespace(
-                selection_id="sel-fresh",
+                selection_id="sel-revised",
                 question=question,
                 tables=["Form 1A"],
-                columns=[
-                    {"table": "Form 1A", "column": "AGE", "description": "Age in years"},
-                    {"table": "Form 1A", "column": "SEX", "description": "Sex at enrollment"},
-                ],
-                rationale="fresh review candidate",
-                feedback_history=[],
+                columns=[{"table": "Form 1A", "column": "AGE", "description": "Age in years"}],
+                rationale="revised candidate",
+                feedback_history=list(feedback_history or []),
                 status="awaiting_review",
             )
 
-        def execute_prepared_sql(self, candidate):
-            raise AssertionError("execute_prepared_sql should not run for a contentful follow-up")
-
     state = {
-        "messages": [
-            _HumanMessage("Give me overview of the database in the system"),
-            _AIMessage('SELECT "COUNT" FROM "Form 1A"\n\nDo you want me to run the read-only SQL?'),
-            _HumanMessage("Help me subset age and sex for the matching participants"),
-        ],
+        "messages": [_HumanMessage("subset age")],
         "output": {},
         "observations": [],
         "meta": {},
         "agents": {
             "rag_db_qa": {
-                "pending_sql_candidate": {
-                    "question": "Give me overview of the database in the system",
-                    "sql": 'SELECT COUNT(*) FROM "Form 1A"',
-                    "tables": ["Form 1A"],
-                    "columns": [],
+                "pending_column_review": {
                     "selection_id": "sel-old",
-                    "status": "prepared",
-                },
-                "last_database_question": "Give me overview of the database in the system",
-            }
-        },
-        "artifacts": {"datasets": {}},
-    }
-
-    updated = rag.rag_db_qa_node(state, llm=object(), provider="openai", service=_Service())
-
-    assert captured["question"] == "Help me subset age and sex for the matching participants"
-    assert updated["agents"]["rag_db_qa"]["pending_column_review"]["selection_id"] == "sel-fresh"
-    assert updated["agents"]["rag_db_qa"]["last_database_question"] == captured["question"]
-
-
-def test_rag_db_qa_surfaces_sql_execution_error() -> None:
-    rag = _fresh_rag_module()
-
-    class _Service:
-        def readiness(self):
-            return {"ready": True, "message": ""}
-
-        def execute_prepared_sql(self, candidate):
-            assert candidate.selection_id == "sel-error"
-            raise RuntimeError('Parser Error: syntax error at or near ")"')
-
-    state = {
-        "messages": [
-            _HumanMessage("What does this database include?"),
-            _AIMessage('SELECT "AGE" FROM "Form 1A"\n\nDo you want me to run the read-only SQL?'),
-            _HumanMessage("execute the query"),
-        ],
-        "output": {},
-        "observations": [],
-        "meta": {},
-        "agents": {
-            "rag_db_qa": {
-                "pending_sql_candidate": {
-                    "question": "What does this database include?",
-                    "sql": 'SELECT "AGE" FROM "Form 1A"',
+                    "question": "subset age",
                     "tables": ["Form 1A"],
                     "columns": [{"table": "Form 1A", "column": "AGE", "description": "Age in years"}],
-                    "selection_id": "sel-error",
-                    "status": "prepared",
-                },
-                "last_database_question": "What does this database include?",
+                    "rationale": "old candidate",
+                    "feedback_history": [{"feedback": "keep AGE"}],
+                    "status": "needs_revision",
+                }
             }
         },
         "artifacts": {"datasets": {}},
@@ -711,11 +556,8 @@ def test_rag_db_qa_surfaces_sql_execution_error() -> None:
 
     updated = rag.rag_db_qa_node(state, llm=object(), provider="openai", service=_Service())
 
-    assert "DB-RAG SQL execution failed" in updated["output"]["qa_response"]
-    assert updated["output"]["error"] == {
-        "category": "db_rag_sql",
-        "type": "RuntimeError",
-        "message": 'Parser Error: syntax error at or near ")"',
-    }
-    assert updated["agents"]["rag_db_qa"]["status"] == "error"
-    assert updated["agents"]["rag_db_qa"]["pending_sql_candidate"]["selection_id"] == "sel-error"
+    assert captured["question"] == "subset age"
+    assert captured["feedback_history"] == [{"feedback": "keep AGE"}]
+    assert isinstance(captured["previous_selection"], dict)
+    assert captured["previous_selection"]["selection_id"] == "sel-old"
+    assert updated["agents"]["rag_db_qa"]["pending_column_review"]["selection_id"] == "sel-revised"

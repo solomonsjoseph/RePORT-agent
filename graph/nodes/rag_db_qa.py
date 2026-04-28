@@ -19,40 +19,11 @@ NODE_NAME = "rag_db_qa"
 NODE_CAPABILITY = (
     "Handle database-grounded questions using retrieval over the local RePORT DB-RAG assets. "
     "Answer metadata questions from retrieved context, pause for human column review when SQL is "
-    "needed, prepare read-only SQL only from approved selections, and execute only explicitly "
-    "confirmed prepared SQL candidates."
+    "needed, prepare read-only SQL only from approved selections, and keep prepared SQL candidates "
+    "pending for explicit human review before execution."
 )
 
 _SUPPORTED_PROVIDERS = {"openai", "anthropic"}
-_SQL_CONFIRMATION_ALLOWLIST = {
-    "yes run it",
-    "run it",
-    "execute it",
-    "execute the query",
-    "run the prepared sql",
-}
-_SQL_DECLINE_ALLOWLIST = {
-    "no",
-    "not now",
-    "not right now",
-    "cancel",
-    "cancel it",
-    "don't run it",
-    "do not run it",
-    "no thanks",
-}
-
-
-def _normalized_text(text: str) -> str:
-    return " ".join((text or "").strip().lower().split())
-
-
-def _is_explicit_sql_confirmation(text: str) -> bool:
-    return _normalized_text(text) in _SQL_CONFIRMATION_ALLOWLIST
-
-
-def _is_explicit_sql_decline(text: str) -> bool:
-    return _normalized_text(text) in _SQL_DECLINE_ALLOWLIST
 
 
 def _read_value(payload: Any, field: str, default: Any = None) -> Any:
@@ -290,6 +261,56 @@ def _append_sql_error_response(state: AgentState, error_payload: dict[str, str])
     }
 
 
+def _store_sql_candidate_output(state: AgentState, candidate: dict[str, Any]) -> AgentState:
+    output = dict(state.get("output") or {})
+    output["generated_sql"] = str(candidate.get("sql") or "").strip()
+    output["prepared_sql_candidate"] = dict(candidate)
+    return {
+        **state,
+        "output": output,
+    }
+
+
+def _execute_prepared_sql_candidate(
+    state: AgentState,
+    rag_state: dict[str, Any],
+    candidate: Any,
+    service,
+) -> AgentState:
+    approved_review = dict(rag_state.get("pending_column_review") or {})
+    try:
+        execution_result = service.execute_prepared_sql(candidate)
+        persisted_state, artifact = _persist_sql_subset_artifact(state, candidate, approved_review, execution_result)
+    except Exception as exc:
+        error_payload = {
+            "category": "db_rag_sql",
+            "type": type(exc).__name__,
+            "message": str(exc),
+        }
+        updated = _append_sql_error_response(state, error_payload)
+        updated["meta"] = clear_clarification_meta(updated.get("meta") or {})
+        rag_state.pop("pending_sql_candidate", None)
+        rag_state.pop("pending_column_review", None)
+        rag_state["error"] = error_payload
+        rag_state["last_database_question"] = candidate.question
+        return _finalize_rag_state(updated, rag_state, status="error", active_thread=False)
+
+    response_text = (
+        f'{_read_value(execution_result, "answer", "Read-only SQL execution completed.")}\n\n'
+        f'SQL used:\n{_format_sql_block(str(_read_value(execution_result, "sql", "") or ""))}\n\n'
+        f'Saved dataset id: {artifact["id"]}'
+    )
+    updated = _append_ai_response(persisted_state, response_text)
+    updated = _store_sql_candidate_output(updated, _serialize_prepared_sql_candidate(candidate))
+    updated = _clear_output_error(updated)
+    updated["meta"] = clear_clarification_meta(updated.get("meta") or {})
+    rag_state.pop("pending_sql_candidate", None)
+    rag_state.pop("pending_column_review", None)
+    rag_state["error"] = None
+    rag_state["last_database_question"] = candidate.question
+    return _finalize_rag_state(updated, rag_state, status="done", active_thread=True)
+
+
 def _question_from_stale_qa_followup(state: AgentState, latest_question: str) -> str | None:
     meta = dict(state.get("meta") or {})
     if (
@@ -322,6 +343,13 @@ def _format_columns(columns: list[dict[str, str]]) -> str:
     return "\n".join(lines)
 
 
+def _format_sql_block(sql: str) -> str:
+    sql_text = str(sql or "").strip()
+    if not sql_text:
+        return "```sql\n-- none\n```"
+    return f"```sql\n{sql_text}\n```"
+
+
 def _format_column_review_response(answer_text: str, selection: dict[str, Any], *, revised: bool = False) -> str:
     intro = "I refreshed the DB-RAG column selection based on the review feedback." if revised else answer_text
     return (
@@ -343,8 +371,8 @@ def _format_sql_candidate_response(candidate: dict[str, Any]) -> str:
         "Approved columns:\n"
         f"{_format_columns(list(candidate.get('columns') or []))}\n\n"
         "Prepared SQL:\n"
-        f"{candidate.get('sql') or 'none'}\n\n"
-        "Do you want me to run the read-only SQL?"
+        f"{_format_sql_block(str(candidate.get('sql') or ''))}\n\n"
+        "Please review the SQL before execution."
     )
 
 
@@ -366,6 +394,7 @@ def rag_db_qa_node(
     *,
     provider: str,
     service,
+    reranker_model: str | None = None,
     question_override: str | None = None,
 ) -> AgentState:
     del llm
@@ -394,44 +423,12 @@ def rag_db_qa_node(
         return _finalize_rag_state(updated, rag_state, status="done", active_thread=False)
 
     pending_sql_candidate = dict(rag_state.get("pending_sql_candidate") or {})
-    if pending_sql_candidate and _is_explicit_sql_decline(latest_question):
+    if pending_sql_candidate and str(pending_sql_candidate.get("status") or "").strip() == "prepared":
         candidate = _deserialize_prepared_sql_candidate(pending_sql_candidate)
-        updated = _append_ai_response(state, "Okay. I will not run the read-only SQL.")
+        updated = _append_ai_response(state, _format_sql_candidate_response(_serialize_prepared_sql_candidate(candidate)))
+        updated = _store_sql_candidate_output(updated, _serialize_prepared_sql_candidate(candidate))
         updated = _clear_output_error(updated)
         updated["meta"] = clear_clarification_meta(updated.get("meta") or {})
-        rag_state.pop("pending_sql_candidate", None)
-        rag_state["error"] = None
-        rag_state["last_database_question"] = candidate.question
-        return _finalize_rag_state(updated, rag_state, status="done", active_thread=True)
-
-    if pending_sql_candidate and _is_explicit_sql_confirmation(latest_question):
-        candidate = _deserialize_prepared_sql_candidate(pending_sql_candidate)
-        approved_review = dict(rag_state.get("pending_column_review") or {})
-        try:
-            execution_result = service.execute_prepared_sql(candidate)
-            persisted_state, artifact = _persist_sql_subset_artifact(state, candidate, approved_review, execution_result)
-        except Exception as exc:
-            error_payload = {
-                "category": "db_rag_sql",
-                "type": type(exc).__name__,
-                "message": str(exc),
-            }
-            updated = _append_sql_error_response(state, error_payload)
-            updated["meta"] = clear_clarification_meta(updated.get("meta") or {})
-            rag_state["error"] = error_payload
-            rag_state["last_database_question"] = candidate.question
-            return _finalize_rag_state(updated, rag_state, status="error", active_thread=True)
-
-        response_text = (
-            f'{_read_value(execution_result, "answer", "Read-only SQL execution completed.")}\n\n'
-            f'SQL used:\n{_read_value(execution_result, "sql", "")}\n\n'
-            f'Saved dataset id: {artifact["id"]}'
-        )
-        updated = _append_ai_response(persisted_state, response_text)
-        updated = _clear_output_error(updated)
-        updated["meta"] = clear_clarification_meta(updated.get("meta") or {})
-        rag_state.pop("pending_sql_candidate", None)
-        rag_state.pop("pending_column_review", None)
         rag_state["error"] = None
         rag_state["last_database_question"] = candidate.question
         return _finalize_rag_state(updated, rag_state, status="done", active_thread=True)
@@ -440,11 +437,12 @@ def rag_db_qa_node(
     if pending_column_review.get("status") == "needs_revision":
         review_question = str(pending_column_review.get("question") or rag_state.get("last_database_question") or question).strip()
         feedback_history = list(pending_column_review.get("feedback_history") or [])
-        context = service.retrieve_context(review_question)
+        context = service.retrieve_context(review_question, reranker_model=reranker_model)
         selection = service.prepare_column_selection(
             review_question,
             context,
             feedback_history=feedback_history,
+            previous_selection=pending_column_review,
         )
         review_payload = _serialize_column_selection(selection)
         review_payload["question"] = review_question
@@ -489,6 +487,7 @@ def rag_db_qa_node(
         candidate_payload["status"] = "prepared"
 
         updated = _append_ai_response(state, _format_sql_candidate_response(candidate_payload))
+        updated = _store_sql_candidate_output(updated, candidate_payload)
         updated = _clear_output_error(updated)
         updated["meta"] = clear_clarification_meta(updated.get("meta") or {})
         rag_state["last_database_question"] = approved_question
@@ -496,7 +495,7 @@ def rag_db_qa_node(
         rag_state["error"] = None
         return _finalize_rag_state(updated, rag_state, status="done", active_thread=True)
 
-    context = service.retrieve_context(question)
+    context = service.retrieve_context(question, reranker_model=reranker_model)
     answer = service.answer_from_context(question, context)
     context_summary = _serialize_context_summary(context)
 
@@ -512,7 +511,7 @@ def rag_db_qa_node(
         rag_state.pop("pending_sql_candidate", None)
         return _finalize_rag_state(updated, rag_state, status="done", active_thread=True)
 
-    selection = service.prepare_column_selection(question, context, feedback_history=[])
+    selection = service.prepare_column_selection(question, context, feedback_history=[], previous_selection=None)
     review_payload = _serialize_column_selection(selection)
     review_payload["question"] = question
     review_payload["status"] = "awaiting_review"
@@ -523,6 +522,7 @@ def rag_db_qa_node(
         state,
         _format_column_review_response(str(_read_value(answer, "answer", "") or "").strip(), review_payload),
     )
+    updated = _store_sql_candidate_output(updated, review_payload)
     updated = _clear_output_error(updated)
     updated["meta"] = clear_clarification_meta(updated.get("meta") or {})
     rag_state["pending_column_review"] = review_payload

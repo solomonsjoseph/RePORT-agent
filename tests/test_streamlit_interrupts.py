@@ -61,6 +61,19 @@ def test_should_render_review_interrupt_for_db_column_selection_review() -> None
     ) is True
 
 
+def test_should_render_review_interrupt_for_db_sql_execution_review() -> None:
+    interrupt_event = SimpleNamespace(
+        id="int-1",
+        value={"type": "human_review_rag_db_sql_execution"},
+    )
+
+    assert should_render_review_interrupt(
+        interrupt_event,
+        dismissed_interrupt_id="",
+        review_state={"rag_db_sql_review_decision": None},
+    ) is True
+
+
 def test_blocking_review_notice_matches_review_type() -> None:
     interrupt_event = SimpleNamespace(
         id="int-1",

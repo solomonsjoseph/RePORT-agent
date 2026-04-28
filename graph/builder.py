@@ -19,7 +19,9 @@ from .nodes.human_review_before_run import human_review_before_run_node
 from .nodes.human_review_after_error import human_review_after_error_node
 from .nodes.human_review_before_output import human_review_before_output_node
 from .nodes.human_review_rag_db_column_selection import human_review_rag_db_column_selection_node
+from .nodes.human_review_rag_db_sql_execution import human_review_rag_db_sql_execution_node
 from .nodes.rag_db_qa import rag_db_qa_node
+from db_rag.config import resolve_db_rag_reranker_model
 from db_rag.service import DbRagService
 
 def _run_and_mark(node_name, fn):
@@ -63,11 +65,13 @@ def _run_and_mark(node_name, fn):
 def build_graph(llm, provider, db_path):
     workflow = StateGraph(AgentState)
     db_rag_service = DbRagService(llm=llm)
+    db_rag_reranker_model = resolve_db_rag_reranker_model()
 
     context_bundle = {
         "runtime_datasets": True,
         "provider": provider,
         "db_rag_service": db_rag_service,
+        "db_rag_reranker_model": db_rag_reranker_model,
     }
 
     def _resolve_analysis_dataframe(state):
@@ -101,11 +105,21 @@ def build_graph(llm, provider, db_path):
         "qa": _run_and_mark("qa", lambda s: qa_node(s, llm, context_bundle)),
         "rag_db_qa": _run_and_mark(
             "rag_db_qa",
-            lambda s: rag_db_qa_node(s, llm, provider=provider, service=db_rag_service),
+            lambda s: rag_db_qa_node(
+                s,
+                llm,
+                provider=provider,
+                service=db_rag_service,
+                reranker_model=db_rag_reranker_model,
+            ),
         ),
         "human_review_rag_db_column_selection": _run_and_mark(
             "human_review_rag_db_column_selection",
             human_review_rag_db_column_selection_node,
+        ),
+        "human_review_rag_db_sql_execution": _run_and_mark(
+            "human_review_rag_db_sql_execution",
+            lambda s: human_review_rag_db_sql_execution_node(s, db_rag_service),
         ),
     }
     available_actions = [*action_nodes.keys(), "end"]

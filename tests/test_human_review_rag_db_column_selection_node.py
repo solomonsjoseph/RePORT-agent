@@ -70,8 +70,8 @@ def test_human_review_rag_db_column_selection_approve_marks_selection_approved()
     assert updated["agents"]["rag_db_qa"]["pending_column_review"]["selection_id"] == "sel-1"
 
 
-def test_human_review_rag_db_column_selection_revision_appends_feedback() -> None:
-    mod, _ = _fresh_module(action="revise", feedback="Include the age column too.")
+def test_human_review_rag_db_column_selection_regeneration_appends_feedback() -> None:
+    mod, _ = _fresh_module(action="regenerate", feedback="Include the age column too.")
 
     state = {
         "agents": {
@@ -94,36 +94,9 @@ def test_human_review_rag_db_column_selection_revision_appends_feedback() -> Non
     review = updated["agents"]["rag_db_qa"]["pending_column_review"]
     assert review["status"] == "needs_revision"
     assert len(review["feedback_history"]) == 2
-    assert "Human requested a revision." in review["feedback_history"][-1]["feedback"]
+    assert "Human requested regeneration." in review["feedback_history"][-1]["feedback"]
     assert "Include the age column too." in review["feedback_history"][-1]["feedback"]
     assert "timestamp" in review["feedback_history"][-1]
-
-
-def test_human_review_rag_db_column_selection_cancel_clears_pending_sql_candidate() -> None:
-    mod, _ = _fresh_module(action="cancel")
-
-    state = {
-        "agents": {
-            "rag_db_qa": {
-                "pending_column_review": {
-                    "selection_id": "sel-3",
-                    "question": "Which tables and columns should be used?",
-                    "tables": ["form_c"],
-                    "columns": [],
-                    "rationale": "Need a reset.",
-                    "feedback_history": [],
-                    "status": "awaiting_review",
-                },
-                "pending_sql_candidate": {"sql": "SELECT 1"},
-            }
-        }
-    }
-
-    updated = mod.human_review_rag_db_column_selection_node(state)
-
-    review = updated["agents"]["rag_db_qa"]["pending_column_review"]
-    assert review["status"] == "cancelled"
-    assert "pending_sql_candidate" not in updated["agents"]["rag_db_qa"]
 
 
 def test_human_review_rag_db_column_selection_unknown_action_keeps_explanation_with_feedback() -> None:

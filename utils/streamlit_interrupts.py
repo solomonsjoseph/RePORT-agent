@@ -21,6 +21,8 @@ def should_render_review_interrupt(
         return review_state.get("after_error_decision") is None
     if ui_type == "human_review_rag_db_column_selection":
         return True
+    if ui_type == "human_review_rag_db_sql_execution":
+        return True
     if ui_type == "final_review":
         return review_state.get("final_decision") is None
     return False

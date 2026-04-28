@@ -81,6 +81,12 @@ def _has_pending_rag_db_column_review(state: AgentState) -> bool:
     return review.get("status") == "awaiting_review"
 
 
+def _has_pending_rag_db_sql_review(state: AgentState) -> bool:
+    rag_state = get_agent_state(state, "rag_db_qa")
+    candidate = dict(rag_state.get("pending_sql_candidate") or {})
+    return candidate.get("status") == "prepared"
+
+
 # ---------------------------------------------------------------------------
 # NodeDefinition
 # ---------------------------------------------------------------------------
@@ -173,6 +179,12 @@ NODE_REGISTRY: list[NodeDefinition] = [
         capability=ACTION_CAPABILITIES["human_review_rag_db_column_selection"],
         priority=47,
         is_ready=_has_pending_rag_db_column_review,
+    ),
+    NodeDefinition(
+        name="human_review_rag_db_sql_execution",
+        capability=ACTION_CAPABILITIES["human_review_rag_db_sql_execution"],
+        priority=48,
+        is_ready=_has_pending_rag_db_sql_review,
     ),
     NodeDefinition(
         name="generate_code",

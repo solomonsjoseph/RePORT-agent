@@ -82,6 +82,22 @@ def test_human_review_rag_db_column_selection_ready_when_selection_waits_for_rev
     assert review.is_ready(state) is True
 
 
+def test_human_review_rag_db_sql_execution_ready_when_sql_waits_for_review() -> None:
+    mod = _load_registry_module()
+    review = mod.NODE_REGISTRY_MAP["human_review_rag_db_sql_execution"]
+    state = {
+        "agents": {
+            "rag_db_qa": {
+                "pending_sql_candidate": {
+                    "status": "prepared",
+                }
+            }
+        }
+    }
+
+    assert review.is_ready(state) is True
+
+
 def test_action_capabilities_are_sourced_from_node_modules() -> None:
     from graph.nodes.action_metadata import ACTION_CAPABILITIES
 

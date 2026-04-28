@@ -29,6 +29,9 @@ CONTROL_ACTION_REASON_FACTORIES = {
     "human_review_rag_db_column_selection": _static_reason(
         "requires DB-RAG column selection awaiting review"
     ),
+    "human_review_rag_db_sql_execution": _static_reason(
+        "requires prepared DB-RAG SQL awaiting review"
+    ),
     "execute_code": _execute_code_block_reason,
     "human_review_before_output": _static_reason(
         "requires successful execution awaiting final review"

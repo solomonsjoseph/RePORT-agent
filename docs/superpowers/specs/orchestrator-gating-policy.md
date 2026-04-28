@@ -18,6 +18,7 @@ deterministic_control_actions:
   - human_review_after_error
   - human_review_before_run
   - human_review_rag_db_column_selection
+  - human_review_rag_db_sql_execution
   - execute_code
   - human_review_before_output
 planner_fallback_rules:

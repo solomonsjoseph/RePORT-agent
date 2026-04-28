@@ -5,40 +5,17 @@ def _dismiss_interrupt(interrupt_id):
     st.session_state["dismissed_interrupt_id"] = str(interrupt_id)
 
 
-def _render_column_entry(column):
-    if isinstance(column, dict):
-        table = str(column.get("table") or "").strip()
-        column_name = str(column.get("column") or "").strip()
-        description = str(column.get("description") or "").strip()
-        sample_values = column.get("sample_values")
-
-        parts = []
-        if table and column_name:
-            parts.append(f"`{table}.{column_name}`")
-        elif column_name:
-            parts.append(f"`{column_name}`")
-        elif table:
-            parts.append(f"`{table}`")
-
-        if description:
-            parts.append(description)
-        if sample_values:
-            parts.append(f"Samples: {sample_values}")
-        return " - ".join(parts) if parts else str(column)
-    return str(column)
-
-
-def ui_human_review_rag_db_column_selection(app, config, payload, interrupt_id, queue_resume):
-    ui_type = "human_review_rag_db_column_selection"
-
-    st.subheader("🔍 Review DB-RAG Column Selection")
-    st.caption("Approve the selected tables and columns before SQL generation.")
+def ui_human_review_rag_db_sql_execution(app, config, payload, interrupt_id, queue_resume):
+    ui_type = "human_review_rag_db_sql_execution"
+    st.subheader("🧾 Review DB-RAG SQL Before Execution")
+    st.caption("Approve the prepared SQL or regenerate it with feedback.")
 
     question = str(payload.get("question") or "").strip()
     rationale = str(payload.get("rationale") or "").strip()
     selection_id = str(payload.get("selection_id") or "").strip()
     tables = list(payload.get("tables") or [])
     columns = list(payload.get("columns") or [])
+    sql = str(payload.get("sql") or "").strip()
     feedback_history = list(payload.get("feedback_history") or [])
 
     if question:
@@ -47,19 +24,28 @@ def ui_human_review_rag_db_column_selection(app, config, payload, interrupt_id, 
     if selection_id:
         st.caption(f"Selection ID: {selection_id}")
     if rationale:
-        st.markdown("**Rationale**")
+        st.markdown("**Selection rationale**")
         st.write(rationale)
-
     if tables:
-        st.markdown("**Selected tables**")
+        st.markdown("**Approved tables**")
         for table in tables:
             st.write(f"- {table}")
-
     if columns:
-        st.markdown("**Selected columns**")
+        st.markdown("**Approved columns**")
         for column in columns:
-            st.write(f"- {_render_column_entry(column)}")
-
+            if isinstance(column, dict):
+                table = str(column.get("table") or "").strip()
+                column_name = str(column.get("column") or "").strip()
+                description = str(column.get("description") or "").strip()
+                label = f"`{table}.{column_name}`" if table and column_name else column_name or table
+                if description:
+                    label = f"{label}: {description}"
+                st.write(f"- {label}")
+            else:
+                st.write(f"- {column}")
+    if sql:
+        st.markdown("**Prepared SQL**")
+        st.code(sql, language="sql")
     if feedback_history:
         st.markdown("**Prior feedback history**")
         for idx, entry in enumerate(feedback_history, start=1):
@@ -105,9 +91,9 @@ def ui_human_review_rag_db_column_selection(app, config, payload, interrupt_id, 
 
         st.stop()
 
-    approve_col, revise_col = st.columns(2)
-    approve = approve_col.button("✅ Approve", key=f"{ui_type}_approve_{interrupt_id}")
-    regenerate = revise_col.button("♻️ Regenerate", key=f"{ui_type}_regenerate_{interrupt_id}")
+    approve_col, regenerate_col = st.columns(2)
+    approve = approve_col.button("✅ Approve & Run", key=f"{ui_type}_approve_{interrupt_id}")
+    regenerate = regenerate_col.button("♻️ Regenerate", key=f"{ui_type}_regenerate_{interrupt_id}")
 
     if approve:
         if feedback:

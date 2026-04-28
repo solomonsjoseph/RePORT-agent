@@ -176,11 +176,12 @@ def test_clarification_node_resumes_rag_db_qa_with_pending_question_context() ->
     clarification = _fresh_clarification_module()
     captured: dict[str, object] = {}
 
-    def _fake_rag_db_qa_node(state, llm, *, provider, service, question_override=None):
+    def _fake_rag_db_qa_node(state, llm, *, provider, service, question_override=None, reranker_model=None):
         captured["state"] = state
         captured["provider"] = provider
         captured["service"] = service
         captured["question_override"] = question_override
+        captured["reranker_model"] = reranker_model
         return {
             **state,
             "output": {"qa_response": "I extracted the requested subset."},
@@ -210,7 +211,7 @@ def test_clarification_node_resumes_rag_db_qa_with_pending_question_context() ->
     updated = clarification.clarification_node(
         state,
         object(),
-        context={"provider": "openai", "db_rag_service": service},
+        context={"provider": "openai", "db_rag_service": service, "db_rag_reranker_model": "cohere/rerank-v3.5"},
     )
 
     assert captured["question_override"] == (
@@ -219,5 +220,6 @@ def test_clarification_node_resumes_rag_db_qa_with_pending_question_context() ->
     )
     assert captured["provider"] == "openai"
     assert captured["service"] is service
+    assert captured["reranker_model"] == "cohere/rerank-v3.5"
     assert "awaiting_user_clarification" not in captured["state"]["meta"]
     assert updated["output"]["qa_response"] == "I extracted the requested subset."

@@ -26,8 +26,9 @@ SUPPORTED_DB_RAG_EMBEDDING_MODELS = (
     "Qwen/Qwen3-Embedding-8B",
 )
 SUPPORTED_DB_RAG_RERANKER_MODELS = (
-    "Qwen/Qwen3-Reranker-4B",
-    "Qwen/Qwen3-Reranker-8B",
+    "cohere/rerank-v3.5",
+    "cohere/rerank-4-fast",
+    "cohere/rerank-4-pro",
 )
 DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
@@ -61,4 +62,15 @@ def resolve_db_rag_embedding_model() -> str:
     if model not in SUPPORTED_DB_RAG_EMBEDDING_MODELS:
         supported = ", ".join(SUPPORTED_DB_RAG_EMBEDDING_MODELS)
         raise ValueError(f"Unsupported DB_RAG_EMBEDDING_MODEL '{model}'. Supported values: {supported}.")
+    return model
+
+
+def resolve_db_rag_reranker_model() -> str | None:
+    load_dotenv()
+    model = str(os.getenv("DB_RAG_RERANKER_MODEL", "") or "").strip()
+    if not model:
+        return None
+    if model not in SUPPORTED_DB_RAG_RERANKER_MODELS:
+        supported = ", ".join(SUPPORTED_DB_RAG_RERANKER_MODELS)
+        raise ValueError(f"Unsupported DB_RAG_RERANKER_MODEL '{model}'. Supported values: {supported}.")
     return model

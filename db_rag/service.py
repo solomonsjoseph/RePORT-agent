@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from functools import lru_cache
 import json
+import re
 from typing import Any
 
 from utils.llm_response import coerce_text_content
@@ -106,6 +108,109 @@ class SqlExecutionResult:
     sql: str
     dataframe: Any
     source_tables: list[str]
+
+
+@lru_cache(maxsize=1)
+def _schema_column_catalog() -> tuple[dict[tuple[str, str], dict[str, str]], dict[str, list[dict[str, str]]]]:
+    by_pair: dict[tuple[str, str], dict[str, str]] = {}
+    by_column: dict[str, list[dict[str, str]]] = {}
+    for schema_file in sorted(SCHEMA_DIR.glob("*.json")):
+        schema = json.loads(schema_file.read_text(encoding="utf-8"))
+        table = str(schema.get("form_name", "") or "").strip()
+        variables = dict(schema.get("variables", {}) or {})
+        if not table:
+            continue
+        for column, info in variables.items():
+            column_name = str(column or "").strip()
+            if not column_name:
+                continue
+            entry = {
+                "table": table,
+                "column": column_name,
+                "description": str((info or {}).get("description", "") or "").strip(),
+            }
+            by_pair[(table, column_name)] = entry
+            by_column.setdefault(column_name, []).append(entry)
+    return by_pair, by_column
+
+
+def _lookup_schema_column(table: str, column: str) -> dict[str, str] | None:
+    by_pair, _by_column = _schema_column_catalog()
+    return by_pair.get((str(table or "").strip(), str(column or "").strip()))
+
+
+def _resolve_explicit_schema_mentions(
+    question: str,
+    feedback_history: list[dict[str, Any]],
+) -> list[dict[str, str]]:
+    by_pair, by_column = _schema_column_catalog()
+    texts = [str(question or "")]
+    texts.extend(str(item.get("feedback") or "") for item in feedback_history if isinstance(item, dict))
+    haystack = "\n".join(texts)
+    haystack_lower = haystack.lower()
+
+    matched: list[dict[str, str]] = []
+    seen_pairs: set[tuple[str, str]] = set()
+
+    for (table, column), entry in by_pair.items():
+        token = f"{table}.{column}".lower()
+        if token in haystack_lower and (table, column) not in seen_pairs:
+            matched.append(dict(entry))
+            seen_pairs.add((table, column))
+
+    for column_name, entries in by_column.items():
+        if len(entries) != 1:
+            continue
+        if re.search(rf"\b{re.escape(column_name)}\b", haystack, re.IGNORECASE):
+            entry = entries[0]
+            pair = (entry["table"], entry["column"])
+            if pair not in seen_pairs:
+                matched.append(dict(entry))
+                seen_pairs.add(pair)
+
+    return matched
+
+
+def _normalize_previous_selection(previous_selection: Any) -> dict[str, Any]:
+    if isinstance(previous_selection, ColumnSelectionCandidate):
+        return {
+            "selection_id": previous_selection.selection_id,
+            "question": previous_selection.question,
+            "tables": list(previous_selection.tables),
+            "columns": [dict(column) for column in previous_selection.columns],
+            "rationale": previous_selection.rationale,
+            "feedback_history": list(previous_selection.feedback_history),
+            "status": previous_selection.status,
+        }
+    if isinstance(previous_selection, dict):
+        return {
+            "selection_id": str(previous_selection.get("selection_id", "") or "").strip(),
+            "question": str(previous_selection.get("question", "") or "").strip(),
+            "tables": [str(value or "").strip() for value in list(previous_selection.get("tables") or []) if str(value or "").strip()],
+            "columns": [
+                {
+                    "table": str(column.get("table", "") or "").strip(),
+                    "column": str(column.get("column", "") or "").strip(),
+                    "description": str(column.get("description", "") or "").strip(),
+                }
+                for column in list(previous_selection.get("columns") or [])
+                if isinstance(column, dict)
+                and str(column.get("table", "") or "").strip()
+                and str(column.get("column", "") or "").strip()
+            ],
+            "rationale": str(previous_selection.get("rationale", "") or "").strip(),
+            "feedback_history": list(previous_selection.get("feedback_history") or []),
+            "status": str(previous_selection.get("status", "") or "").strip(),
+        }
+    return {
+        "selection_id": "",
+        "question": "",
+        "tables": [],
+        "columns": [],
+        "rationale": "",
+        "feedback_history": [],
+        "status": "",
+    }
 
 
 def _build_invalid_column_selection_candidate(
@@ -308,12 +413,25 @@ class DbRagService:
         question: str,
         context: DbRagContext,
         feedback_history: list[dict[str, Any]] | None = None,
+        previous_selection: Any = None,
     ) -> ColumnSelectionCandidate:
         from langchain_core.messages import HumanMessage, SystemMessage
 
         normalized_feedback_history = list(feedback_history or [])
+        normalized_previous_selection = _normalize_previous_selection(previous_selection)
         valid_tables = set(context.table_names)
         valid_columns = {(entry.table, entry.column) for entry in context.columns}
+        explicit_schema_columns = _resolve_explicit_schema_mentions(question, normalized_feedback_history)
+        explicit_valid_columns = [
+            column
+            for column in explicit_schema_columns
+            if _lookup_schema_column(column["table"], column["column"]) is not None
+        ]
+        constrained_columns = [
+            column
+            for column in normalized_previous_selection.get("columns", [])
+            if _lookup_schema_column(column["table"], column["column"]) is not None
+        ]
         response = self.llm.invoke(
             [
                 SystemMessage(
@@ -321,6 +439,9 @@ class DbRagService:
                         "You are preparing a column selection candidate for a RePORT database question. "
                         "Use the retrieved table and column context plus any reviewer feedback to select only "
                         "exact tables and exact table.column pairs relevant to the question. "
+                        "If the prompt includes a previous reviewed selection or explicit schema constraints, "
+                        "preserve those exact table.column pairs unless the reviewer feedback explicitly replaces them. "
+                        "Do not drop required exact columns just because they were not top-ranked in retrieval. "
                         "Return only a JSON object with exactly these keys: "
                         '{"selection_id": string, "rationale": string, "tables": [string], '
                         '"columns": [{"table": string, "column": string, "description": string}]}.'
@@ -331,7 +452,9 @@ class DbRagService:
                         f"Question:\n{question}\n\n"
                         f"Table context:\n{context.table_context or 'none'}\n\n"
                         f"Column context:\n{context.column_context or 'none'}\n\n"
-                        f"Feedback history:\n{json.dumps(normalized_feedback_history, indent=2, sort_keys=True)}"
+                        f"Feedback history:\n{json.dumps(normalized_feedback_history, indent=2, sort_keys=True)}\n\n"
+                        f"Previous selection candidate:\n{json.dumps(normalized_previous_selection, indent=2, sort_keys=True)}\n\n"
+                        f"Explicit schema constraints:\n{json.dumps(explicit_valid_columns, indent=2, sort_keys=True)}"
                     )
                 ),
             ]
@@ -356,16 +479,37 @@ class DbRagService:
                     continue
                 table = str(item.get("table", "") or "").strip()
                 column = str(item.get("column", "") or "").strip()
-                if not table or not column or (table, column) not in valid_columns:
+                if not table or not column:
+                    continue
+                schema_entry = _lookup_schema_column(table, column)
+                if (table, column) not in valid_columns and schema_entry is None:
                     continue
                 description = str(item.get("description", "") or "").strip()
+                if not description and schema_entry is not None:
+                    description = schema_entry["description"]
                 columns.append({"table": table, "column": column, "description": description})
+
+        constrained_pairs = {
+            (column["table"], column["column"]): column
+            for column in [*explicit_valid_columns, *constrained_columns]
+        }
+        current_pairs = {(column["table"], column["column"]) for column in columns}
+        for pair, column in constrained_pairs.items():
+            if pair in current_pairs:
+                continue
+            columns.append(dict(column))
+            current_pairs.add(pair)
 
         if not tables and columns:
             for column in columns:
                 table = column["table"]
                 if table not in tables:
                     tables.append(table)
+
+        for column in columns:
+            table = column["table"]
+            if table not in tables:
+                tables.append(table)
 
         selection_id = str(parsed.get("selection_id", "") or "").strip() or default_selection_id(
             question,
@@ -375,7 +519,7 @@ class DbRagService:
         )
         rationale = str(parsed.get("rationale", "") or "").strip()
 
-        if not tables and not columns:
+        if not columns:
             return _build_invalid_column_selection_candidate(question, context, normalized_feedback_history)
 
         return ColumnSelectionCandidate(

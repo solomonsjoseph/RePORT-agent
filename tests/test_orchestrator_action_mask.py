@@ -123,3 +123,19 @@ def test_action_mask_blocks_inactive_human_review_rag_db_column_selection() -> N
     assert blocked["human_review_rag_db_column_selection"] == (
         "requires DB-RAG column selection awaiting review"
     )
+
+
+def test_action_mask_blocks_inactive_human_review_rag_db_sql_execution() -> None:
+    state = {
+        "agents": {
+            "rag_db_qa": {},
+        },
+        "meta": {},
+    }
+
+    allowed, blocked = mask_actions(state, ["qa", "human_review_rag_db_sql_execution"])
+
+    assert allowed == ["qa"]
+    assert blocked["human_review_rag_db_sql_execution"] == (
+        "requires prepared DB-RAG SQL awaiting review"
+    )

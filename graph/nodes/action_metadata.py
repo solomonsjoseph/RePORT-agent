@@ -16,6 +16,7 @@ _ACTION_MODULES = (
     "human_review_after_error",
     "human_review_before_output",
     "human_review_rag_db_column_selection",
+    "human_review_rag_db_sql_execution",
     "terminal_execution_error",
 )
 

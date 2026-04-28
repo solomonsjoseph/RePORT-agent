@@ -98,9 +98,19 @@ Relevant `.env` keys for DB-RAG:
 
 ```env
 DB_RAG_EMBEDDING_MODEL=OpenAI/text-embedding-3-small
+DB_RAG_RERANKER_MODEL=cohere/rerank-v3.5
 DB_RAG_OPENROUTER_API_KEY=...
 DB_RAG_OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
 ```
+
+Supported DB-RAG reranker models through OpenRouter:
+
+- `cohere/rerank-v3.5`
+- `cohere/rerank-4-fast`
+- `cohere/rerank-4-pro`
+
+Reranking is optional and does not require rebuilding the DB-RAG index.
+When `DB_RAG_RERANKER_MODEL` is set, the LangGraph DB-RAG app path uses it for column reranking as well.
 
 For OpenAI indexing:
 
@@ -126,10 +136,35 @@ python -m db_rag.quick_test "your question here"
 If you omit the question, the script drops into interactive mode. If the runtime
 assets are missing, it rebuilds them first.
 
+To use DB-RAG in the Streamlit app:
+
+1. Build the DB-RAG index with the embedding model you want to use.
+2. Set `DB_RAG_EMBEDDING_MODEL` in `.env` to the same embedding model used for the built index.
+3. Optionally set `DB_RAG_RERANKER_MODEL` to one of the supported Cohere/OpenRouter rerankers.
+4. Launch the app with `python -m streamlit run streamlit_app.py`.
+5. In the sidebar under `DB-RAG Runtime`, confirm the app shows the expected embedding index and reranker.
+
+Example `.env` for app usage:
+
+```env
+DB_RAG_EMBEDDING_MODEL=Qwen/Qwen3-Embedding-4B
+DB_RAG_RERANKER_MODEL=cohere/rerank-v3.5
+DB_RAG_OPENROUTER_API_KEY=...
+DB_RAG_OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+```
+
+If `DB_RAG_RERANKER_MODEL` is unset, the app uses the default ChromaDB column ordering with reranking disabled.
+
 To run the sibling-style retrieval benchmark against prebuilt DB-RAG assets:
 
 ```bash
 python -m db_rag.benchmark.evaluate --benchmark db_rag/benchmark/data/retrieval_benchmark_100.csv --indexing-model Qwen/Qwen3-Embedding-4B
+```
+
+To run the benchmark with reranking enabled:
+
+```bash
+python -m db_rag.benchmark.evaluate --benchmark db_rag/benchmark/data/retrieval_benchmark_100.csv --indexing-model Qwen/Qwen3-Embedding-4B --reranker cohere/rerank-v3.5
 ```
 
 Benchmark behavior:
@@ -138,6 +173,17 @@ Benchmark behavior:
 - The benchmark uses the prebuilt DuckDB, Chroma index, and manifest for the selected indexing model.
 - The benchmark does not rebuild assets.
 - If the selected assets are missing, it exits immediately and tells you to run `db_rag.build_index` first.
+- Each benchmark run writes to `db_rag/benchmark/results/<tag>/` with:
+  - `details.csv`
+  - `summary.json`
+
+To render the benchmark figure for a saved run:
+
+```bash
+python -m db_rag.benchmark.plot_results --run-dir db_rag/benchmark/results/<tag>
+```
+
+This writes `figure.png` into the same run directory.
 
 ### Notes:
 - Synthetic demo data are included under `data/` folder.

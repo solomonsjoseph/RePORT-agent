@@ -69,7 +69,7 @@ def test_main_prints_runtime_banner_without_reranker(monkeypatch, capsys):
     assert "Indexing model: Qwen/Qwen3-Embedding-4B" in output
     assert "Reranker: none (ChromaDB ordering)" in output
     assert "To enable reranking, pass --reranker <model>." in output
-    assert "Available reranker models: Qwen/Qwen3-Reranker-4B, Qwen/Qwen3-Reranker-8B" in output
+    assert "Available reranker models: cohere/rerank-v3.5, cohere/rerank-4-fast, cohere/rerank-4-pro" in output
     assert "Query LLM: OpenAI / gpt-5.4" in output
 
 
@@ -87,14 +87,14 @@ def test_main_prints_runtime_banner_with_reranker(monkeypatch, capsys):
     )
 
     exit_code = quick_test.main(
-        ["what columns track age", "--reranker", "Qwen/Qwen3-Reranker-4B", "--provider", "openai"]
+        ["what columns track age", "--reranker", "cohere/rerank-v3.5", "--provider", "openai"]
     )
     output = capsys.readouterr().out
 
     assert exit_code == 0
     assert "Running quick test:" in output
     assert "Indexing model: Qwen/Qwen3-Embedding-4B" in output
-    assert "Reranker: Qwen/Qwen3-Reranker-4B" in output
+    assert "Reranker: cohere/rerank-v3.5" in output
     assert "To enable reranking, pass --reranker <model>." not in output
     assert "Query LLM: OpenAI / gpt-5.4" in output
 

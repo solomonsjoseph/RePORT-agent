@@ -87,7 +87,7 @@ def test_pending_rag_db_column_review_is_blocked_waiting() -> None:
     assert status["blocker_signature"] == "waiting_for_rag_db_column_review:sel-1"
 
 
-def test_pending_rag_db_sql_confirmation_is_blocked_waiting() -> None:
+def test_pending_rag_db_sql_review_is_blocked_waiting() -> None:
     state = {
         "agents": {
             "executor": {"run_status": "idle"},
@@ -101,9 +101,39 @@ def test_pending_rag_db_sql_confirmation_is_blocked_waiting() -> None:
 
     status = derive_workflow_status(state)
 
-    assert status["milestone"] == "awaiting_rag_db_sql_confirmation"
+    assert status["milestone"] == "awaiting_rag_db_sql_review"
     assert status["completion_status"] == "blocked_waiting"
-    assert status["blocker_signature"] == "waiting_for_rag_db_sql_confirmation:sel-1"
+    assert status["blocker_signature"] == "waiting_for_rag_db_sql_review:sel-1"
+
+
+def test_db_rag_sql_execution_error_is_complete_after_sql_review_node_runs() -> None:
+    state = {
+        "output": {
+            "qa_response": "DB-RAG SQL execution failed and the workflow stopped.",
+            "error": {
+                "category": "db_rag_sql",
+                "type": "BinderException",
+                "message": 'Referenced column "SEX" not found in FROM clause',
+            },
+            "generated_sql": 'SELECT "AGE", "SEX" FROM "Form 1A"',
+        },
+        "agents": {
+            "executor": {"run_status": "idle"},
+            "human_review": {"before_run_decision": None, "after_error_decision": None, "final_decision": None},
+            "rag_db_qa": {
+                "status": "error",
+                "active_thread": False,
+            },
+        },
+        "meta": {},
+        "last_action": "human_review_rag_db_sql_execution",
+    }
+
+    status = derive_workflow_status(state)
+
+    assert status["milestone"] == "db_rag_sql_error"
+    assert status["completion_status"] == "complete"
+    assert status["blocker_signature"].startswith("db_rag_sql_error:BinderException:")
 
 
 def test_generated_code_without_ticket_is_awaiting_run_review() -> None:
