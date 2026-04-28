@@ -102,6 +102,7 @@ class OpenAIReranker:
         load_dotenv()
 
         resolved_model = str(model or "").strip()
+        self._provider = "openrouter"
         if not resolved_model:
             self.model = ""
             self.config_model = None
@@ -111,6 +112,20 @@ class OpenAIReranker:
         if resolved_model not in SUPPORTED_DB_RAG_RERANKER_MODELS:
             supported = ", ".join(SUPPORTED_DB_RAG_RERANKER_MODELS)
             raise ValueError(f"Unsupported DB-RAG reranker model '{resolved_model}'. Supported values: {supported}.")
+
+        if resolved_model == "rerank-2.5":
+            import voyageai
+
+            api_key = str(os.getenv("VOYAGE_API_KEY", "") or "").strip()
+            if not api_key:
+                raise ValueError("VOYAGE_API_KEY is required for Voyage reranking.")
+            self.client = voyageai.Client(api_key=api_key)
+            self.model = resolved_model
+            self.config_model = resolved_model
+            self.api_key = api_key
+            self.base_url = ""
+            self._provider = "voyage"
+            return
 
         api_key = str(os.getenv("DB_RAG_OPENROUTER_API_KEY", "") or "").strip()
         if not api_key:
@@ -126,6 +141,16 @@ class OpenAIReranker:
     def rerank(self, query: str, documents: list[str]) -> list[float]:
         if not self.model or not documents:
             return [0.0] * len(documents)
+
+        if self._provider == "voyage":
+            response = self.client.rerank(query, documents, model=self.model, top_k=len(documents))
+            scores = [0.0] * len(documents)
+            for item in getattr(response, "results", []) or []:
+                index = getattr(item, "index", None)
+                if not isinstance(index, int) or index < 0 or index >= len(documents):
+                    continue
+                scores[index] = float(getattr(item, "relevance_score", 0.0) or 0.0)
+            return scores
 
         payload = {
             "model": self.model,
