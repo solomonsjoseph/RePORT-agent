@@ -66,6 +66,8 @@ def _pending_clarification_has_database_context(state: AgentState) -> bool:
     meta = dict(state.get("meta") or {})
     if not meta.get(MetaKeys.AWAITING_USER_CLARIFICATION):
         return False
+    if meta.get(MetaKeys.CLARIFICATION_RETURN_NODE) == "rag_db_qa":
+        return True
     pending_question = str(meta.get(MetaKeys.PENDING_QUESTION) or "").strip().lower()
     return _mentions_explicit_rag_database(pending_question) or _mentions_database_reference(pending_question)
 

@@ -54,6 +54,15 @@ def derive_workflow_status(state: dict) -> dict:
         }
 
     rag_db_qa = get_node_data(state, "rag_db_qa")
+    pending_extraction_opt_in = dict(rag_db_qa.get("pending_extraction_opt_in") or {})
+    if pending_extraction_opt_in.get("status") == "awaiting_reply":
+        intent_id = pending_extraction_opt_in.get("intent_id")
+        return {
+            "milestone": "awaiting_rag_db_extraction_opt_in",
+            "completion_status": "blocked_waiting",
+            "blocker_signature": f"waiting_for_rag_db_extraction_opt_in:{intent_id}",
+        }
+
     pending_column_review = dict(rag_db_qa.get("pending_column_review") or {})
     if pending_column_review.get("status") == "awaiting_review":
         selection_id = pending_column_review.get("selection_id")
