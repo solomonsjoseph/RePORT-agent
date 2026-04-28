@@ -506,12 +506,44 @@ class DbRagService:
                 return False, f"Selection includes excluded column: {column}"
         return True, ""
 
+    def update_intent_from_feedback(
+        self,
+        intent: DbRagIntent | dict[str, Any],
+        feedback_history: list[dict[str, str]],
+    ) -> DbRagIntent:
+        base = intent if isinstance(intent, DbRagIntent) else DbRagIntent(**intent)
+        explicit = _resolve_explicit_schema_mentions(base.goal_text, feedback_history)
+        required_tables = list(base.required_tables)
+        required_columns = list(base.required_columns)
+        for entry in explicit:
+            if entry["table"] not in required_tables:
+                required_tables.append(entry["table"])
+            pair = f'{entry["table"]}.{entry["column"]}'
+            if pair not in required_columns:
+                required_columns.append(pair)
+        return DbRagIntent(
+            intent_id=base.intent_id,
+            source_question=base.source_question,
+            goal_text=base.goal_text,
+            mode=base.mode,
+            population=base.population,
+            requested_fields=list(base.requested_fields),
+            filters=list(base.filters),
+            required_tables=required_tables,
+            required_columns=required_columns,
+            excluded_tables=list(base.excluded_tables),
+            excluded_columns=list(base.excluded_columns),
+            feedback_history=list(feedback_history),
+            status=base.status,
+        )
+
     def prepare_column_selection(
         self,
         question: str,
         context: DbRagContext,
         feedback_history: list[dict[str, Any]] | None = None,
         previous_selection: Any = None,
+        intent_snapshot: dict[str, Any] | None = None,
     ) -> ColumnSelectionCandidate:
         from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -550,6 +582,7 @@ class DbRagService:
                         f"Question:\n{question}\n\n"
                         f"Table context:\n{context.table_context or 'none'}\n\n"
                         f"Column context:\n{context.column_context or 'none'}\n\n"
+                        f"Intent snapshot:\n{json.dumps(intent_snapshot or {}, indent=2, sort_keys=True)}\n\n"
                         f"Feedback history:\n{json.dumps(normalized_feedback_history, indent=2, sort_keys=True)}\n\n"
                         f"Previous selection candidate:\n{json.dumps(normalized_previous_selection, indent=2, sort_keys=True)}\n\n"
                         f"Explicit schema constraints:\n{json.dumps(explicit_valid_columns, indent=2, sort_keys=True)}"

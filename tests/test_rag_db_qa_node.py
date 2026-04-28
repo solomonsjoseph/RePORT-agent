@@ -631,3 +631,112 @@ def test_rag_db_revision_passes_previous_selection_into_prepare_column_selection
     assert isinstance(captured["previous_selection"], dict)
     assert captured["previous_selection"]["selection_id"] == "sel-old"
     assert updated["agents"]["rag_db_qa"]["pending_column_review"]["selection_id"] == "sel-revised"
+
+
+def test_rag_db_revision_regenerates_from_updated_intent_instead_of_raw_review_question() -> None:
+    rag = _fresh_rag_module()
+    captured: dict[str, object] = {}
+
+    class _Service:
+        def readiness(self):
+            return {"ready": True, "message": ""}
+
+        def update_intent_from_feedback(self, intent, feedback_history):
+            captured["feedback_history"] = feedback_history
+            return SimpleNamespace(
+                **{
+                    **intent,
+                    "goal_text": "subset age among confirmed index cases",
+                    "filters": ["confirmed index cases"],
+                }
+            )
+
+        def retrieve_context_for_intent(self, intent, *, reranker_model=None):
+            captured["retrieval_goal_text"] = intent.goal_text
+            return SimpleNamespace(
+                tables=[SimpleNamespace(table="Form 2A - INDEX CASE: Clinical/Demographic Form", text="table summary")],
+                columns=[
+                    SimpleNamespace(
+                        table="Form 2A - INDEX CASE: Clinical/Demographic Form",
+                        column="IS_AGE",
+                        text="age summary",
+                    )
+                ],
+                table_names=["Form 2A - INDEX CASE: Clinical/Demographic Form"],
+                column_names=["IS_AGE"],
+            )
+
+        def prepare_column_selection(
+            self,
+            question,
+            context,
+            feedback_history=None,
+            previous_selection=None,
+            intent_snapshot=None,
+        ):
+            captured["question"] = question
+            captured["intent_snapshot_goal_text"] = intent_snapshot["goal_text"]
+            return SimpleNamespace(
+                selection_id="sel-revised",
+                question=question,
+                tables=["Form 2A - INDEX CASE: Clinical/Demographic Form"],
+                columns=[
+                    {
+                        "table": "Form 2A - INDEX CASE: Clinical/Demographic Form",
+                        "column": "IS_AGE",
+                        "description": "Age in years",
+                    }
+                ],
+                rationale="revised candidate",
+                feedback_history=list(feedback_history or []),
+                status="awaiting_review",
+            )
+
+    state = {
+        "messages": [_HumanMessage("subset age")],
+        "output": {},
+        "observations": [],
+        "meta": {},
+        "agents": {
+            "rag_db_qa": {
+                "active_intent": {
+                    "intent_id": "intent-1",
+                    "source_question": "subset age",
+                    "goal_text": "subset age",
+                    "mode": "extraction",
+                    "population": None,
+                    "requested_fields": ["age"],
+                    "filters": [],
+                    "required_tables": [],
+                    "required_columns": [],
+                    "excluded_tables": [],
+                    "excluded_columns": [],
+                    "feedback_history": [],
+                    "status": "active",
+                },
+                "pending_column_review": {
+                    "selection_id": "sel-old",
+                    "question": "subset age",
+                    "tables": ["Form 2A - INDEX CASE: Clinical/Demographic Form"],
+                    "columns": [
+                        {
+                            "table": "Form 2A - INDEX CASE: Clinical/Demographic Form",
+                            "column": "IS_AGE",
+                            "description": "Age in years",
+                        }
+                    ],
+                    "rationale": "old candidate",
+                    "feedback_history": [{"feedback": "only confirmed index cases"}],
+                    "status": "needs_revision",
+                },
+            }
+        },
+        "artifacts": {"datasets": {}},
+    }
+
+    updated = rag.rag_db_qa_node(state, llm=object(), provider="openai", service=_Service())
+
+    assert captured["feedback_history"] == [{"feedback": "only confirmed index cases"}]
+    assert captured["retrieval_goal_text"] == "subset age among confirmed index cases"
+    assert captured["intent_snapshot_goal_text"] == "subset age among confirmed index cases"
+    assert updated["agents"]["rag_db_qa"]["pending_column_review"]["selection_id"] == "sel-revised"
