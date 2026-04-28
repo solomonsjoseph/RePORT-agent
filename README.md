@@ -73,6 +73,7 @@ Supported DB-RAG indexing models:
 - `OpenAI/text-embedding-3-small`
 - `Qwen/Qwen3-Embedding-4B`
 - `Qwen/Qwen3-Embedding-8B`
+- `voyage-4-large`
 
 Build the DB-RAG assets from the repo root by selecting one of the supported indexing models:
 
@@ -101,16 +102,19 @@ DB_RAG_EMBEDDING_MODEL=OpenAI/text-embedding-3-small
 DB_RAG_RERANKER_MODEL=cohere/rerank-v3.5
 DB_RAG_OPENROUTER_API_KEY=...
 DB_RAG_OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+VOYAGE_API_KEY=...
 ```
 
-Supported DB-RAG reranker models through OpenRouter:
+Supported DB-RAG reranker models:
 
 - `cohere/rerank-v3.5`
 - `cohere/rerank-4-fast`
 - `cohere/rerank-4-pro`
+- `rerank-2.5`
 
 Reranking is optional and does not require rebuilding the DB-RAG index.
 When `DB_RAG_RERANKER_MODEL` is set, the LangGraph DB-RAG app path uses it for column reranking as well.
+`voyageai` is included in `requirements.txt`, so no extra package install is required for Voyage support in this repo.
 
 For OpenAI indexing:
 
@@ -123,6 +127,14 @@ For Qwen indexing through OpenRouter, use one of:
 ```env
 DB_RAG_EMBEDDING_MODEL=Qwen/Qwen3-Embedding-4B
 DB_RAG_EMBEDDING_MODEL=Qwen/Qwen3-Embedding-8B
+```
+
+For Voyage indexing and reranking:
+
+```env
+DB_RAG_EMBEDDING_MODEL=voyage-4-large
+DB_RAG_RERANKER_MODEL=rerank-2.5
+VOYAGE_API_KEY=...
 ```
 
 This creates the shared DuckDB asset plus model-specific DB-RAG index assets in `runtime/db_rag/`.
@@ -140,7 +152,7 @@ To use DB-RAG in the Streamlit app:
 
 1. Build the DB-RAG index with the embedding model you want to use.
 2. Set `DB_RAG_EMBEDDING_MODEL` in `.env` to the same embedding model used for the built index.
-3. Optionally set `DB_RAG_RERANKER_MODEL` to one of the supported Cohere/OpenRouter rerankers.
+3. Optionally set `DB_RAG_RERANKER_MODEL` to one of the supported rerankers.
 4. Launch the app with `python -m streamlit run streamlit_app.py`.
 5. In the sidebar under `DB-RAG Runtime`, confirm the app shows the expected embedding index and reranker.
 
@@ -151,6 +163,14 @@ DB_RAG_EMBEDDING_MODEL=Qwen/Qwen3-Embedding-4B
 DB_RAG_RERANKER_MODEL=cohere/rerank-v3.5
 DB_RAG_OPENROUTER_API_KEY=...
 DB_RAG_OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+```
+
+Example `.env` for Voyage-backed app usage:
+
+```env
+DB_RAG_EMBEDDING_MODEL=voyage-4-large
+DB_RAG_RERANKER_MODEL=rerank-2.5
+VOYAGE_API_KEY=...
 ```
 
 If `DB_RAG_RERANKER_MODEL` is unset, the app uses the default ChromaDB column ordering with reranking disabled.
