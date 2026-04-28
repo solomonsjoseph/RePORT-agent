@@ -17,12 +17,26 @@ class OpenAIEmbeddingFunction:
 
     def __init__(self, model: str):
         load_dotenv()
-        from openai import OpenAI
 
         resolved_model = str(model or "").strip()
+        self.config_model = resolved_model
+        self._provider = "openai"
+        self._embedding_create_kwargs: dict[str, str] = {}
+        if resolved_model == "voyage-4-large":
+            import voyageai
+
+            api_key = str(os.getenv("VOYAGE_API_KEY", "") or "").strip()
+            if not api_key:
+                raise ValueError("VOYAGE_API_KEY is required for Voyage embeddings.")
+            self.client = voyageai.Client(api_key=api_key)
+            self.model = resolved_model
+            self._provider = "voyage"
+            return
+
+        from openai import OpenAI
+
         api_model = resolved_model.split("/", 1)[1] if resolved_model.startswith("OpenAI/") else resolved_model
         client_kwargs: dict[str, str] = {}
-        self._embedding_create_kwargs: dict[str, str] = {}
         if resolved_model.startswith("Qwen/"):
             api_key = str(os.getenv("DB_RAG_OPENROUTER_API_KEY", "") or "").strip()
             if not api_key:
@@ -33,9 +47,9 @@ class OpenAIEmbeddingFunction:
             ).strip()
             api_model = resolved_model.lower()
             self._embedding_create_kwargs["encoding_format"] = "float"
+            self._provider = "openrouter"
         self.client = OpenAI(**client_kwargs)
         self.model = api_model
-        self.config_model = resolved_model
 
     @staticmethod
     def name() -> str:
@@ -51,6 +65,14 @@ class OpenAIEmbeddingFunction:
         return self.__call__(input)
 
     def _create_embedding_batch(self, batch: list[str]) -> list[list[float]]:
+        if self._provider == "voyage":
+            response = self.client.embed(batch, model=self.model, input_type="document")
+            embeddings = getattr(response, "embeddings", None)
+            if embeddings:
+                return list(embeddings)
+            preview = batch[0][:120] if batch else ""
+            raise ValueError(f"No embedding data received for model {self.config_model}. Query preview: {preview!r}")
+
         for _attempt in range(self._MAX_EMPTY_DATA_RETRIES):
             response = self.client.embeddings.create(
                 model=self.model,
