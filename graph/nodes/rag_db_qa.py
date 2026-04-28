@@ -12,7 +12,7 @@ from utils.dataset_artifacts import (
 )
 
 from ..state import AgentState, MetaKeys
-from .state_helpers import clear_clarification_meta, get_agent_state
+from .state_helpers import clear_clarification_meta, get_agent_state, set_clarification_meta
 from .tool_routing import latest_user_message
 
 NODE_NAME = "rag_db_qa"
@@ -135,6 +135,62 @@ def _serialize_context_summary(context: Any) -> dict[str, list[str]]:
     return {
         "tables": _table_names_from_context(context),
         "columns": _column_names_from_context(context),
+    }
+
+
+def _serialize_intent(intent: Any) -> dict[str, Any]:
+    payload = dict(intent) if isinstance(intent, dict) else getattr(intent, "__dict__", {})
+    return {
+        "intent_id": str(payload.get("intent_id") or "").strip(),
+        "source_question": str(payload.get("source_question") or "").strip(),
+        "goal_text": str(payload.get("goal_text") or "").strip(),
+        "mode": str(payload.get("mode") or "").strip(),
+        "population": str(payload.get("population") or "").strip() or None,
+        "requested_fields": _string_list(payload.get("requested_fields", [])),
+        "filters": _string_list(payload.get("filters", [])),
+        "required_tables": _string_list(payload.get("required_tables", [])),
+        "required_columns": _string_list(payload.get("required_columns", [])),
+        "excluded_tables": _string_list(payload.get("excluded_tables", [])),
+        "excluded_columns": _string_list(payload.get("excluded_columns", [])),
+        "feedback_history": list(payload.get("feedback_history") or []),
+        "status": str(payload.get("status") or "active").strip(),
+    }
+
+
+def _intent_snapshot(intent: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "intent_id": intent["intent_id"],
+        "goal_text": intent["goal_text"],
+        "population": intent.get("population"),
+        "requested_fields": list(intent.get("requested_fields") or []),
+        "filters": list(intent.get("filters") or []),
+        "required_tables": list(intent.get("required_tables") or []),
+        "required_columns": list(intent.get("required_columns") or []),
+        "excluded_tables": list(intent.get("excluded_tables") or []),
+        "excluded_columns": list(intent.get("excluded_columns") or []),
+    }
+
+
+def _bootstrap_active_intent(rag_state: dict[str, Any], question: str) -> dict[str, Any]:
+    existing = _serialize_intent(rag_state.get("active_intent") or {})
+    if existing.get("goal_text"):
+        return existing
+    review = dict(rag_state.get("pending_column_review") or {})
+    review_question = str(review.get("question") or question).strip()
+    return {
+        "intent_id": f"intent:{review.get('selection_id') or 'bootstrap'}",
+        "source_question": review_question,
+        "goal_text": review_question,
+        "mode": "extraction",
+        "population": None,
+        "requested_fields": [],
+        "filters": [],
+        "required_tables": [],
+        "required_columns": [],
+        "excluded_tables": [],
+        "excluded_columns": [],
+        "feedback_history": list(review.get("feedback_history") or []),
+        "status": "active",
     }
 
 
@@ -293,6 +349,7 @@ def _execute_prepared_sql_candidate(
         rag_state.pop("pending_column_review", None)
         rag_state["error"] = error_payload
         rag_state["last_database_question"] = candidate.question
+        rag_state["thread_status"] = "error"
         return _finalize_rag_state(updated, rag_state, status="error", active_thread=False)
 
     response_text = (
@@ -308,6 +365,7 @@ def _execute_prepared_sql_candidate(
     rag_state.pop("pending_column_review", None)
     rag_state["error"] = None
     rag_state["last_database_question"] = candidate.question
+    rag_state["thread_status"] = "completed"
     return _finalize_rag_state(updated, rag_state, status="done", active_thread=True)
 
 
@@ -431,32 +489,41 @@ def rag_db_qa_node(
         updated["meta"] = clear_clarification_meta(updated.get("meta") or {})
         rag_state["error"] = None
         rag_state["last_database_question"] = candidate.question
+        rag_state["thread_status"] = "awaiting_sql_review"
         return _finalize_rag_state(updated, rag_state, status="done", active_thread=True)
 
     pending_column_review = dict(rag_state.get("pending_column_review") or {})
     if pending_column_review.get("status") == "needs_revision":
-        review_question = str(pending_column_review.get("question") or rag_state.get("last_database_question") or question).strip()
+        active_intent = _bootstrap_active_intent(rag_state, question)
         feedback_history = list(pending_column_review.get("feedback_history") or [])
-        context = service.retrieve_context(review_question, reranker_model=reranker_model)
+        revised_intent = _serialize_intent(service.update_intent_from_feedback(active_intent, feedback_history))
+        snapshot = _intent_snapshot(revised_intent)
+        context = service.retrieve_context_for_intent(SimpleNamespace(**revised_intent), reranker_model=reranker_model)
         selection = service.prepare_column_selection(
-            review_question,
+            revised_intent["goal_text"],
             context,
             feedback_history=feedback_history,
             previous_selection=pending_column_review,
+            intent_snapshot=snapshot,
         )
         review_payload = _serialize_column_selection(selection)
-        review_payload["question"] = review_question
+        review_payload["question"] = revised_intent["goal_text"]
+        review_payload["goal_text"] = revised_intent["goal_text"]
         review_payload["feedback_history"] = list(review_payload.get("feedback_history") or feedback_history)
         review_payload["status"] = "awaiting_review"
 
         updated = _append_ai_response(state, _format_column_review_response("", review_payload, revised=True))
         updated = _clear_output_error(updated)
         updated["meta"] = clear_clarification_meta(updated.get("meta") or {})
-        rag_state["last_database_question"] = review_question
+        rag_state["active_intent"] = revised_intent
+        rag_state["intent_snapshot_for_selection"] = snapshot
+        rag_state["last_database_question"] = revised_intent["goal_text"]
         rag_state["last_retrieval_context"] = _serialize_context_summary(context)
         rag_state["pending_column_review"] = review_payload
+        rag_state.pop("pending_extraction_opt_in", None)
         rag_state.pop("pending_sql_candidate", None)
         rag_state["error"] = None
+        rag_state["thread_status"] = "awaiting_column_review"
         return _finalize_rag_state(updated, rag_state, status="done", active_thread=True)
 
     if pending_column_review.get("status") == "approved" and not pending_sql_candidate:
@@ -493,12 +560,15 @@ def rag_db_qa_node(
         rag_state["last_database_question"] = approved_question
         rag_state["pending_sql_candidate"] = candidate_payload
         rag_state["error"] = None
+        rag_state["thread_status"] = "awaiting_sql_review"
         return _finalize_rag_state(updated, rag_state, status="done", active_thread=True)
 
     context = service.retrieve_context(question, reranker_model=reranker_model)
     answer = service.answer_from_context(question, context)
     context_summary = _serialize_context_summary(context)
+    intent = _serialize_intent(service.resolve_intent(question, context, prior_intent=dict(rag_state.get("active_intent") or {})))
 
+    rag_state["active_intent"] = intent
     rag_state["last_database_question"] = question
     rag_state["last_retrieval_context"] = context_summary
     rag_state["error"] = None
@@ -507,24 +577,33 @@ def rag_db_qa_node(
         updated = _append_ai_response(state, str(_read_value(answer, "answer", "") or "").strip())
         updated = _clear_output_error(updated)
         updated["meta"] = clear_clarification_meta(updated.get("meta") or {})
+        rag_state.pop("pending_extraction_opt_in", None)
         rag_state.pop("pending_column_review", None)
         rag_state.pop("pending_sql_candidate", None)
+        rag_state["thread_status"] = "answered_metadata"
         return _finalize_rag_state(updated, rag_state, status="done", active_thread=True)
 
-    selection = service.prepare_column_selection(question, context, feedback_history=[], previous_selection=None)
-    review_payload = _serialize_column_selection(selection)
-    review_payload["question"] = question
-    review_payload["status"] = "awaiting_review"
-    if "feedback_history" not in review_payload or review_payload["feedback_history"] is None:
-        review_payload["feedback_history"] = []
-
-    updated = _append_ai_response(
-        state,
-        _format_column_review_response(str(_read_value(answer, "answer", "") or "").strip(), review_payload),
+    opt_in_prompt = "Would you like me to identify the tables and columns suitable for this extraction?"
+    answer_text = str(_read_value(answer, "answer", "") or "").strip()
+    response_text = answer_text if opt_in_prompt.lower() in answer_text.lower() else (
+        f"{answer_text}\n\n{opt_in_prompt}" if answer_text else opt_in_prompt
     )
-    updated = _store_sql_candidate_output(updated, review_payload)
+    updated = _append_ai_response(state, response_text)
     updated = _clear_output_error(updated)
-    updated["meta"] = clear_clarification_meta(updated.get("meta") or {})
-    rag_state["pending_column_review"] = review_payload
+    updated["meta"] = set_clarification_meta(
+        updated.get("meta", {}),
+        return_node="rag_db_qa",
+        kind="rag_db_extraction_opt_in",
+        pending_question=opt_in_prompt,
+    )
+    rag_state["pending_extraction_opt_in"] = {
+        "question": opt_in_prompt,
+        "intent_id": intent["intent_id"],
+        "goal_text": intent["goal_text"],
+        "status": "awaiting_reply",
+    }
+    rag_state.pop("intent_snapshot_for_selection", None)
+    rag_state.pop("pending_column_review", None)
     rag_state.pop("pending_sql_candidate", None)
+    rag_state["thread_status"] = "awaiting_extraction_opt_in"
     return _finalize_rag_state(updated, rag_state, status="done", active_thread=True)

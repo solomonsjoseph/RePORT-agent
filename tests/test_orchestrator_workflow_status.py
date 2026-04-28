@@ -87,6 +87,32 @@ def test_pending_rag_db_column_review_is_blocked_waiting() -> None:
     assert status["blocker_signature"] == "waiting_for_rag_db_column_review:sel-1"
 
 
+def test_workflow_status_blocks_on_rag_db_extraction_opt_in() -> None:
+    state = {
+        "meta": {},
+        "artifacts": {"datasets": {}},
+        "output": {"qa_response": "Would you like me to identify the tables and columns suitable for this extraction?"},
+        "agents": {
+            "rag_db_qa": {
+                "pending_extraction_opt_in": {
+                    "intent_id": "intent-1",
+                    "goal_text": "subset age among index cases",
+                    "status": "awaiting_reply",
+                }
+            }
+        },
+        "last_action": "rag_db_qa",
+        "messages": [],
+        "node_data": {},
+    }
+
+    status = derive_workflow_status(state)
+
+    assert status["milestone"] == "awaiting_rag_db_extraction_opt_in"
+    assert status["completion_status"] == "blocked_waiting"
+    assert status["blocker_signature"] == "waiting_for_rag_db_extraction_opt_in:intent-1"
+
+
 def test_pending_rag_db_sql_review_is_blocked_waiting() -> None:
     state = {
         "agents": {

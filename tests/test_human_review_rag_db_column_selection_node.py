@@ -51,6 +51,7 @@ def test_human_review_rag_db_column_selection_approve_marks_selection_approved()
             "rag_db_qa": {
                 "pending_column_review": {
                     "selection_id": "sel-1",
+                    "goal_text": "subset sex among index cases",
                     "question": "Which tables and columns should be used?",
                     "tables": ["form_a"],
                     "columns": [{"table": "form_a", "column": "sex", "description": "Sex"}],
@@ -65,6 +66,7 @@ def test_human_review_rag_db_column_selection_approve_marks_selection_approved()
     updated = mod.human_review_rag_db_column_selection_node(state)
 
     assert captured["payload"]["type"] == "human_review_rag_db_column_selection"
+    assert captured["payload"]["goal_text"] == "subset sex among index cases"
     assert captured["payload"]["selection_id"] == "sel-1"
     assert updated["agents"]["rag_db_qa"]["pending_column_review"]["status"] == "approved"
     assert updated["agents"]["rag_db_qa"]["pending_column_review"]["selection_id"] == "sel-1"

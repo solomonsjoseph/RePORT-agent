@@ -425,3 +425,37 @@ def test_orchestrator_keeps_rag_db_thread_for_referential_followup() -> None:
     )
 
     assert updated["next_action"] == "rag_db_qa"
+
+
+def test_orchestrator_prefers_active_rag_db_clarification_thread() -> None:
+    orchestrator = _fresh_orchestrator()
+
+    state = {
+        "messages": [SimpleNamespace(type="human", content="yes")],
+        "output": {},
+        "observations": [],
+        "last_action": "rag_db_qa",
+        "orchestrator": {},
+        "agents": {
+            "executor": {"run_status": "idle"},
+            "human_review": {"before_run_decision": None, "final_decision": None},
+            "rag_db_qa": {"active_thread": True},
+        },
+        "artifacts": {"datasets": {}},
+        "meta": {
+            "error_iterations": 0,
+            "workflow_trace": [],
+            "awaiting_user_clarification": True,
+            "clarification_return_node": "rag_db_qa",
+            "clarification_kind": "rag_db_extraction_opt_in",
+            "pending_question": "Would you like me to identify the tables and columns suitable for this extraction?",
+        },
+    }
+
+    updated = orchestrator.orchestrator_node(
+        state,
+        _LLM('{"action":"qa","thought":"generic qa"}'),
+        ["qa", "rag_db_qa", "clarification", "end"],
+    )
+
+    assert updated["next_action"] == "clarification"

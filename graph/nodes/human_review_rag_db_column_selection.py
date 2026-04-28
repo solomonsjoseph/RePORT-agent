@@ -33,6 +33,7 @@ def human_review_rag_db_column_selection_node(state):
     feedback = interrupt(
         {
             "type": "human_review_rag_db_column_selection",
+            "goal_text": review.get("goal_text", ""),
             "question": review.get("question", ""),
             "selection_id": review.get("selection_id", ""),
             "tables": list(review.get("tables") or []),

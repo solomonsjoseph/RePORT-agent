@@ -110,11 +110,14 @@ def clarification_node(state: AgentState, llm, context: str = "") -> AgentState:
 
     question = latest_user_message(state)
     pending_question = meta.get(MetaKeys.PENDING_QUESTION)
-    effective_question = (
-        f"{pending_question}\n\nUser clarification: {question}"
-        if pending_question and question
-        else question
-    )
+    if kind == "rag_db_extraction_opt_in":
+        effective_question = question
+    else:
+        effective_question = (
+            f"{pending_question}\n\nUser clarification: {question}"
+            if pending_question and question
+            else question
+        )
     resumed_state = {
         **state,
         "meta": clear_clarification_meta(meta),
