@@ -88,6 +88,18 @@ def test_build_index_main_requires_indexing_model(monkeypatch, capsys) -> None:
     assert "python -m db_rag.build_index --indexing-model Qwen/Qwen3-Embedding-4B" in error_output
 
 
+def test_build_index_main_lists_voyage_embedding_model(monkeypatch, capsys) -> None:
+    build_index = _fresh_build_index_module(monkeypatch)
+
+    monkeypatch.setattr(sys, "argv", ["python -m db_rag.build_index"])
+
+    with pytest.raises(SystemExit):
+        build_index.main()
+
+    error_output = capsys.readouterr().err
+    assert "voyage-4-large" in error_output
+
+
 def test_build_index_main_rejects_unsupported_indexing_model(monkeypatch, capsys) -> None:
     build_index = _fresh_build_index_module(monkeypatch)
 

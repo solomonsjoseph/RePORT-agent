@@ -22,6 +22,15 @@ def test_quick_test_parser_leaves_reranker_unset_by_default():
     assert args.reranker is None
 
 
+def test_quick_test_parser_accepts_voyage_reranker():
+    from db_rag import quick_test
+
+    parser = quick_test._build_parser()
+    args = parser.parse_args(["question", "--reranker", "rerank-2.5"])
+
+    assert args.reranker == "rerank-2.5"
+
+
 def test_run_query_passes_debug_to_service(monkeypatch):
     from db_rag import quick_test
 
