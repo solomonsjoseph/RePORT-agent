@@ -344,6 +344,29 @@ class DbRagService:
             column_context="\n\n".join(entry.text for entry in columns),
         )
 
+    def retrieve_context_for_intent(
+        self,
+        intent: DbRagIntent,
+        *,
+        reranker_model: str | None = None,
+    ) -> DbRagContext:
+        table_collection, column_collection = self._load_collections()
+        table_rows, column_rows = retrieve_context_records(
+            self.llm,
+            table_collection,
+            column_collection,
+            intent.goal_text,
+            reranker_model=reranker_model,
+            required_tables=list(intent.required_tables),
+            excluded_tables=list(intent.excluded_tables),
+        )
+        return DbRagContext(
+            tables=[DbRagTableHit(**entry) for entry in table_rows],
+            columns=[DbRagColumnHit(**entry) for entry in column_rows],
+            table_context="\n\n".join(entry["text"] for entry in table_rows),
+            column_context="\n\n".join(entry["text"] for entry in column_rows),
+        )
+
     def answer_question(self, question: str) -> dict[str, Any]:
         from langchain_core.messages import HumanMessage, SystemMessage
 

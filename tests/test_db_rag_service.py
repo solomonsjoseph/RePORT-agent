@@ -809,6 +809,53 @@ def test_validate_selection_against_intent_rejects_excluded_table(monkeypatch) -
     assert "excluded table" in error_message.lower()
 
 
+def test_retrieve_context_for_intent_applies_required_and_excluded_tables(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    from db_rag import service
+
+    captured: dict[str, object] = {}
+
+    def _fake_retrieve_context_records(_llm, _table_collection, _column_collection, question, **kwargs):
+        captured["question"] = question
+        captured["required_tables"] = kwargs.get("required_tables")
+        captured["excluded_tables"] = kwargs.get("excluded_tables")
+        return (
+            [{"table": "Form 2A - INDEX CASE: Clinical/Demographic Form", "text": "table summary"}],
+            [{"table": "Form 2A - INDEX CASE: Clinical/Demographic Form", "column": "IS_AGE", "text": "age summary"}],
+        )
+
+    monkeypatch.setattr(service, "retrieve_context_records", _fake_retrieve_context_records)
+
+    class _DbRagService(service.DbRagService):
+        def _load_collections(self):
+            return object(), object()
+
+    intent = service.DbRagIntent(
+        intent_id="intent-1",
+        source_question="subset age",
+        goal_text="subset age among index cases",
+        mode="extraction",
+        population="index cases",
+        requested_fields=["age"],
+        filters=[],
+        required_tables=["Form 2A - INDEX CASE: Clinical/Demographic Form"],
+        required_columns=[],
+        excluded_tables=["Form 13 - TB Treatment Compliance Form"],
+        excluded_columns=[],
+        feedback_history=[],
+        status="active",
+    )
+
+    db_rag_service = _DbRagService(llm=object())
+    context = db_rag_service.retrieve_context_for_intent(intent)
+
+    assert captured["question"] == "subset age among index cases"
+    assert captured["required_tables"] == ["Form 2A - INDEX CASE: Clinical/Demographic Form"]
+    assert captured["excluded_tables"] == ["Form 13 - TB Treatment Compliance Form"]
+    assert context.table_names == ["Form 2A - INDEX CASE: Clinical/Demographic Form"]
+
+
 def test_prepare_column_selection_filters_invented_pairs(monkeypatch) -> None:
     _install_langchain_message_stubs(monkeypatch)
 

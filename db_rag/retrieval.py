@@ -130,6 +130,33 @@ def inject_paired_forms(merged_tables: dict[str, dict[str, str]], table_collecti
                 break
 
 
+def _inject_required_tables(
+    merged_tables: dict[str, dict[str, str]],
+    table_collection: Any,
+    required_tables: list[str],
+) -> None:
+    for table_name in required_tables:
+        if table_name in merged_tables:
+            continue
+        result = table_collection.query(
+            query_texts=[table_name],
+            n_results=1,
+            include=["documents", "metadatas"],
+        )
+        for document, metadata in zip(result["documents"][0], result["metadatas"][0]):
+            if metadata["table"] == table_name:
+                merged_tables[table_name] = {"table": metadata["table"], "text": document}
+                break
+
+
+def _drop_excluded_tables(
+    merged_tables: dict[str, dict[str, str]],
+    excluded_tables: list[str],
+) -> None:
+    for table_name in excluded_tables:
+        merged_tables.pop(table_name, None)
+
+
 def retrieve_context_records(
     llm: Any,
     table_collection: Any,
@@ -140,6 +167,8 @@ def retrieve_context_records(
     column_k: int = 12,
     reranker_model: str | None = None,
     debug: bool = False,
+    required_tables: list[str] | None = None,
+    excluded_tables: list[str] | None = None,
 ) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
     sub_queries = decompose_query(llm, question)
     if debug and len(sub_queries) > 1:
@@ -157,7 +186,12 @@ def retrieve_context_records(
             column_k=column_k,
             debug=debug,
         )
-        return tables, rerank_columns(
+        merged_tables = {entry["table"]: entry for entry in tables}
+        _inject_required_tables(merged_tables, table_collection, list(required_tables or []))
+        _drop_excluded_tables(merged_tables, list(excluded_tables or []))
+        selected_tables = set(merged_tables)
+        columns = [entry for entry in columns if entry["table"] in selected_tables]
+        return list(merged_tables.values()), rerank_columns(
             question,
             columns,
             reranker_model=reranker_model,
@@ -176,6 +210,8 @@ def retrieve_context_records(
             merged_tables.setdefault(metadata["table"], {"table": metadata["table"], "text": document})
 
     inject_paired_forms(merged_tables, table_collection, debug=debug)
+    _inject_required_tables(merged_tables, table_collection, list(required_tables or []))
+    _drop_excluded_tables(merged_tables, list(excluded_tables or []))
     selected_tables = set(merged_tables)
     if debug:
         print(f"\nMerged tables: {len(merged_tables)}")
