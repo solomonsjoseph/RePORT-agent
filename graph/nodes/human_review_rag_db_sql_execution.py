@@ -3,7 +3,6 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from langchain_core.messages import HumanMessage
 from langgraph.types import interrupt
 
 from .rag_db_qa import _deserialize_prepared_sql_candidate, _execute_prepared_sql_candidate
@@ -64,19 +63,16 @@ def human_review_rag_db_sql_execution_node(state, service):
     else:
         suggestion = explanation
 
-    messages = list(state.get("messages", []))
-    messages.append(HumanMessage(content=suggestion))
-
     history = list(review.get("feedback_history") or [])
     history.append(_review_feedback_entry(action or "regenerate", suggestion))
     review["status"] = "needs_revision"
     review["feedback_history"] = history
     rag_state["pending_column_review"] = review
     rag_state.pop("pending_sql_candidate", None)
+    rag_state["thread_status"] = "awaiting_column_review"
 
     updated_state = {
         **state,
-        "messages": messages,
         "agents": {
             **dict(state.get("agents") or {}),
             "rag_db_qa": rag_state,

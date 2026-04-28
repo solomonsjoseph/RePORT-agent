@@ -141,6 +141,23 @@ def test_rag_db_metadata_qa_answers_without_pending_sql_state() -> None:
                 relevant_columns=["SEX"],
             )
 
+        def resolve_intent(self, question, context, prior_intent=None):
+            return SimpleNamespace(
+                intent_id="intent-metadata-1",
+                source_question=question,
+                goal_text=question,
+                mode="metadata",
+                population=None,
+                requested_fields=[],
+                filters=[],
+                required_tables=[],
+                required_columns=[],
+                excluded_tables=[],
+                excluded_columns=[],
+                feedback_history=[],
+                status="active",
+            )
+
     state = {
         "messages": [_HumanMessage("How many male participants are in cohort A?")],
         "output": {},
@@ -184,6 +201,23 @@ def test_rag_db_qa_passes_reranker_model_to_retrieval() -> None:
                 rationale="metadata answer",
                 relevant_tables=["Form 1A"],
                 relevant_columns=["SEX"],
+            )
+
+        def resolve_intent(self, question, context, prior_intent=None):
+            return SimpleNamespace(
+                intent_id="intent-metadata-2",
+                source_question=question,
+                goal_text=question,
+                mode="metadata",
+                population=None,
+                requested_fields=[],
+                filters=[],
+                required_tables=[],
+                required_columns=[],
+                excluded_tables=[],
+                excluded_columns=[],
+                feedback_history=[],
+                status="active",
             )
 
     state = {
@@ -342,6 +376,23 @@ def test_rag_db_qa_combines_stale_qa_followup_context_when_taking_over() -> None
                 relevant_columns=["AGE"],
             )
 
+        def resolve_intent(self, question, context, prior_intent=None):
+            return SimpleNamespace(
+                intent_id="intent-metadata-3",
+                source_question=question,
+                goal_text=question,
+                mode="metadata",
+                population=None,
+                requested_fields=[],
+                filters=[],
+                required_tables=[],
+                required_columns=[],
+                excluded_tables=[],
+                excluded_columns=[],
+                feedback_history=[],
+                status="active",
+            )
+
     state = {
         "messages": [
             _HumanMessage("Find the matching records"),
@@ -368,7 +419,7 @@ def test_rag_db_qa_combines_stale_qa_followup_context_when_taking_over() -> None
     assert "pending_sql_candidate" not in updated["agents"]["rag_db_qa"]
 
 
-def test_rag_db_sql_needed_request_creates_column_review_without_sql() -> None:
+def test_rag_db_sql_needed_request_asks_opt_in_without_creating_column_review() -> None:
     rag = _fresh_rag_module()
     calls: list[str] = []
 
@@ -400,21 +451,21 @@ def test_rag_db_sql_needed_request_creates_column_review_without_sql() -> None:
                 relevant_columns=["AGE", "SEX"],
             )
 
-        def prepare_column_selection(self, question, context, feedback_history=None, previous_selection=None):
-            calls.append("prepare_column_selection")
-            assert feedback_history == []
-            assert previous_selection is None
+        def resolve_intent(self, question, context, prior_intent=None):
             return SimpleNamespace(
-                selection_id="sel-1",
-                question=question,
-                tables=["Form 1A"],
-                columns=[
-                    {"table": "Form 1A", "column": "AGE", "description": "Age in years"},
-                    {"table": "Form 1A", "column": "SEX", "description": "Sex at enrollment"},
-                ],
-                rationale="Need demographic columns for the requested subset.",
+                intent_id="intent-subset-1",
+                source_question=question,
+                goal_text="subset age and sex for matching participants",
+                mode="extraction",
+                population="matching participants",
+                requested_fields=["age", "sex"],
+                filters=[],
+                required_tables=[],
+                required_columns=[],
+                excluded_tables=[],
+                excluded_columns=[],
                 feedback_history=[],
-                status="awaiting_review",
+                status="active",
             )
 
         def prepare_sql_candidate(self, question, approved_selection):
@@ -431,14 +482,13 @@ def test_rag_db_sql_needed_request_creates_column_review_without_sql() -> None:
 
     updated = rag.rag_db_qa_node(state, llm=object(), provider="openai", service=_Service())
 
-    review = updated["agents"]["rag_db_qa"]["pending_column_review"]
-    assert review["status"] == "awaiting_review"
-    assert review["selection_id"] == "sel-1"
-    assert review["tables"] == ["Form 1A"]
-    assert [column["column"] for column in review["columns"]] == ["AGE", "SEX"]
+    opt_in = updated["agents"]["rag_db_qa"]["pending_extraction_opt_in"]
+    assert opt_in["status"] == "awaiting_reply"
+    assert opt_in["intent_id"] == "intent-subset-1"
     assert "pending_sql_candidate" not in updated["agents"]["rag_db_qa"]
-    assert "generated only after approval" in updated["output"]["qa_response"]
-    assert calls == ["retrieve_context", "answer_from_context", "prepare_column_selection"]
+    assert "pending_column_review" not in updated["agents"]["rag_db_qa"]
+    assert "identify the tables and columns suitable for this extraction" in updated["output"]["qa_response"]
+    assert calls == ["retrieve_context", "answer_from_context"]
 
 
 def test_rag_db_sql_needed_request_asks_opt_in_before_column_review() -> None:
@@ -581,7 +631,7 @@ def test_rag_db_revision_passes_previous_selection_into_prepare_column_selection
         def readiness(self):
             return {"ready": True, "message": ""}
 
-        def retrieve_context(self, question, *, reranker_model=None):
+        def retrieve_context_for_intent(self, intent, *, reranker_model=None):
             return SimpleNamespace(
                 tables=[SimpleNamespace(table="Form 1A", text="table summary")],
                 columns=[SimpleNamespace(table="Form 1A", column="AGE", text="age summary")],
@@ -589,7 +639,14 @@ def test_rag_db_revision_passes_previous_selection_into_prepare_column_selection
                 column_names=["AGE"],
             )
 
-        def prepare_column_selection(self, question, context, feedback_history=None, previous_selection=None):
+        def prepare_column_selection(
+            self,
+            question,
+            context,
+            feedback_history=None,
+            previous_selection=None,
+            intent_snapshot=None,
+        ):
             captured["question"] = question
             captured["feedback_history"] = feedback_history
             captured["previous_selection"] = previous_selection
@@ -602,6 +659,9 @@ def test_rag_db_revision_passes_previous_selection_into_prepare_column_selection
                 feedback_history=list(feedback_history or []),
                 status="awaiting_review",
             )
+
+        def update_intent_from_feedback(self, intent, feedback_history):
+            return SimpleNamespace(**intent)
 
     state = {
         "messages": [_HumanMessage("subset age")],

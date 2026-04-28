@@ -161,9 +161,56 @@ def test_human_review_rag_db_sql_execution_regenerate_requests_revision() -> Non
 
     assert captured["payload"]["type"] == "human_review_rag_db_sql_execution"
     assert updated["agents"]["rag_db_qa"]["pending_column_review"]["status"] == "needs_revision"
+    assert updated["agents"]["rag_db_qa"]["thread_status"] == "awaiting_column_review"
     assert "pending_sql_candidate" not in updated["agents"]["rag_db_qa"]
-    assert updated["messages"][-1].content.startswith("Human requested SQL regeneration.")
-    assert "Use the cohort A final outcome table instead." in updated["messages"][-1].content
+    assert updated["messages"] == []
+    history = updated["agents"]["rag_db_qa"]["pending_column_review"]["feedback_history"]
+    assert history[-1]["action"] == "regenerate"
+    assert "Human requested SQL regeneration." in history[-1]["feedback"]
+    assert "Use the cohort A final outcome table instead." in history[-1]["feedback"]
+
+
+def test_human_review_rag_db_sql_execution_regenerate_preserves_feedback_history_for_intent_update() -> None:
+    mod, _, _ = _fresh_module(action="regenerate", suggestion="Use the cohort A final outcome table instead.")
+
+    state = {
+        "messages": [],
+        "output": {},
+        "observations": [],
+        "meta": {},
+        "agents": {
+            "rag_db_qa": {
+                "pending_column_review": {
+                    "selection_id": "sel-3",
+                    "goal_text": "subset age and outcome among index cases",
+                    "question": "Subset age and outcome",
+                    "tables": ["Form 1A"],
+                    "columns": [{"table": "Form 1A", "column": "AGE", "description": "Age in years"}],
+                    "rationale": "Age is needed.",
+                    "feedback_history": [{"timestamp": "2026-04-28T12:00:00+00:00", "feedback": "Keep age."}],
+                    "status": "approved",
+                },
+                "pending_sql_candidate": {
+                    "question": "Subset age and outcome",
+                    "sql": 'SELECT "AGE" FROM "Form 1A"',
+                    "tables": ["Form 1A"],
+                    "columns": [{"table": "Form 1A", "column": "AGE", "description": "Age in years"}],
+                    "selection_id": "sel-3",
+                    "status": "prepared",
+                },
+                "last_database_question": "Subset age and outcome",
+            }
+        },
+        "artifacts": {"datasets": {}},
+    }
+
+    updated = mod.human_review_rag_db_sql_execution_node(state, service=object())
+
+    history = updated["agents"]["rag_db_qa"]["pending_column_review"]["feedback_history"]
+    assert len(history) == 2
+    assert history[0]["feedback"] == "Keep age."
+    assert "Use the cohort A final outcome table instead." in history[-1]["feedback"]
+    assert updated["agents"]["rag_db_qa"]["pending_column_review"]["goal_text"] == "subset age and outcome among index cases"
 
 
 def test_human_review_rag_db_sql_execution_approve_clears_pending_state_on_execution_error() -> None:
