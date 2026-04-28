@@ -24,11 +24,13 @@ SUPPORTED_DB_RAG_EMBEDDING_MODELS = (
     "OpenAI/text-embedding-3-small",
     "Qwen/Qwen3-Embedding-4B",
     "Qwen/Qwen3-Embedding-8B",
+    "voyage-4-large",
 )
 SUPPORTED_DB_RAG_RERANKER_MODELS = (
     "cohere/rerank-v3.5",
     "cohere/rerank-4-fast",
     "cohere/rerank-4-pro",
+    "rerank-2.5",
 )
 DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
