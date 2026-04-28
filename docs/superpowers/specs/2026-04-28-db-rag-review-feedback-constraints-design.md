@@ -1,5 +1,8 @@
 # DB-RAG Review Feedback Propagation And Hard-Constraint Design
 
+> Superseded by `docs/superpowers/specs/2026-04-28-db-rag-intent-review-workflow-design.md`.
+> This file is retained for historical context only and is no longer the canonical implementation contract.
+
 ## Goal
 
 Revise DB-RAG review regeneration so explicit human feedback materially changes the next retrieval and selection pass.

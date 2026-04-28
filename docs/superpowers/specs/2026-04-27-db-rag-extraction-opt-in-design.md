@@ -1,5 +1,8 @@
 # DB-RAG Extraction Opt-In And Thread-Intent Design
 
+> Superseded by `docs/superpowers/specs/2026-04-28-db-rag-intent-review-workflow-design.md`.
+> This file is retained for historical context only and is no longer the canonical implementation contract.
+
 ## Goal
 
 Revise the DB-RAG workflow so extraction-oriented requests do not immediately enter column review, do not rely on the latest user message as the retrieval query, and do not require a separate UI interrupt for extraction opt-in.
