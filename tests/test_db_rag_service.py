@@ -1235,6 +1235,141 @@ def test_prepare_column_selection_includes_previous_selection_in_prompt(monkeypa
     assert '"column": "AGE"' in message_text
 
 
+def test_update_intent_from_feedback_uses_llm_structured_exclusions(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    from db_rag import service
+
+    class _LLM:
+        def invoke(self, messages):
+            return SimpleNamespace(
+                content=json.dumps(
+                    {
+                        "goal_text": "subset age, gender, diabetes status, and final outcome among index case",
+                        "required_tables": ["Form 1A - Index Case Screening"],
+                        "required_columns": ["Form 1A - Index Case Screening.IS_AGE"],
+                        "excluded_tables": ["Cases and Controls Follow-Up Form"],
+                        "excluded_columns": ["Cases and Controls Follow-Up Form.SUBJID_PSEUDO"],
+                    }
+                )
+            )
+
+    monkeypatch.setattr(
+        service,
+        "_schema_column_catalog",
+        lambda: (
+            {
+                ("Form 1A - Index Case Screening", "IS_AGE"): {
+                    "table": "Form 1A - Index Case Screening",
+                    "column": "IS_AGE",
+                    "description": "Age in years",
+                },
+                ("Cases and Controls Follow-Up Form", "SUBJID_PSEUDO"): {
+                    "table": "Cases and Controls Follow-Up Form",
+                    "column": "SUBJID_PSEUDO",
+                    "description": "Pseudonymized subject id",
+                },
+            },
+            {},
+        ),
+    )
+
+    db_rag_service = service.DbRagService(llm=_LLM())
+    base_intent = service.DbRagIntent(
+        intent_id="intent-1",
+        source_question="subset index case variables",
+        goal_text="subset index case variables",
+        mode="extraction",
+        population="index case",
+    )
+    updated = db_rag_service.update_intent_from_feedback(
+        base_intent,
+        feedback_history=[{"feedback": "remove Cases and Controls Follow-Up Form and Cases and Controls Follow-Up Form.SUBJID_PSEUDO"}],
+    )
+
+    assert "Cases and Controls Follow-Up Form" in updated.excluded_tables
+    assert "Cases and Controls Follow-Up Form.SUBJID_PSEUDO" in updated.excluded_columns
+    assert "Form 1A - Index Case Screening" in updated.required_tables
+    assert "Form 1A - Index Case Screening.IS_AGE" in updated.required_columns
+
+
+def test_prepare_column_selection_enforces_intent_snapshot_exclusions_after_merge(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    from db_rag import service
+
+    class _LLM:
+        def invoke(self, messages):
+            return SimpleNamespace(
+                content=json.dumps(
+                    {
+                        "selection_id": "sel-exclusion",
+                        "rationale": "candidate from llm",
+                        "tables": [
+                            "Form 1A - Index Case Screening",
+                            "Cases and Controls Follow-Up Form",
+                        ],
+                        "columns": [
+                            {"table": "Form 1A - Index Case Screening", "column": "IS_AGE", "description": "Age in years"},
+                            {"table": "Cases and Controls Follow-Up Form", "column": "SUBJID_PSEUDO", "description": "Pseudonymized id"},
+                        ],
+                    }
+                )
+            )
+
+    monkeypatch.setattr(
+        service,
+        "_schema_column_catalog",
+        lambda: (
+            {
+                ("Form 1A - Index Case Screening", "IS_AGE"): {
+                    "table": "Form 1A - Index Case Screening",
+                    "column": "IS_AGE",
+                    "description": "Age in years",
+                },
+                ("Cases and Controls Follow-Up Form", "SUBJID_PSEUDO"): {
+                    "table": "Cases and Controls Follow-Up Form",
+                    "column": "SUBJID_PSEUDO",
+                    "description": "Pseudonymized id",
+                },
+            },
+            {},
+        ),
+    )
+
+    context = service.DbRagContext(
+        tables=[
+            service.DbRagTableHit(table="Form 1A - Index Case Screening", text="f1a"),
+            service.DbRagTableHit(table="Cases and Controls Follow-Up Form", text="ccf"),
+        ],
+        columns=[
+            service.DbRagColumnHit(table="Form 1A - Index Case Screening", column="IS_AGE", text="age"),
+            service.DbRagColumnHit(table="Cases and Controls Follow-Up Form", column="SUBJID_PSEUDO", text="subjid"),
+        ],
+    )
+    db_rag_service = service.DbRagService(llm=_LLM())
+    selection = db_rag_service.prepare_column_selection(
+        "subset age",
+        context,
+        previous_selection={
+            "selection_id": "sel-prev",
+            "question": "subset age",
+            "tables": ["Cases and Controls Follow-Up Form"],
+            "columns": [{"table": "Cases and Controls Follow-Up Form", "column": "SUBJID_PSEUDO", "description": "Pseudonymized id"}],
+            "rationale": "old",
+            "status": "needs_revision",
+        },
+        intent_snapshot={
+            "excluded_tables": ["Cases and Controls Follow-Up Form"],
+            "excluded_columns": ["Cases and Controls Follow-Up Form.SUBJID_PSEUDO"],
+        },
+    )
+
+    selected_pairs = {(column["table"], column["column"]) for column in selection.columns}
+    assert ("Cases and Controls Follow-Up Form", "SUBJID_PSEUDO") not in selected_pairs
+    assert "Cases and Controls Follow-Up Form" not in selection.tables
+
+
 def test_prepare_sql_candidate_uses_approved_columns_only(monkeypatch) -> None:
     _install_langchain_message_stubs(monkeypatch)
 

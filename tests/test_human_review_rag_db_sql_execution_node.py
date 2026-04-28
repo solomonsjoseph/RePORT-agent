@@ -5,6 +5,7 @@ import sys
 from types import ModuleType
 
 import pandas as pd
+from graph.workflow_config import MAX_ERROR_ITERATIONS
 
 
 class _HumanMessage:
@@ -286,3 +287,78 @@ def test_human_review_rag_db_sql_execution_approve_clears_pending_state_on_execu
     assert "pending_column_review" not in updated["agents"]["rag_db_qa"]
     assert updated["agents"]["rag_db_qa"]["status"] == "error"
     assert updated["agents"]["rag_db_qa"]["active_thread"] is False
+
+
+def test_human_review_rag_db_sql_execution_approve_autocorrects_and_retries_until_success() -> None:
+    mod, _, captured = _fresh_module(action="approve")
+
+    execution_result = ModuleType("execution_result")
+    execution_result.answer = "Read-only SQL execution completed with 1 result row(s)."
+    execution_result.sql = 'SELECT "AGE" FROM "Form 1A"'
+    execution_result.dataframe = pd.DataFrame({"AGE": [42]})
+    execution_result.source_tables = ["Form 1A"]
+
+    class ParserException(Exception):
+        pass
+
+    class _ExecService:
+        def __init__(self):
+            self.exec_attempts = 0
+            self.repair_attempts = 0
+
+        def execute_prepared_sql(self, candidate):
+            self.exec_attempts += 1
+            if self.exec_attempts <= MAX_ERROR_ITERATIONS:
+                raise ParserException('Parser Error: syntax error at or near ")"')
+            return execution_result
+
+        def repair_prepared_sql_candidate(self, candidate, error_message):
+            self.repair_attempts += 1
+            assert 'syntax error at or near ")"' in error_message
+            repaired = ModuleType("candidate_ns")
+            repaired.question = candidate.question
+            repaired.sql = 'SELECT "AGE" FROM "Form 1A"'
+            repaired.tables = list(candidate.tables)
+            repaired.columns = list(candidate.columns)
+            repaired.selection_id = candidate.selection_id
+            repaired.status = candidate.status
+            return repaired
+
+    service = _ExecService()
+
+    state = {
+        "messages": [],
+        "output": {},
+        "observations": [],
+        "meta": {"thread_id": "thread-sql-retry"},
+        "agents": {
+            "rag_db_qa": {
+                "pending_column_review": {
+                    "selection_id": "sel-retry",
+                    "question": "Subset age",
+                    "tables": ["Form 1A"],
+                    "columns": [{"table": "Form 1A", "column": "AGE", "description": "Age in years"}],
+                    "rationale": "Age is needed.",
+                    "feedback_history": [],
+                    "status": "approved",
+                },
+                "pending_sql_candidate": {
+                    "question": "Subset age",
+                    "sql": 'SELECT "AGE" FROM "Form 1A" WHERE )',
+                    "tables": ["Form 1A"],
+                    "columns": [{"table": "Form 1A", "column": "AGE", "description": "Age in years"}],
+                    "selection_id": "sel-retry",
+                    "status": "prepared",
+                },
+                "last_database_question": "Subset age",
+            }
+        },
+        "artifacts": {"datasets": {}},
+    }
+
+    updated = mod.human_review_rag_db_sql_execution_node(state, service)
+
+    assert captured["payload"]["type"] == "human_review_rag_db_sql_execution"
+    assert "Read-only SQL execution completed with 1 result row" in updated["output"]["qa_response"]
+    assert service.exec_attempts == MAX_ERROR_ITERATIONS + 1
+    assert service.repair_attempts == MAX_ERROR_ITERATIONS

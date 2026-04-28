@@ -238,7 +238,8 @@ def test_rag_db_qa_passes_reranker_model_to_retrieval() -> None:
     )
 
     assert updated["output"]["qa_response"] == "Metadata answer."
-    assert captured["question"] == "How many male participants are in cohort A?"
+    assert "Latest user request:" in captured["question"]
+    assert "How many male participants are in cohort A?" in captured["question"]
     assert captured["reranker_model"] == "cohere/rerank-v3.5"
 
 
@@ -280,7 +281,7 @@ def test_rag_db_qa_treats_bare_yes_as_fresh_message_without_executing_sql() -> N
 
     updated = rag.rag_db_qa_node(state, llm=object(), provider="openai", service=_Service())
 
-    assert "Please review the SQL before execution." in updated["output"]["qa_response"]
+    assert "review the sql details in the panel below before execution" in updated["output"]["qa_response"].lower()
     assert "pending_sql_candidate" in updated["agents"]["rag_db_qa"]
     assert updated["agents"]["rag_db_qa"]["pending_sql_candidate"]["selection_id"] == "sel-bare-yes"
     assert "pending_column_review" not in updated["agents"]["rag_db_qa"]
@@ -341,8 +342,8 @@ def test_rag_db_qa_replays_pending_sql_candidate_without_execution() -> None:
 
     updated = rag.rag_db_qa_node(state, llm=object(), provider="openai", service=_Service())
 
-    assert "Please review the SQL before execution." in updated["output"]["qa_response"]
-    assert "```sql" in updated["output"]["qa_response"]
+    assert "review the sql details in the panel below before execution" in updated["output"]["qa_response"].lower()
+    assert updated["output"]["prepared_sql_candidate"]["sql"] == 'SELECT "AGE", "SEX" FROM "Form 1A"'
     assert updated["agents"]["rag_db_qa"]["pending_sql_candidate"]["selection_id"] == "sel-decline"
     assert updated["agents"]["rag_db_qa"]["pending_column_review"]["status"] == "approved"
     assert updated["agents"]["rag_db_qa"]["last_database_question"] == "How many male participants are in cohort A?"
@@ -413,10 +414,76 @@ def test_rag_db_qa_combines_stale_qa_followup_context_when_taking_over() -> None
 
     updated = rag.rag_db_qa_node(state, llm=object(), provider="openai", service=_Service())
 
-    assert captured["question"] == "Find the matching records\n\nUser clarification: Use the local metadata store"
+    assert "Latest user request:" in captured["question"]
+    assert "Find the matching records" in captured["question"]
+    assert "User clarification: Use the local metadata store" in captured["question"]
     assert "local metadata store" in updated["output"]["qa_response"]
     assert "pending_column_review" not in updated["agents"]["rag_db_qa"]
     assert "pending_sql_candidate" not in updated["agents"]["rag_db_qa"]
+
+
+def test_rag_db_non_informative_followup_does_not_overwrite_active_intent() -> None:
+    rag = _fresh_rag_module()
+    captured: dict[str, str] = {}
+
+    class _Service:
+        def readiness(self):
+            return {"ready": True, "message": ""}
+
+        def retrieve_context(self, question, *, reranker_model=None):
+            captured["question"] = question
+            return SimpleNamespace(
+                tables=[SimpleNamespace(table="Form 2A - INDEX CASE: Clinical/Demographic Form", text="table summary")],
+                columns=[SimpleNamespace(table="Form 2A - INDEX CASE: Clinical/Demographic Form", column="IS_AGE", text="column summary")],
+                table_names=["Form 2A - INDEX CASE: Clinical/Demographic Form"],
+                column_names=["IS_AGE"],
+            )
+
+        def answer_from_context(self, question, context):
+            return SimpleNamespace(
+                answer="I can proceed with the existing extraction intent.",
+                needs_sql=False,
+                rationale="metadata answer",
+                relevant_tables=context.table_names,
+                relevant_columns=context.column_names,
+            )
+
+        def resolve_intent(self, question, context, prior_intent=None):
+            raise AssertionError("resolve_intent should not run for non-informative follow-up")
+
+    state = {
+        "messages": [_HumanMessage("thanks")],
+        "output": {},
+        "observations": [],
+        "meta": {},
+        "agents": {
+            "rag_db_qa": {
+                "active_intent": {
+                    "intent_id": "intent-existing",
+                    "source_question": "initial request",
+                    "goal_text": "subset age, sex, and diabetes among index cases",
+                    "mode": "extraction",
+                    "population": "index cases",
+                    "requested_fields": ["age", "sex", "diabetes"],
+                    "filters": [],
+                    "required_tables": [],
+                    "required_columns": [],
+                    "excluded_tables": [],
+                    "excluded_columns": [],
+                    "feedback_history": [],
+                    "status": "active",
+                },
+                "last_database_question": "subset age, sex, and diabetes among index cases",
+            }
+        },
+        "artifacts": {},
+    }
+
+    updated = rag.rag_db_qa_node(state, llm=object(), provider="openai", service=_Service())
+
+    assert "subset age, sex, and diabetes among index cases" in captured["question"]
+    assert updated["agents"]["rag_db_qa"]["active_intent"]["intent_id"] == "intent-existing"
+    assert updated["agents"]["rag_db_qa"]["last_database_question"] == "subset age, sex, and diabetes among index cases"
 
 
 def test_rag_db_sql_needed_request_asks_opt_in_without_creating_column_review() -> None:
@@ -561,6 +628,368 @@ def test_rag_db_sql_needed_request_asks_opt_in_before_column_review() -> None:
     assert "identify the tables and columns suitable for this extraction" in updated["output"]["qa_response"]
 
 
+def test_rag_db_extraction_opt_in_yes_prepares_column_review() -> None:
+    rag = _fresh_rag_module()
+
+    class _Service:
+        def readiness(self):
+            return {"ready": True, "message": ""}
+
+        def retrieve_context_for_intent(self, intent, *, reranker_model=None):
+            assert intent.goal_text == "subset age, gender, diabetes status, and final outcome among index case"
+            return SimpleNamespace(
+                tables=[SimpleNamespace(table="Form 2A - INDEX CASE: Clinical/Demographic Form", text="table summary")],
+                columns=[
+                    SimpleNamespace(
+                        table="Form 2A - INDEX CASE: Clinical/Demographic Form",
+                        column="IS_AGE",
+                        text="age summary",
+                    )
+                ],
+                table_names=["Form 2A - INDEX CASE: Clinical/Demographic Form"],
+                column_names=["IS_AGE"],
+            )
+
+        def prepare_column_selection(
+            self,
+            question,
+            context,
+            feedback_history=None,
+            previous_selection=None,
+            intent_snapshot=None,
+        ):
+            assert question == "subset age, gender, diabetes status, and final outcome among index case"
+            assert feedback_history == []
+            assert previous_selection is None
+            assert intent_snapshot["goal_text"] == question
+            return SimpleNamespace(
+                selection_id="sel-opt-in",
+                question=question,
+                tables=["Form 2A - INDEX CASE: Clinical/Demographic Form"],
+                columns=[
+                    {
+                        "table": "Form 2A - INDEX CASE: Clinical/Demographic Form",
+                        "column": "IS_AGE",
+                        "description": "Age in years",
+                    }
+                ],
+                rationale="selected required extraction columns",
+                feedback_history=[],
+                status="awaiting_review",
+            )
+
+    state = {
+        "messages": [_HumanMessage("yes")],
+        "output": {},
+        "observations": [],
+        "meta": {"clarification_kind": "rag_db_extraction_opt_in"},
+        "agents": {
+            "rag_db_qa": {
+                "active_intent": {
+                    "intent_id": "intent-opt-in",
+                    "source_question": "query my database",
+                    "goal_text": "subset age, gender, diabetes status, and final outcome among index case",
+                    "mode": "extraction",
+                    "population": "index case",
+                    "requested_fields": ["age", "gender", "diabetes status", "final outcome"],
+                    "filters": [],
+                    "required_tables": [],
+                    "required_columns": [],
+                    "excluded_tables": [],
+                    "excluded_columns": [],
+                    "feedback_history": [],
+                    "status": "active",
+                },
+                "pending_extraction_opt_in": {
+                    "question": "Would you like me to identify the tables and columns suitable for this extraction?",
+                    "intent_id": "intent-opt-in",
+                    "goal_text": "subset age, gender, diabetes status, and final outcome among index case",
+                    "status": "awaiting_reply",
+                },
+            }
+        },
+        "artifacts": {"datasets": {}},
+    }
+
+    updated = rag.rag_db_qa_node(state, llm=object(), provider="openai", service=_Service())
+
+    assert updated["agents"]["rag_db_qa"]["thread_status"] == "awaiting_column_review"
+    assert updated["agents"]["rag_db_qa"]["pending_column_review"]["selection_id"] == "sel-opt-in"
+    assert "pending_extraction_opt_in" not in updated["agents"]["rag_db_qa"]
+    assert "review the updated selection in the panel below" in updated["output"]["qa_response"].lower()
+    assert updated["meta"].get("clarification_kind") is None
+
+
+def test_rag_db_extraction_opt_in_unclear_reply_reasks_confirmation() -> None:
+    rag = _fresh_rag_module()
+
+    class _Service:
+        def readiness(self):
+            return {"ready": True, "message": ""}
+
+    state = {
+        "messages": [_HumanMessage("maybe")],
+        "output": {},
+        "observations": [],
+        "meta": {"clarification_kind": "rag_db_extraction_opt_in"},
+        "agents": {
+            "rag_db_qa": {
+                "pending_extraction_opt_in": {
+                    "question": "Would you like me to identify the tables and columns suitable for this extraction?",
+                    "intent_id": "intent-opt-in",
+                    "goal_text": "subset age",
+                    "status": "awaiting_reply",
+                }
+            }
+        },
+        "artifacts": {"datasets": {}},
+    }
+
+    updated = rag.rag_db_qa_node(state, llm=object(), provider="openai", service=_Service())
+
+    assert updated["agents"]["rag_db_qa"]["thread_status"] == "awaiting_extraction_opt_in"
+    assert updated["meta"]["clarification_kind"] == "rag_db_extraction_opt_in"
+    assert "reply with 'yes'" in updated["output"]["qa_response"].lower()
+
+
+def test_rag_db_extraction_opt_in_substantive_followup_continues_db_rag_qa() -> None:
+    rag = _fresh_rag_module()
+
+    class _Service:
+        def readiness(self):
+            return {"ready": True, "message": ""}
+
+        def retrieve_context(self, question, *, reranker_model=None):
+            assert "form 98a" in question.lower()
+            assert "foa_cohaout" in question.lower()
+            return SimpleNamespace(
+                tables=[SimpleNamespace(table="Form 98A - Final Outcome A", text="table summary")],
+                columns=[SimpleNamespace(table="Form 98A - Final Outcome A", column="FOA_COHAOUT", text="column summary")],
+                table_names=["Form 98A - Final Outcome A"],
+                column_names=["FOA_COHAOUT"],
+            )
+
+        def answer_from_context(self, question, context):
+            return SimpleNamespace(
+                answer="Form 98A includes final outcome variable FOA_COHAOUT.",
+                needs_sql=False,
+                rationale="metadata answer",
+                relevant_tables=context.table_names,
+                relevant_columns=context.column_names,
+            )
+
+        def resolve_intent(self, question, context, prior_intent=None):
+            return SimpleNamespace(
+                intent_id="intent-followup",
+                source_question=question,
+                goal_text=question,
+                mode="metadata",
+                population=None,
+                requested_fields=[],
+                filters=[],
+                required_tables=[],
+                required_columns=[],
+                excluded_tables=[],
+                excluded_columns=[],
+                feedback_history=[],
+                status="active",
+            )
+
+    state = {
+        "messages": [_HumanMessage("look for form 98A, variable FOA_COHAOUT for final outcome")],
+        "output": {},
+        "observations": [],
+        "meta": {"clarification_kind": "rag_db_extraction_opt_in"},
+        "agents": {
+            "rag_db_qa": {
+                "pending_extraction_opt_in": {
+                    "question": "Would you like me to identify the tables and columns suitable for this extraction?",
+                    "intent_id": "intent-opt-in",
+                    "goal_text": "subset age",
+                    "status": "awaiting_reply",
+                }
+            }
+        },
+        "artifacts": {"datasets": {}},
+    }
+
+    updated = rag.rag_db_qa_node(state, llm=object(), provider="openai", service=_Service())
+
+    assert "FOA_COHAOUT" in updated["output"]["qa_response"]
+    assert "pending_extraction_opt_in" not in updated["agents"]["rag_db_qa"]
+
+
+def test_rag_db_declined_opt_in_for_same_goal_does_not_reprompt() -> None:
+    rag = _fresh_rag_module()
+
+    class _Service:
+        def readiness(self):
+            return {"ready": True, "message": ""}
+
+        def retrieve_context(self, question, *, reranker_model=None):
+            return SimpleNamespace(
+                tables=[SimpleNamespace(table="Form 1A", text="table summary")],
+                columns=[SimpleNamespace(table="Form 1A", column="IS_AGE", text="column summary")],
+                table_names=["Form 1A"],
+                column_names=["IS_AGE"],
+            )
+
+        def answer_from_context(self, question, context):
+            return SimpleNamespace(
+                answer="This request needs row-level extraction.",
+                needs_sql=True,
+                rationale="subset request",
+                relevant_tables=context.table_names,
+                relevant_columns=context.column_names,
+            )
+
+        def resolve_intent(self, question, context, prior_intent=None):
+            return SimpleNamespace(
+                intent_id="intent-same-goal",
+                source_question=question,
+                goal_text="subset index case age and diabetes status",
+                mode="extraction",
+                population="index cases",
+                requested_fields=["age", "diabetes status"],
+                filters=[],
+                required_tables=[],
+                required_columns=[],
+                excluded_tables=[],
+                excluded_columns=[],
+                feedback_history=[],
+                status="active",
+            )
+
+    state = {
+        "messages": [_HumanMessage("continue")],
+        "output": {},
+        "observations": [],
+        "meta": {},
+        "agents": {
+            "rag_db_qa": {
+                "active_intent": {
+                    "intent_id": "intent-same-goal",
+                    "source_question": "subset index case age and diabetes status",
+                    "goal_text": "subset index case age and diabetes status",
+                    "mode": "extraction",
+                    "population": "index cases",
+                    "requested_fields": ["age", "diabetes status"],
+                    "filters": [],
+                    "required_tables": [],
+                    "required_columns": [],
+                    "excluded_tables": [],
+                    "excluded_columns": [],
+                    "feedback_history": [],
+                    "status": "active",
+                },
+                "extraction_opt_out_goal_text": "subset index case age and diabetes status",
+            }
+        },
+        "artifacts": {"datasets": {}},
+    }
+
+    updated = rag.rag_db_qa_node(state, llm=object(), provider="openai", service=_Service())
+
+    assert "identify the tables and columns suitable for this extraction" not in updated["output"]["qa_response"].lower()
+    assert "pending_extraction_opt_in" not in updated["agents"]["rag_db_qa"]
+    assert updated["agents"]["rag_db_qa"]["thread_status"] == "answered_metadata"
+    assert updated["meta"].get("clarification_kind") is None
+
+
+def test_rag_db_bare_yes_recovers_active_extraction_intent_without_overwriting_context() -> None:
+    rag = _fresh_rag_module()
+
+    class _Service:
+        def readiness(self):
+            return {"ready": True, "message": ""}
+
+        def retrieve_context_for_intent(self, intent, *, reranker_model=None):
+            assert intent.goal_text == "subset age, gender, diabetes status, and final outcome among index case"
+            return SimpleNamespace(
+                tables=[SimpleNamespace(table="Form 2A - INDEX CASE: Clinical/Demographic Form", text="table summary")],
+                columns=[
+                    SimpleNamespace(
+                        table="Form 2A - INDEX CASE: Clinical/Demographic Form",
+                        column="IS_AGE",
+                        text="age summary",
+                    )
+                ],
+                table_names=["Form 2A - INDEX CASE: Clinical/Demographic Form"],
+                column_names=["IS_AGE"],
+            )
+
+        def prepare_column_selection(
+            self,
+            question,
+            context,
+            feedback_history=None,
+            previous_selection=None,
+            intent_snapshot=None,
+        ):
+            assert question == "subset age, gender, diabetes status, and final outcome among index case"
+            assert intent_snapshot["goal_text"] == question
+            return SimpleNamespace(
+                selection_id="sel-recovered-yes",
+                question=question,
+                tables=["Form 2A - INDEX CASE: Clinical/Demographic Form"],
+                columns=[
+                    {
+                        "table": "Form 2A - INDEX CASE: Clinical/Demographic Form",
+                        "column": "IS_AGE",
+                        "description": "Age in years",
+                    }
+                ],
+                rationale="selected required extraction columns",
+                feedback_history=[],
+                status="awaiting_review",
+            )
+
+        def retrieve_context(self, question, *, reranker_model=None):
+            raise AssertionError("retrieve_context should not run for bare-yes recovery")
+
+        def answer_from_context(self, question, context):
+            raise AssertionError("answer_from_context should not run for bare-yes recovery")
+
+        def resolve_intent(self, question, context, prior_intent=None):
+            raise AssertionError("resolve_intent should not run for bare-yes recovery")
+
+    state = {
+        "messages": [_HumanMessage("yes")],
+        "output": {},
+        "observations": [],
+        "meta": {},
+        "agents": {
+            "rag_db_qa": {
+                "active_thread": True,
+                "active_intent": {
+                    "intent_id": "intent-opt-in",
+                    "source_question": "query my database",
+                    "goal_text": "subset age, gender, diabetes status, and final outcome among index case",
+                    "mode": "extraction",
+                    "population": "index case",
+                    "requested_fields": ["age", "gender", "diabetes status", "final outcome"],
+                    "filters": [],
+                    "required_tables": [],
+                    "required_columns": [],
+                    "excluded_tables": [],
+                    "excluded_columns": [],
+                    "feedback_history": [],
+                    "status": "active",
+                },
+                "last_database_question": "Query my database, Help me to subset age, gender, diabetes status, and final outcome among index case",
+            }
+        },
+        "artifacts": {"datasets": {}},
+    }
+
+    updated = rag.rag_db_qa_node(state, llm=object(), provider="openai", service=_Service())
+
+    assert updated["agents"]["rag_db_qa"]["thread_status"] == "awaiting_column_review"
+    assert updated["agents"]["rag_db_qa"]["pending_column_review"]["selection_id"] == "sel-recovered-yes"
+    assert updated["agents"]["rag_db_qa"]["active_intent"]["intent_id"] == "intent-opt-in"
+    assert "review the updated selection in the panel below" in updated["output"]["qa_response"].lower()
+
+
 def test_rag_db_approved_column_review_generates_sql_candidate() -> None:
     rag = _fresh_rag_module()
 
@@ -618,9 +1047,9 @@ def test_rag_db_approved_column_review_generates_sql_candidate() -> None:
     assert candidate["sql"] == 'SELECT "AGE", "SEX" FROM "Form 1A"'
     assert updated["output"]["generated_sql"] == 'SELECT "AGE", "SEX" FROM "Form 1A"'
     assert updated["output"]["prepared_sql_candidate"]["sql"] == 'SELECT "AGE", "SEX" FROM "Form 1A"'
-    assert "Please review the SQL before execution." in updated["output"]["qa_response"]
-    assert "```sql" in updated["output"]["qa_response"]
-    assert 'SELECT "AGE", "SEX" FROM "Form 1A"' in updated["output"]["qa_response"]
+    assert "review the sql details in the panel below before execution" in updated["output"]["qa_response"].lower()
+    assert updated["output"]["prepared_sql_candidate"]["sql"] == 'SELECT "AGE", "SEX" FROM "Form 1A"'
+    assert updated["output"]["prepared_sql_candidate"]["sql"] == 'SELECT "AGE", "SEX" FROM "Form 1A"'
 
 
 def test_rag_db_revision_passes_previous_selection_into_prepare_column_selection() -> None:

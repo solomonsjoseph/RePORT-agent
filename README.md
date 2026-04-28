@@ -47,11 +47,14 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### Build .env file (optional)
+### Build .env file
 create `.env` file and add your API keys inside the `.env` so we do not have to enter API key every time. For example:
 ```
 OPENAI_API_KEY="YOUR_OPENAI_API_KEY"
 ANTHROPIC_API_KEY="YOUR_ANTHROPIC_API_KEY"
+DB_RAG_OPENROUTER_API_KEY=...
+DB_RAG_OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+VOYAGE_API_KEY=...
 ```
 
 ### Run the app
@@ -65,8 +68,8 @@ In the pop up webpage, enter the API key in the field and click submit. If `.env
 ### RAG DB
 If you want to use the DB-RAG feature, place the source files in this repo under:
 
-- `local_data/db_rag_source/reviewed_annotated_json_files/`
-- `local_data/db_rag_source/filtered_excel_files/`
+- `local_data/db_rag_source/reviewed_annotated_json_files/*.json`
+- `local_data/db_rag_source/filtered_excel_files/*.xlsx`
 
 Supported DB-RAG indexing models:
 

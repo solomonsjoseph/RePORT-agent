@@ -156,6 +156,11 @@ def _lookup_schema_column(table: str, column: str) -> dict[str, str] | None:
     return by_pair.get((str(table or "").strip(), str(column or "").strip()))
 
 
+def _schema_table_names() -> set[str]:
+    by_pair, _ = _schema_column_catalog()
+    return {table for table, _column in by_pair}
+
+
 def _resolve_explicit_schema_mentions(
     question: str,
     feedback_history: list[dict[str, Any]],
@@ -511,28 +516,85 @@ class DbRagService:
         intent: DbRagIntent | dict[str, Any],
         feedback_history: list[dict[str, str]],
     ) -> DbRagIntent:
+        from langchain_core.messages import HumanMessage, SystemMessage
+
         base = intent if isinstance(intent, DbRagIntent) else DbRagIntent(**intent)
-        explicit = _resolve_explicit_schema_mentions(base.goal_text, feedback_history)
-        required_tables = list(base.required_tables)
-        required_columns = list(base.required_columns)
-        for entry in explicit:
-            if entry["table"] not in required_tables:
-                required_tables.append(entry["table"])
-            pair = f'{entry["table"]}.{entry["column"]}'
-            if pair not in required_columns:
-                required_columns.append(pair)
+        response = self.llm.invoke(
+            [
+                SystemMessage(
+                    content=(
+                        "You are updating a structured DB-RAG intent from human review feedback. "
+                        "Return JSON only with keys: "
+                        '{"goal_text": string, "required_tables": [string], "required_columns": [string], '
+                        '"excluded_tables": [string], "excluded_columns": [string]}. '
+                        "Use exact schema table names and exact 'table.column' strings when possible."
+                    )
+                ),
+                HumanMessage(
+                    content=(
+                        f"Current intent:\n{json.dumps(base.__dict__, indent=2, sort_keys=True)}\n\n"
+                        f"Feedback history:\n{json.dumps(list(feedback_history or []), indent=2, sort_keys=True)}"
+                    )
+                ),
+            ]
+        )
+        parsed = parse_json_object(coerce_text_content(getattr(response, "content", ""))) or {}
+
+        schema_tables = _schema_table_names()
+        required_tables: list[str] = []
+        required_columns: list[str] = []
+        excluded_tables: list[str] = []
+        excluded_columns: list[str] = []
+
+        for table in [*list(base.required_tables), *list(parsed.get("required_tables") or [])]:
+            table_name = str(table or "").strip()
+            if table_name and table_name in schema_tables and table_name not in required_tables:
+                required_tables.append(table_name)
+
+        for item in [*list(base.required_columns), *list(parsed.get("required_columns") or [])]:
+            value = str(item or "").strip()
+            if "." not in value:
+                continue
+            table_name, column_name = value.split(".", 1)
+            if _lookup_schema_column(table_name, column_name) is None:
+                continue
+            normalized = f"{table_name}.{column_name}"
+            if normalized not in required_columns:
+                required_columns.append(normalized)
+
+        for table in [*list(base.excluded_tables), *list(parsed.get("excluded_tables") or [])]:
+            table_name = str(table or "").strip()
+            if table_name and table_name in schema_tables and table_name not in excluded_tables:
+                excluded_tables.append(table_name)
+
+        for item in [*list(base.excluded_columns), *list(parsed.get("excluded_columns") or [])]:
+            value = str(item or "").strip()
+            if "." not in value:
+                continue
+            table_name, column_name = value.split(".", 1)
+            if _lookup_schema_column(table_name, column_name) is None:
+                continue
+            normalized = f"{table_name}.{column_name}"
+            if normalized not in excluded_columns:
+                excluded_columns.append(normalized)
+
+        # Exclusions take precedence over requirements.
+        required_tables = [table for table in required_tables if table not in excluded_tables]
+        required_columns = [column for column in required_columns if column not in excluded_columns]
+
+        goal_text = str(parsed.get("goal_text") or base.goal_text).strip() or base.goal_text
         return DbRagIntent(
             intent_id=base.intent_id,
             source_question=base.source_question,
-            goal_text=base.goal_text,
+            goal_text=goal_text,
             mode=base.mode,
             population=base.population,
             requested_fields=list(base.requested_fields),
             filters=list(base.filters),
             required_tables=required_tables,
             required_columns=required_columns,
-            excluded_tables=list(base.excluded_tables),
-            excluded_columns=list(base.excluded_columns),
+            excluded_tables=excluded_tables,
+            excluded_columns=excluded_columns,
             feedback_history=list(feedback_history),
             status=base.status,
         )
@@ -562,6 +624,16 @@ class DbRagService:
             for column in normalized_previous_selection.get("columns", [])
             if _lookup_schema_column(column["table"], column["column"]) is not None
         ]
+        intent_excluded_tables = {
+            str(value or "").strip()
+            for value in list((intent_snapshot or {}).get("excluded_tables") or [])
+            if str(value or "").strip()
+        }
+        intent_excluded_columns = {
+            str(value or "").strip()
+            for value in list((intent_snapshot or {}).get("excluded_columns") or [])
+            if str(value or "").strip()
+        }
         response = self.llm.invoke(
             [
                 SystemMessage(
@@ -599,7 +671,7 @@ class DbRagService:
         if isinstance(raw_tables, list):
             for value in raw_tables:
                 table = str(value or "").strip()
-                if table and table in valid_tables and table not in tables:
+                if table and table in valid_tables and table not in tables and table not in intent_excluded_tables:
                     tables.append(table)
 
         raw_columns = parsed.get("columns")
@@ -612,6 +684,10 @@ class DbRagService:
                 column = str(item.get("column", "") or "").strip()
                 if not table or not column:
                     continue
+                if table in intent_excluded_tables:
+                    continue
+                if f"{table}.{column}" in intent_excluded_columns:
+                    continue
                 schema_entry = _lookup_schema_column(table, column)
                 if (table, column) not in valid_columns and schema_entry is None:
                     continue
@@ -623,6 +699,8 @@ class DbRagService:
         constrained_pairs = {
             (column["table"], column["column"]): column
             for column in [*explicit_valid_columns, *constrained_columns]
+            if column["table"] not in intent_excluded_tables
+            and f'{column["table"]}.{column["column"]}' not in intent_excluded_columns
         }
         current_pairs = {(column["table"], column["column"]) for column in columns}
         for pair, column in constrained_pairs.items():
@@ -630,6 +708,13 @@ class DbRagService:
                 continue
             columns.append(dict(column))
             current_pairs.add(pair)
+
+        columns = [
+            column
+            for column in columns
+            if column["table"] not in intent_excluded_tables
+            and f'{column["table"]}.{column["column"]}' not in intent_excluded_columns
+        ]
 
         if not tables and columns:
             for column in columns:
@@ -731,6 +816,44 @@ class DbRagService:
             sql=candidate.sql,
             dataframe=dataframe,
             source_tables=list(candidate.tables),
+        )
+
+    def repair_prepared_sql_candidate(self, candidate: PreparedSqlCandidate, error_message: str) -> PreparedSqlCandidate:
+        from langchain_core.messages import HumanMessage, SystemMessage
+
+        response = self.llm.invoke(
+            [
+                SystemMessage(
+                    content=(
+                        "You are fixing a DuckDB SQL query for the RePORT clinical research database. "
+                        "Use only the approved tables and approved columns. "
+                        "Return only read-only DuckDB SQL using SELECT or WITH. "
+                        "Never emit mutating or DDL statements."
+                    )
+                ),
+                HumanMessage(
+                    content=(
+                        f"Original question:\n{candidate.question}\n\n"
+                        f"Approved tables:\n{json.dumps(list(candidate.tables), indent=2)}\n\n"
+                        f"Approved columns:\n{json.dumps(list(candidate.columns), indent=2, sort_keys=True)}\n\n"
+                        f"SQL that failed:\n{candidate.sql}\n\n"
+                        f"Execution/validation error:\n{error_message}\n\n"
+                        "Fix the SQL and return only the corrected SQL."
+                    )
+                ),
+            ]
+        )
+        repaired_sql = extract_sql(coerce_text_content(getattr(response, "content", "")))
+        valid, error = validate_sql(repaired_sql)
+        if not valid:
+            raise ValueError(error or "SQL validation failed.")
+        return PreparedSqlCandidate(
+            question=candidate.question,
+            sql=repaired_sql,
+            tables=list(candidate.tables),
+            columns=[dict(column) for column in candidate.columns],
+            selection_id=candidate.selection_id,
+            status=candidate.status,
         )
 
     def execute_sql_flow(

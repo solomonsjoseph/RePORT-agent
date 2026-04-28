@@ -150,6 +150,25 @@ def test_orchestrator_updates_planner_memory_before_planning() -> None:
     assert updated["planner"]["memory"]["active_user_goal"] == "Explain the planner tradeoff."
 
 
+def test_derive_planner_memory_keeps_previous_goal_for_non_substantive_latest_message() -> None:
+    state = {
+        "messages": [SimpleNamespace(type="human", content="yes")],
+        "planner": {
+            "memory": {
+                "active_user_goal": "Subset age, sex, and diabetes among index cases",
+                "conversation_intent_summary": "User wants an extraction SQL workflow.",
+                "unresolved_user_constraints": [],
+            }
+        },
+        "meta": {},
+    }
+
+    memory = derive_planner_memory(state)
+
+    assert memory["active_user_goal"] == "Subset age, sex, and diabetes among index cases"
+    assert memory["conversation_intent_summary"] == "User wants an extraction SQL workflow."
+
+
 def test_planner_recent_turns_capture_last_two_turns_when_waiting_on_user() -> None:
     state = {
         "messages": [

@@ -21,6 +21,29 @@ def _latest_user_message(state: AgentState) -> str:
     return str(getattr(message, "content", "") or "").strip()
 
 
+def _is_substantive_user_message(text: str) -> bool:
+    normalized = " ".join(str(text or "").strip().lower().split())
+    if not normalized:
+        return False
+    non_substantive = {
+        "y",
+        "yes",
+        "ok",
+        "okay",
+        "k",
+        "kk",
+        "no",
+        "nah",
+        "nope",
+        "thanks",
+        "thank you",
+        "thx",
+        "got it",
+        "sounds good",
+    }
+    return normalized not in non_substantive
+
+
 def _has_unanswered_human_message(state: AgentState) -> bool:
     messages = list(state.get("messages", []))
     if not messages:
@@ -96,10 +119,12 @@ def derive_planner_memory(state: AgentState) -> dict:
     latest = _latest_user_message(state)
     planner = dict(state.get("planner") or {})
     previous_memory = dict(planner.get("memory") or {})
-    summary = str(previous_memory.get("conversation_intent_summary") or latest).strip()
+    previous_goal = str(previous_memory.get("active_user_goal") or "").strip()
+    effective_goal = latest if _is_substantive_user_message(latest) else (previous_goal or latest)
+    summary = str(previous_memory.get("conversation_intent_summary") or effective_goal).strip()
 
     return {
-        "active_user_goal": latest,
+        "active_user_goal": effective_goal,
         "conversation_intent_summary": summary,
         "unresolved_user_constraints": list(
             previous_memory.get("unresolved_user_constraints") or []

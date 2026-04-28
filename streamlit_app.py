@@ -63,7 +63,9 @@ from utils.streamlit_interrupts import (
     should_block_chat_submission,
     should_render_review_interrupt,
 )
-from utils.dataset_artifacts import persist_dataset_artifact
+from utils.dataset_artifacts import persist_dataset_artifact, load_dataset_artifact
+
+WELCOME_MESSAGE = "Hello! Ask me anything ..."
 # --------------------------
 # Streamlit Config
 # --------------------------
@@ -335,7 +337,7 @@ if "thread_id" not in st.session_state:
     # Use hashes so each dataset has its own memory namespace
     st.session_state.thread_id = uuid.uuid4().hex
 if "chat_history" not in st.session_state:
-    st.session_state.chat_history = [AIMessage(content="Hello! Ask me anything ...")]
+    st.session_state.chat_history = [AIMessage(content=WELCOME_MESSAGE)]
 
 if "dataset_signature" not in st.session_state:
     st.session_state.dataset_signature = dataset_signature
@@ -349,7 +351,7 @@ if "backend_signature" not in st.session_state:
     st.session_state.backend_signature = backend_signature
 elif st.session_state.backend_signature != backend_signature:
     st.session_state.backend_signature = backend_signature
-    st.session_state.chat_history = [AIMessage(content="Hello! Ask me anything ...")]
+    st.session_state.chat_history = [AIMessage(content=WELCOME_MESSAGE)]
     st.session_state.thread_id = uuid.uuid4().hex
     st.info("Model backend changed. Started a fresh conversation thread to avoid stale orchestrator state.")
     st.rerun()
@@ -490,7 +492,17 @@ qa_ready = bool(output.get("qa_response"))
 analysis_ready = executor_ok and final_approved
 
 # Render all previous chat history
-for msg in st.session_state.chat_history:
+display_history = list(st.session_state.chat_history)
+has_human_turn = any(isinstance(msg, HumanMessage) for msg in display_history)
+if has_human_turn:
+    # Welcome text is only for empty threads and should disappear after first user turn.
+    display_history = [
+        msg
+        for msg in display_history
+        if not (isinstance(msg, AIMessage) and str(getattr(msg, "content", "") or "").strip() == WELCOME_MESSAGE)
+    ]
+
+for msg in display_history:
     with st.chat_message("user" if isinstance(msg, HumanMessage) else "assistant"):
         st.markdown(msg.content)
 
@@ -576,6 +588,43 @@ if qa_ready and not analysis_ready:
 if analysis_ready:
     st.success("Analysis completed")
 
+if state:
+    artifacts = state.get("artifacts", {}) or {}
+    datasets = artifacts.get("datasets", {}) or {}
+    active_dataset_id = artifacts.get("active_dataset_id")
+    dataset_ids = list(datasets.keys())
+
+    if dataset_ids:
+        default_index = dataset_ids.index(active_dataset_id) if active_dataset_id in dataset_ids else 0
+        with st.expander("🧪 Saved Datasets", expanded=False):
+            selected_dataset_id = st.selectbox(
+                "Choose a dataset artifact",
+                options=dataset_ids,
+                index=default_index,
+                key="selected_dataset_artifact_id",
+            )
+            selected_artifact = datasets.get(selected_dataset_id)
+            if selected_artifact:
+                st.caption(f"Dataset ID: {selected_artifact.get('id', 'unknown')}")
+                st.caption(f"Kind: {selected_artifact.get('kind', 'unknown')}")
+                if selected_dataset_id == active_dataset_id:
+                    st.caption("Status: active")
+                try:
+                    selected_df, selected_schema = load_dataset_artifact(selected_artifact)
+                    st.dataframe(selected_df.head(100))
+                    csv_bytes = selected_df.to_csv(index=False).encode("utf-8")
+                    st.download_button(
+                        label="⬇️ Download selected dataset (CSV)",
+                        data=csv_bytes,
+                        file_name=f"{selected_artifact.get('id', 'dataset')}.csv",
+                        mime="text/csv",
+                        key=f"download_dataset_csv_{selected_artifact.get('id', 'unknown')}",
+                    )
+                    with st.expander("Schema (selected dataset)", expanded=False):
+                        st.json(selected_schema)
+                except Exception as exc:
+                    st.error(f"Unable to load selected dataset artifact: {exc}")
+
 with st.container():
     chat_submission_blocked = should_block_chat_submission(
         interrupt_event,
@@ -601,7 +650,7 @@ with st.container():
     action_col, save_col = st.columns([1, 1])
     with action_col:
         if st.button("🔄 Reset Conversation"):
-            st.session_state.chat_history = [AIMessage(content="Hello! Ask me anything ...")]
+            st.session_state.chat_history = [AIMessage(content=WELCOME_MESSAGE)]
             st.session_state.thread_id = uuid.uuid4().hex
             st.rerun()
     with save_col:
@@ -616,7 +665,6 @@ with st.container():
 
 if submitted_question and user_text and not chat_submission_blocked:
     user_message = HumanMessage(content=user_text)
-    st.session_state.chat_history.append(user_message)
 
     if has_graph_state:
         initial_payload = next_turn_payload(user_message)
