@@ -59,13 +59,20 @@ from ..config import (
 from ..generation import (
     DB_RAG_CONTEXT_FALLBACK_ANSWER,
     DB_RAG_CONTEXT_FALLBACK_RATIONALE,
+    build_sql_policy_text,
     default_selection_id,
     extract_sql,
+    is_unanswerable_response,
     parse_json_object,
     validate_sql,
 )
 from ..retrieval import PAIRED_FORMS, decompose_query, retrieve_context_records, retrieve_single_query
 from ..vectorstore import OpenAIEmbeddingFunction
+
+
+class DbRagUnanswerableError(ValueError):
+    pass
+
 
 @dataclass
 class DbRagService:
@@ -644,7 +651,10 @@ class DbRagService:
                         "Use only the approved tables and approved columns listed in the prompt. "
                         "Do not reference any other tables or columns. "
                         "Return only read-only DuckDB SQL using SELECT or WITH. "
-                        "Never emit mutating or DDL statements."
+                        "Never emit mutating or DDL statements. "
+                        "If the approved schema cannot answer the question, return exactly "
+                        "'UNANSWERABLE: <brief reason>'.\n\n"
+                        f"{build_sql_policy_text()}"
                     )
                 ),
                 HumanMessage(
@@ -657,6 +667,8 @@ class DbRagService:
             ]
         )
         sql = extract_sql(coerce_text_content(getattr(response, "content", "")))
+        if is_unanswerable_response(sql):
+            raise DbRagUnanswerableError(sql)
         valid, error = validate_sql(sql)
         if not valid:
             raise ValueError(error or "SQL validation failed.")
@@ -698,7 +710,8 @@ class DbRagService:
                         "You are fixing a DuckDB SQL query for the RePORT clinical research database. "
                         "Use only the approved tables and approved columns. "
                         "Return only read-only DuckDB SQL using SELECT or WITH. "
-                        "Never emit mutating or DDL statements."
+                        "Never emit mutating or DDL statements.\n\n"
+                        f"{build_sql_policy_text()}"
                     )
                 ),
                 HumanMessage(
@@ -714,6 +727,8 @@ class DbRagService:
             ]
         )
         repaired_sql = extract_sql(coerce_text_content(getattr(response, "content", "")))
+        if is_unanswerable_response(repaired_sql):
+            raise DbRagUnanswerableError(repaired_sql)
         valid, error = validate_sql(repaired_sql)
         if not valid:
             raise ValueError(error or "SQL validation failed.")
@@ -734,40 +749,77 @@ class DbRagService:
         reranker_model: str | None = None,
     ) -> dict[str, Any]:
         context = self.retrieve_context(question, debug=debug, reranker_model=reranker_model)
-        prepared = self.prepare_sql_candidate(
-            question,
-            ColumnSelectionCandidate(
-                selection_id=default_selection_id(
-                    question,
-                    context.table_names,
-                    [{"table": entry.table, "column": entry.column} for entry in context.columns],
-                    [],
-                ),
-                question=question,
-                tables=context.table_names,
-                columns=[
-                    {"table": entry.table, "column": entry.column, "description": entry.text}
-                    for entry in context.columns
-                ],
-                rationale="Legacy execute_sql_flow compatibility path.",
-                status="approved",
+        approved_selection = ColumnSelectionCandidate(
+            selection_id=default_selection_id(
+                question,
+                context.table_names,
+                [{"table": entry.table, "column": entry.column} for entry in context.columns],
+                [],
             ),
+            question=question,
+            tables=context.table_names,
+            columns=[
+                {"table": entry.table, "column": entry.column, "description": entry.text}
+                for entry in context.columns
+            ],
+            rationale="Legacy execute_sql_flow compatibility path.",
+            status="approved",
         )
-        result = self.execute_prepared_sql(prepared)
+        debug_payload = (
+            {
+                "question": question,
+                "retrieved_tables": context.table_names,
+                "retrieved_columns": [entry.as_prompt_line() for entry in context.columns],
+            }
+            if debug
+            else {}
+        )
+        max_retries = 2
+        candidate: PreparedSqlCandidate | None = None
+        result: SqlExecutionResult | None = None
+        last_error: Exception | None = None
+        for attempt in range(max_retries + 1):
+            try:
+                if candidate is None:
+                    candidate = self.prepare_sql_candidate(question, approved_selection)
+                result = self.execute_prepared_sql(candidate)
+                break
+            except DbRagUnanswerableError as exc:
+                return {
+                    "answer": str(exc),
+                    "sql": "",
+                    "dataframe": None,
+                    "source_tables": context.table_names,
+                    "debug": debug_payload,
+                }
+            except ValueError as exc:
+                last_error = exc
+                if attempt >= max_retries:
+                    raise
+                repair_seed = candidate or PreparedSqlCandidate(
+                    question=question,
+                    sql="SELECT 1",
+                    tables=list(approved_selection.tables),
+                    columns=[dict(column) for column in approved_selection.columns],
+                    selection_id=approved_selection.selection_id,
+                )
+                candidate = self.repair_prepared_sql_candidate(repair_seed, str(exc))
+            except Exception as exc:
+                last_error = exc
+                if candidate is None or attempt >= max_retries:
+                    raise
+                candidate = self.repair_prepared_sql_candidate(candidate, str(exc))
+        if result is None or candidate is None:
+            if last_error is not None:
+                raise last_error
+            raise ValueError("SQL execution did not produce a result.")
+        if debug:
+            debug_payload["sql_tables"] = list(candidate.tables)
+            debug_payload["sql_columns"] = [f"{column['table']}.{column['column']}" for column in candidate.columns]
         return {
             "answer": result.answer,
             "sql": result.sql,
             "dataframe": result.dataframe,
             "source_tables": result.source_tables,
-            "debug": (
-                {
-                    "question": question,
-                    "retrieved_tables": context.table_names,
-                    "retrieved_columns": [entry.as_prompt_line() for entry in context.columns],
-                    "sql_tables": list(prepared.tables),
-                    "sql_columns": [f"{column['table']}.{column['column']}" for column in prepared.columns],
-                }
-                if debug
-                else {}
-            ),
+            "debug": debug_payload,
         }

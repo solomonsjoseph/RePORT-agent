@@ -5,6 +5,7 @@ import json
 import re
 from typing import Any
 
+from .config import PRIMARY_JOIN_KEY_ALIAS, SECONDARY_JOIN_KEY_ALIAS
 
 DB_RAG_CONTEXT_FALLBACK_ANSWER = "I could not answer from the retrieved DB-RAG context."
 DB_RAG_CONTEXT_FALLBACK_RATIONALE = "Invalid structured response from the model."
@@ -21,6 +22,10 @@ def extract_sql(text: str) -> str:
         if idx >= 0:
             return text[idx:].strip()
     return text
+
+
+def is_unanswerable_response(text: str) -> bool:
+    return str(text or "").strip().upper().startswith("UNANSWERABLE")
 
 
 def parse_json_object(text: str) -> dict[str, Any]:
@@ -53,8 +58,38 @@ def default_selection_id(question: str, table_names: list[str], columns: list[di
     return f"sel-{digest[:12]}"
 
 
+def build_sql_policy_text() -> str:
+    return (
+        "JOIN HINTS:\n"
+        "Use join keys from the table context.\n"
+        f"Treat canonical join-key labels like {PRIMARY_JOIN_KEY_ALIAS} and {SECONDARY_JOIN_KEY_ALIAS} "
+        "as semantic join categories, while using exact source column names in SQL.\n"
+        "If one table suffices, do NOT invent joins.\n\n"
+        "RULES:\n"
+        "- Use DuckDB SQL.\n"
+        "- Use ILIKE for case-insensitive string comparisons.\n"
+        "- Prefer the stored/sample-value representation over coded allowed values when they differ.\n"
+        "- Values of 99, 999, or 9999 are often missing data codes and should be excluded unless the question is explicitly about missingness.\n"
+        "- If a column profile shows a high NULL rate, add IS NOT NULL where appropriate."
+    )
+
+
+def check_sql_quality(sql: str) -> list[str]:
+    warnings: list[str] = []
+    sql_upper = str(sql or "").upper()
+    if "ORDER BY" in sql_upper and "NULLS LAST" not in sql_upper and "NULLS FIRST" not in sql_upper:
+        warnings.append("ORDER BY without NULLS LAST or NULLS FIRST is not allowed.")
+    if "/" in sql and "NULLIF" not in sql_upper:
+        warnings.append("Division without NULLIF is not allowed.")
+    if "COUNT(*)" in sql_upper and "WHERE" not in sql_upper and "GROUP BY" not in sql_upper:
+        warnings.append("COUNT(*) without WHERE or GROUP BY is not allowed.")
+    return warnings
+
+
 def validate_sql(sql: str) -> tuple[bool, str | None]:
     sql_upper = str(sql or "").strip().upper()
+    if is_unanswerable_response(sql):
+        return True, None
     if not sql_upper.startswith(("SELECT", "WITH")):
         return False, "Only read-only SELECT/WITH SQL is allowed."
     if any(keyword in sql_upper for keyword in _DANGEROUS_SQL):
@@ -65,7 +100,10 @@ def validate_sql(sql: str) -> tuple[bool, str | None]:
 
         sqlglot.parse_one(sql, dialect="duckdb")
     except ModuleNotFoundError:
-        return True, None
+        pass
     except Exception as exc:  # pragma: no cover
         return False, str(exc)
+    quality_errors = check_sql_quality(sql)
+    if quality_errors:
+        return False, quality_errors[0]
     return True, None

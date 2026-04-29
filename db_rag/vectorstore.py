@@ -113,15 +113,15 @@ class OpenAIReranker:
             supported = ", ".join(SUPPORTED_DB_RAG_RERANKER_MODELS)
             raise ValueError(f"Unsupported DB-RAG reranker model '{resolved_model}'. Supported values: {supported}.")
 
-        if resolved_model == "rerank-2.5":
+        if resolved_model == "voyage/rerank-2.5":
             import voyageai
 
             api_key = str(os.getenv("VOYAGE_API_KEY", "") or "").strip()
             if not api_key:
                 raise ValueError("VOYAGE_API_KEY is required for Voyage reranking.")
             self.client = voyageai.Client(api_key=api_key)
-            self.model = resolved_model
             self.config_model = resolved_model
+            self.model = "rerank-2.5"
             self.api_key = api_key
             self.base_url = ""
             self._provider = "voyage"

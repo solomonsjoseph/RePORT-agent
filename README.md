@@ -113,7 +113,7 @@ Supported DB-RAG reranker models:
 - `cohere/rerank-v3.5`
 - `cohere/rerank-4-fast`
 - `cohere/rerank-4-pro`
-- `rerank-2.5`
+- `voyage/rerank-2.5`
 
 Reranking is optional and does not require rebuilding the DB-RAG index.
 When `DB_RAG_RERANKER_MODEL` is set, the LangGraph DB-RAG app path uses it for column reranking as well.
@@ -136,7 +136,7 @@ For Voyage indexing and reranking:
 
 ```env
 DB_RAG_EMBEDDING_MODEL=voyage-4-large
-DB_RAG_RERANKER_MODEL=rerank-2.5
+DB_RAG_RERANKER_MODEL=voyage/rerank-2.5
 VOYAGE_API_KEY=...
 ```
 
@@ -172,7 +172,7 @@ Example `.env` for Voyage-backed app usage:
 
 ```env
 DB_RAG_EMBEDDING_MODEL=voyage-4-large
-DB_RAG_RERANKER_MODEL=rerank-2.5
+DB_RAG_RERANKER_MODEL=voyage/rerank-2.5
 VOYAGE_API_KEY=...
 ```
 

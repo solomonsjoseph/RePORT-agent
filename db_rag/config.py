@@ -30,9 +30,11 @@ SUPPORTED_DB_RAG_RERANKER_MODELS = (
     "cohere/rerank-v3.5",
     "cohere/rerank-4-fast",
     "cohere/rerank-4-pro",
-    "rerank-2.5",
+    "voyage/rerank-2.5",
 )
 DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+PRIMARY_JOIN_KEY_ALIAS = "SUBJID_PSUEDO"
+SECONDARY_JOIN_KEY_ALIAS = "FID_PSUEDO"
 
 
 def embedding_model_slug(model: str) -> str:

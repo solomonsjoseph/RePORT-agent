@@ -171,7 +171,7 @@ def test_supported_reranker_models_only_include_actual_rerankers(monkeypatch) ->
         "cohere/rerank-v3.5",
         "cohere/rerank-4-fast",
         "cohere/rerank-4-pro",
-        "rerank-2.5",
+        "voyage/rerank-2.5",
     )
     assert not hasattr(config, "DEFAULT_DB_RAG_RERANKER_BY_EMBEDDING")
 
@@ -181,7 +181,7 @@ def test_supported_reranker_models_include_voyage_rerank(monkeypatch) -> None:
 
     from db_rag import config
 
-    assert "rerank-2.5" in config.SUPPORTED_DB_RAG_RERANKER_MODELS
+    assert "voyage/rerank-2.5" in config.SUPPORTED_DB_RAG_RERANKER_MODELS
 
 
 def test_resolve_db_rag_reranker_model_returns_none_when_unset(monkeypatch) -> None:
@@ -227,16 +227,27 @@ def test_resolve_db_rag_reranker_model_validates_supported_values(monkeypatch) -
         config.resolve_db_rag_reranker_model()
 
 
+def test_resolve_db_rag_reranker_model_rejects_old_voyage_name(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    from db_rag import config
+
+    monkeypatch.setenv("DB_RAG_RERANKER_MODEL", "rerank-2.5")
+
+    with pytest.raises(ValueError, match="Unsupported DB_RAG_RERANKER_MODEL"):
+        config.resolve_db_rag_reranker_model()
+
+
 def test_resolve_db_rag_models_accept_voyage_values(monkeypatch) -> None:
     _install_langchain_message_stubs(monkeypatch)
 
     from db_rag import config
 
     monkeypatch.setenv("DB_RAG_EMBEDDING_MODEL", "voyage-4-large")
-    monkeypatch.setenv("DB_RAG_RERANKER_MODEL", "rerank-2.5")
+    monkeypatch.setenv("DB_RAG_RERANKER_MODEL", "voyage/rerank-2.5")
 
     assert config.resolve_db_rag_embedding_model() == "voyage-4-large"
-    assert config.resolve_db_rag_reranker_model() == "rerank-2.5"
+    assert config.resolve_db_rag_reranker_model() == "voyage/rerank-2.5"
 
 
 def test_classify_pending_reply_returns_unknown_when_model_is_unset(monkeypatch) -> None:
@@ -416,7 +427,7 @@ def test_voyage_reranker_uses_voyage_client(monkeypatch) -> None:
     monkeypatch.setitem(sys.modules, "voyageai", SimpleNamespace(Client=lambda api_key=None: _VoyageClient()))
     monkeypatch.setenv("VOYAGE_API_KEY", "voyage-key")
 
-    reranker = vectorstore.OpenAIReranker(model="rerank-2.5")
+    reranker = vectorstore.OpenAIReranker(model="voyage/rerank-2.5")
 
     assert reranker.rerank("age among index cases", ["doc1", "doc2"]) == [0.0, 0.8]
 
@@ -1768,6 +1779,72 @@ def test_prepare_sql_candidate_uses_approved_columns_only(monkeypatch) -> None:
     assert "not approved" not in message_text
 
 
+def test_prepare_sql_candidate_prompt_includes_sibling_sql_rules(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    from db_rag import service
+
+    captured: list[list[object]] = []
+
+    class _LLM:
+        def invoke(self, messages):
+            captured.append(messages)
+            return SimpleNamespace(
+                content='SELECT "AGE" FROM "Form 1A" WHERE "AGE" IS NOT NULL ORDER BY "AGE" NULLS LAST'
+            )
+
+    selection = service.ColumnSelectionCandidate(
+        selection_id="sel-approved",
+        question="subset age",
+        tables=["Form 1A"],
+        columns=[
+            {
+                "table": "Form 1A",
+                "column": "AGE",
+                "description": "Age in years",
+            }
+        ],
+        rationale="approved selection",
+        status="approved",
+    )
+    db_rag_service = service.DbRagService(llm=_LLM())
+
+    db_rag_service.prepare_sql_candidate("subset age", selection)
+
+    prompt_text = "\n".join(getattr(message, "content", "") for message in captured[0])
+    assert "If one table suffices, do NOT invent joins" in prompt_text
+    assert "Use ILIKE for case-insensitive string comparisons" in prompt_text
+    assert "99, 999, or 9999" in prompt_text
+    assert "IS NOT NULL" in prompt_text
+
+
+def test_validate_sql_rejects_order_by_without_nulls_last() -> None:
+    from db_rag.generation import validate_sql
+
+    valid, error = validate_sql('SELECT "AGE" FROM "Form 1A" ORDER BY "AGE"')
+
+    assert valid is False
+    assert "NULLS LAST" in str(error)
+
+
+def test_validate_sql_rejects_division_without_nullif() -> None:
+    from db_rag.generation import validate_sql
+
+    valid, error = validate_sql('SELECT "A" / "B" FROM "Form 1A"')
+
+    assert valid is False
+    assert "NULLIF" in str(error)
+
+
+def test_validate_sql_rejects_count_star_without_where_or_group_by() -> None:
+    from db_rag.generation import validate_sql
+
+    valid, error = validate_sql('SELECT COUNT(*) FROM "Form 1A"')
+
+    assert valid is False
+    assert "COUNT(*)" in str(error)
+
+
 def test_prepare_sql_candidate_rejects_unapproved_selection(monkeypatch) -> None:
     _install_langchain_message_stubs(monkeypatch)
 
@@ -1838,6 +1915,90 @@ def test_execute_sql_flow_debug_returns_sql_preparation_details(monkeypatch) -> 
     assert result["debug"]["retrieved_columns"] == ["Form 1A.AGE"]
     assert result["debug"]["sql_tables"] == ["Form 1A"]
     assert result["debug"]["sql_columns"] == ["Form 1A.AGE"]
+
+
+def test_execute_sql_flow_returns_unanswerable_without_execution(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    from db_rag import service
+
+    context = service.DbRagContext(
+        tables=[service.DbRagTableHit(table="Form 1A", text="Form 1A summary")],
+        columns=[service.DbRagColumnHit(table="Form 1A", column="AGE", text="AGE summary")],
+    )
+    db_rag_service = service.DbRagService(llm=object())
+
+    monkeypatch.setattr(
+        db_rag_service,
+        "retrieve_context",
+        lambda question, debug=False, reranker_model=None: context,
+    )
+
+    def _raise_unanswerable(question, approved_selection):
+        raise service.DbRagUnanswerableError("UNANSWERABLE: schema lacks outcome field")
+
+    monkeypatch.setattr(db_rag_service, "prepare_sql_candidate", _raise_unanswerable)
+
+    result = db_rag_service.execute_sql_flow("subset age")
+
+    assert result["answer"] == "UNANSWERABLE: schema lacks outcome field"
+    assert result["sql"] == ""
+    assert result["dataframe"] is None
+    assert result["source_tables"] == ["Form 1A"]
+
+
+def test_execute_sql_flow_repairs_validation_failure(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    from db_rag import service
+
+    context = service.DbRagContext(
+        tables=[service.DbRagTableHit(table="Form 1A", text="Form 1A summary")],
+        columns=[service.DbRagColumnHit(table="Form 1A", column="AGE", text="AGE summary")],
+    )
+    db_rag_service = service.DbRagService(llm=object())
+    monkeypatch.setattr(
+        db_rag_service,
+        "retrieve_context",
+        lambda question, debug=False, reranker_model=None: context,
+    )
+
+    calls = {"prepare": 0, "repair": 0}
+
+    def _prepare(question, approved_selection):
+        calls["prepare"] += 1
+        raise ValueError("ORDER BY without NULLS LAST or NULLS FIRST is not allowed.")
+
+    def _repair(candidate, error_message):
+        calls["repair"] += 1
+        assert "NULLS LAST" in error_message
+        return service.PreparedSqlCandidate(
+            question="subset age",
+            sql='SELECT "AGE" FROM "Form 1A" ORDER BY "AGE" NULLS LAST',
+            tables=["Form 1A"],
+            columns=[{"table": "Form 1A", "column": "AGE", "description": "Age in years"}],
+            selection_id="sel-1",
+        )
+
+    monkeypatch.setattr(db_rag_service, "prepare_sql_candidate", _prepare)
+    monkeypatch.setattr(db_rag_service, "repair_prepared_sql_candidate", _repair)
+    monkeypatch.setattr(
+        db_rag_service,
+        "execute_prepared_sql",
+        lambda candidate: service.SqlExecutionResult(
+            answer="ok",
+            sql=candidate.sql,
+            dataframe=None,
+            source_tables=["Form 1A"],
+        ),
+    )
+
+    result = db_rag_service.execute_sql_flow("subset age")
+
+    assert result["answer"] == "ok"
+    assert result["sql"] == 'SELECT "AGE" FROM "Form 1A" ORDER BY "AGE" NULLS LAST'
+    assert calls["prepare"] == 1
+    assert calls["repair"] == 1
 
 
 def test_db_rag_service_module_reexports_public_api(monkeypatch) -> None:

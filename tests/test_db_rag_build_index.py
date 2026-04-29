@@ -216,3 +216,76 @@ def test_rebuild_flag_bypasses_existing_index_skip(monkeypatch, tmp_path) -> Non
 
     assert manifest["embedding_model"] == "OpenAI/text-embedding-3-small"
     assert calls == ["duckdb", "chroma"]
+
+
+def test_build_table_chunks_restores_join_metadata(monkeypatch, tmp_path) -> None:
+    import json
+
+    from db_rag import chunker
+
+    schema_dir = tmp_path / "schemas"
+    schema_dir.mkdir()
+    (schema_dir / "01 Form 1A.json").write_text(
+        json.dumps(
+            {
+                "form_name": "Form 1A",
+                "summary": "Index case screening",
+                "variables": {"AGE": {"description": "Age in years"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(chunker, "SCHEMA_DIR", schema_dir)
+
+    chunks = chunker.build_table_chunks({"01_": pd.DataFrame(columns=["NC_SUBJID", "VISITFID", "AGE"])})
+
+    assert chunks[0]["metadata"]["table"] == "Form 1A"
+    assert chunks[0]["metadata"]["subjid_col"] == "NC_SUBJID"
+    assert chunks[0]["metadata"]["fid_col"] == "VISITFID"
+    assert chunks[0]["metadata"]["has_subjid_join"] is True
+    assert chunks[0]["metadata"]["has_fid_join"] is True
+
+
+def test_build_column_chunks_restores_richer_text_and_metadata(monkeypatch, tmp_path) -> None:
+    import json
+
+    from db_rag import chunker
+
+    schema_dir = tmp_path / "schemas"
+    schema_dir.mkdir()
+    (schema_dir / "01 Form 1A.json").write_text(
+        json.dumps(
+            {
+                "form_name": "Form 1A",
+                "variables": {
+                    "AGE": {
+                        "description": "Age in years",
+                        "values": {"99": "Missing"},
+                        "depends_on": "ENROLLED=1",
+                        "condition": "Only if enrolled",
+                        "section_context": "Demographics",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(chunker, "SCHEMA_DIR", schema_dir)
+
+    chunks = chunker.build_column_chunks({"01_": pd.DataFrame({"AGE": [18, 21, None]})})
+
+    assert len(chunks) == 1
+    chunk = chunks[0]
+    assert "Allowed values:" in chunk["text"]
+    assert "Depends on: ENROLLED=1" in chunk["text"]
+    assert "Condition: Only if enrolled" in chunk["text"]
+    assert "Section Context: Demographics" in chunk["text"]
+    assert "Profile:" in chunk["text"]
+    assert chunk["metadata"]["table"] == "Form 1A"
+    assert chunk["metadata"]["column"] == "AGE"
+    assert chunk["metadata"]["form_file"] == "01 Form 1A.json"
+    assert chunk["metadata"]["has_dependency"] is True
+    assert chunk["metadata"]["has_values"] is True
+    assert chunk["metadata"]["depends_on"] == "ENROLLED=1"
+    assert chunk["metadata"]["condition"] == "Only if enrolled"
+    assert chunk["metadata"]["section_context"] == "Demographics"
