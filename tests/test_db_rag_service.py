@@ -1061,7 +1061,7 @@ def test_retrieve_context_for_intent_applies_required_and_excluded_columns(monke
 
     monkeypatch.setattr(service, "retrieve_context_records", _fake_retrieve_context_records)
     monkeypatch.setattr(
-        service,
+        service.schema,
         "_schema_column_catalog",
         lambda: (
             {
@@ -1294,7 +1294,7 @@ def test_prepare_column_selection_preserves_explicit_schema_column_mentions(monk
             )
 
     monkeypatch.setattr(
-        service,
+        service.schema,
         "_schema_column_catalog",
         lambda: (
             {
@@ -1419,7 +1419,7 @@ def test_update_intent_from_feedback_uses_llm_structured_exclusions(monkeypatch)
             )
 
     monkeypatch.setattr(
-        service,
+        service.schema,
         "_schema_column_catalog",
         lambda: (
             {
@@ -1482,7 +1482,7 @@ def test_prepare_column_selection_enforces_intent_snapshot_exclusions_after_merg
             )
 
     monkeypatch.setattr(
-        service,
+        service.schema,
         "_schema_column_catalog",
         lambda: (
             {
@@ -1555,7 +1555,7 @@ def test_prepare_column_selection_enforces_required_columns_after_llm_proposal(m
             )
 
     monkeypatch.setattr(
-        service,
+        service.schema,
         "_schema_column_catalog",
         lambda: (
             {
@@ -1631,7 +1631,7 @@ def test_prepare_column_selection_grounds_concept_level_feedback_into_exact_colu
             )
 
     monkeypatch.setattr(
-        service,
+        service.schema,
         "_schema_column_catalog",
         lambda: (
             {
@@ -1793,3 +1793,64 @@ def test_execute_sql_flow_debug_returns_sql_preparation_details(monkeypatch) -> 
     assert result["debug"]["retrieved_columns"] == ["Form 1A.AGE"]
     assert result["debug"]["sql_tables"] == ["Form 1A"]
     assert result["debug"]["sql_columns"] == ["Form 1A.AGE"]
+
+
+def test_db_rag_service_module_reexports_public_api(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    from db_rag import service
+
+    assert hasattr(service, "DbRagService")
+    assert hasattr(service, "DbRagContext")
+    assert hasattr(service, "DbRagIntent")
+    assert hasattr(service, "ColumnSelectionCandidate")
+    assert hasattr(service, "PreparedSqlCandidate")
+    assert hasattr(service, "_default_selection_id")
+
+
+def test_db_rag_service_classify_pending_reply_still_available_via_service_module(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    from db_rag import service
+
+    assert hasattr(service.DbRagService, "classify_pending_reply")
+
+
+def test_db_rag_context_models_remain_constructible_via_service_module(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    from db_rag import service
+
+    context = service.DbRagContext(
+        tables=[service.DbRagTableHit(table="Form 1A", text="summary")],
+        columns=[service.DbRagColumnHit(table="Form 1A", column="AGE", text="age")],
+    )
+
+    assert context.table_names == ["Form 1A"]
+    assert context.column_names == ["AGE"]
+
+
+def test_default_selection_id_still_available_via_service_module(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    from db_rag import service
+
+    context = service.DbRagContext(
+        tables=[service.DbRagTableHit(table="Form 1A", text="summary")],
+        columns=[service.DbRagColumnHit(table="Form 1A", column="AGE", text="age")],
+    )
+
+    value = service._default_selection_id("subset age", context, [])
+
+    assert isinstance(value, str)
+    assert value
+
+
+def test_service_package_public_surface_reexports_db_rag_service_class(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    from db_rag import service
+
+    instance = service.DbRagService(llm=object())
+
+    assert instance is not None

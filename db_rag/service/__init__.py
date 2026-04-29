@@ -1,15 +1,41 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from functools import lru_cache
 import json
-import os
-import re
+from dataclasses import dataclass
 from typing import Any
 
 from utils.llm_response import coerce_text_content
 
-from .config import (
+from . import schema
+from .classifier import classify_pending_reply as _classify_pending_reply
+from .models import (
+    ColumnSelectionCandidate,
+    DbRagColumnHit,
+    DbRagContext,
+    DbRagIntent,
+    DbRagQaAnswer,
+    DbRagTableHit,
+    FeedbackConstraintSet,
+    PreparedSqlCandidate,
+    SqlExecutionResult,
+)
+from .constraints import (
+    _build_invalid_column_selection_candidate,
+    _constraint_set_from_payload,
+    _default_selection_id,
+    _enforce_selection_constraints,
+    _filter_and_inject_context_columns,
+    _merge_constraint_sets,
+    _normalize_previous_selection,
+)
+from .schema import (
+    _lookup_schema_column,
+    _resolve_explicit_schema_mentions,
+    _schema_column_catalog,
+    _schema_table_names,
+)
+
+from ..config import (
     CHROMA_DIR,
     DEFAULT_OPENROUTER_BASE_URL,
     DUCKDB_PATH,
@@ -30,7 +56,7 @@ from .config import (
     resolve_db_rag_embedding_model,
     resolve_db_rag_reply_classifier_model,
 )
-from .generation import (
+from ..generation import (
     DB_RAG_CONTEXT_FALLBACK_ANSWER,
     DB_RAG_CONTEXT_FALLBACK_RATIONALE,
     default_selection_id,
@@ -38,407 +64,8 @@ from .generation import (
     parse_json_object,
     validate_sql,
 )
-from .retrieval import PAIRED_FORMS, decompose_query, retrieve_context_records, retrieve_single_query
-from .vectorstore import OpenAIEmbeddingFunction
-
-
-@dataclass
-class DbRagTableHit:
-    table: str
-    text: str
-
-
-@dataclass
-class DbRagColumnHit:
-    table: str
-    column: str
-    text: str
-
-    def as_prompt_line(self) -> str:
-        return f"{self.table}.{self.column}"
-
-
-@dataclass
-class DbRagContext:
-    tables: list[DbRagTableHit] = field(default_factory=list)
-    columns: list[DbRagColumnHit] = field(default_factory=list)
-    table_context: str = ""
-    column_context: str = ""
-
-    @property
-    def table_names(self) -> list[str]:
-        return [entry.table for entry in self.tables]
-
-    @property
-    def column_names(self) -> list[str]:
-        return [entry.column for entry in self.columns]
-
-
-@dataclass
-class DbRagQaAnswer:
-    answer: str
-    needs_sql: bool
-    rationale: str
-    relevant_tables: list[str]
-    relevant_columns: list[str]
-
-
-@dataclass
-class DbRagIntent:
-    intent_id: str
-    source_question: str
-    goal_text: str
-    mode: str
-    population: str | None
-    requested_fields: list[str] = field(default_factory=list)
-    filters: list[str] = field(default_factory=list)
-    required_tables: list[str] = field(default_factory=list)
-    required_columns: list[str] = field(default_factory=list)
-    excluded_tables: list[str] = field(default_factory=list)
-    excluded_columns: list[str] = field(default_factory=list)
-    feedback_history: list[dict[str, str]] = field(default_factory=list)
-    status: str = "active"
-
-
-@dataclass(frozen=True)
-class FeedbackConstraintSet:
-    goal_text: str
-    required_tables: tuple[str, ...] = ()
-    required_columns: tuple[str, ...] = ()
-    excluded_tables: tuple[str, ...] = ()
-    excluded_columns: tuple[str, ...] = ()
-
-
-@dataclass
-class ColumnSelectionCandidate:
-    selection_id: str
-    question: str
-    tables: list[str]
-    columns: list[dict[str, str]]
-    rationale: str
-    feedback_history: list[dict[str, Any]] = field(default_factory=list)
-    status: str = "awaiting_review"
-
-
-@dataclass
-class PreparedSqlCandidate:
-    question: str
-    sql: str
-    tables: list[str]
-    columns: list[dict[str, str]]
-    selection_id: str
-    status: str = "prepared"
-
-
-@dataclass
-class SqlExecutionResult:
-    answer: str
-    sql: str
-    dataframe: Any
-    source_tables: list[str]
-
-
-@lru_cache(maxsize=1)
-def _schema_column_catalog() -> tuple[dict[tuple[str, str], dict[str, str]], dict[str, list[dict[str, str]]]]:
-    by_pair: dict[tuple[str, str], dict[str, str]] = {}
-    by_column: dict[str, list[dict[str, str]]] = {}
-    for schema_file in sorted(SCHEMA_DIR.glob("*.json")):
-        schema = json.loads(schema_file.read_text(encoding="utf-8"))
-        table = str(schema.get("form_name", "") or "").strip()
-        variables = dict(schema.get("variables", {}) or {})
-        if not table:
-            continue
-        for column, info in variables.items():
-            column_name = str(column or "").strip()
-            if not column_name:
-                continue
-            entry = {
-                "table": table,
-                "column": column_name,
-                "description": str((info or {}).get("description", "") or "").strip(),
-            }
-            by_pair[(table, column_name)] = entry
-            by_column.setdefault(column_name, []).append(entry)
-    return by_pair, by_column
-
-
-def _lookup_schema_column(table: str, column: str) -> dict[str, str] | None:
-    by_pair, _by_column = _schema_column_catalog()
-    return by_pair.get((str(table or "").strip(), str(column or "").strip()))
-
-
-def _schema_table_names() -> set[str]:
-    by_pair, _ = _schema_column_catalog()
-    return {table for table, _column in by_pair}
-
-
-def _constraint_set_from_payload(payload: DbRagIntent | dict[str, Any] | None) -> FeedbackConstraintSet:
-    if isinstance(payload, DbRagIntent):
-        source = payload.__dict__
-    elif isinstance(payload, dict):
-        source = payload
-    else:
-        source = {}
-    return FeedbackConstraintSet(
-        goal_text=str(source.get("goal_text") or "").strip(),
-        required_tables=tuple(str(value or "").strip() for value in list(source.get("required_tables") or []) if str(value or "").strip()),
-        required_columns=tuple(str(value or "").strip() for value in list(source.get("required_columns") or []) if str(value or "").strip()),
-        excluded_tables=tuple(str(value or "").strip() for value in list(source.get("excluded_tables") or []) if str(value or "").strip()),
-        excluded_columns=tuple(str(value or "").strip() for value in list(source.get("excluded_columns") or []) if str(value or "").strip()),
-    )
-
-
-def _filter_and_inject_context_columns(
-    column_rows: list[dict[str, str]],
-    constraints: FeedbackConstraintSet,
-) -> list[dict[str, str]]:
-    filtered: list[dict[str, str]] = []
-    seen_pairs: set[tuple[str, str]] = set()
-
-    for entry in list(column_rows or []):
-        table = str(entry.get("table") or "").strip()
-        column = str(entry.get("column") or "").strip()
-        if not table or not column:
-            continue
-        if table in constraints.excluded_tables:
-            continue
-        qualified = f"{table}.{column}"
-        if qualified in constraints.excluded_columns:
-            continue
-        pair = (table, column)
-        if pair in seen_pairs:
-            continue
-        filtered.append(entry)
-        seen_pairs.add(pair)
-
-    for qualified in constraints.required_columns:
-        if "." not in qualified:
-            continue
-        table, column = qualified.split(".", 1)
-        pair = (table, column)
-        if pair in seen_pairs:
-            continue
-        schema_entry = _lookup_schema_column(table, column)
-        if schema_entry is None:
-            continue
-        filtered.append(
-            {
-                "table": table,
-                "column": column,
-                "text": schema_entry.get("description", ""),
-            }
-        )
-        seen_pairs.add(pair)
-
-    return filtered
-
-
-def _enforce_selection_constraints(
-    candidate: ColumnSelectionCandidate,
-    context: DbRagContext,
-    constraints: FeedbackConstraintSet,
-) -> ColumnSelectionCandidate:
-    valid_tables = set(context.table_names)
-    valid_columns = {(entry.table, entry.column) for entry in context.columns}
-
-    columns: list[dict[str, str]] = []
-    seen_pairs: set[tuple[str, str]] = set()
-    for entry in list(candidate.columns or []):
-        table = str(entry.get("table") or "").strip()
-        column = str(entry.get("column") or "").strip()
-        if not table or not column:
-            continue
-        if table in constraints.excluded_tables:
-            continue
-        qualified = f"{table}.{column}"
-        if qualified in constraints.excluded_columns:
-            continue
-        schema_entry = _lookup_schema_column(table, column)
-        if (table, column) not in valid_columns and schema_entry is None:
-            continue
-        description = str(entry.get("description") or "").strip()
-        if not description and schema_entry is not None:
-            description = schema_entry["description"]
-        pair = (table, column)
-        if pair in seen_pairs:
-            continue
-        columns.append({"table": table, "column": column, "description": description})
-        seen_pairs.add(pair)
-
-    for qualified in constraints.required_columns:
-        if "." not in qualified:
-            continue
-        table, column = qualified.split(".", 1)
-        pair = (table, column)
-        if pair in seen_pairs:
-            continue
-        schema_entry = _lookup_schema_column(table, column)
-        if (table, column) not in valid_columns and schema_entry is None:
-            continue
-        description = schema_entry["description"] if schema_entry is not None else ""
-        columns.append({"table": table, "column": column, "description": description})
-        seen_pairs.add(pair)
-
-    tables: list[str] = []
-    for table in list(candidate.tables or []):
-        table_name = str(table or "").strip()
-        if not table_name or table_name not in valid_tables:
-            continue
-        if table_name in constraints.excluded_tables:
-            continue
-        if table_name not in tables:
-            tables.append(table_name)
-
-    for table in constraints.required_tables:
-        if table in constraints.excluded_tables:
-            continue
-        if table in valid_tables and table not in tables:
-            tables.append(table)
-
-    for column in columns:
-        table = column["table"]
-        if table not in tables and table not in constraints.excluded_tables:
-            tables.append(table)
-
-    return ColumnSelectionCandidate(
-        selection_id=candidate.selection_id,
-        question=candidate.question,
-        tables=tables,
-        columns=columns,
-        rationale=candidate.rationale,
-        feedback_history=list(candidate.feedback_history),
-        status=candidate.status,
-    )
-
-
-def _merge_constraint_sets(*constraints_sets: FeedbackConstraintSet) -> FeedbackConstraintSet:
-    goal_text = ""
-    required_tables: list[str] = []
-    required_columns: list[str] = []
-    excluded_tables: list[str] = []
-    excluded_columns: list[str] = []
-
-    for constraints in constraints_sets:
-        if constraints.goal_text:
-            goal_text = constraints.goal_text
-        for table in constraints.required_tables:
-            if table not in required_tables:
-                required_tables.append(table)
-        for column in constraints.required_columns:
-            if column not in required_columns:
-                required_columns.append(column)
-        for table in constraints.excluded_tables:
-            if table not in excluded_tables:
-                excluded_tables.append(table)
-        for column in constraints.excluded_columns:
-            if column not in excluded_columns:
-                excluded_columns.append(column)
-
-    required_tables = [table for table in required_tables if table not in excluded_tables]
-    required_columns = [column for column in required_columns if column not in excluded_columns]
-    return FeedbackConstraintSet(
-        goal_text=goal_text,
-        required_tables=tuple(required_tables),
-        required_columns=tuple(required_columns),
-        excluded_tables=tuple(excluded_tables),
-        excluded_columns=tuple(excluded_columns),
-    )
-
-
-def _resolve_explicit_schema_mentions(
-    question: str,
-    feedback_history: list[dict[str, Any]],
-) -> list[dict[str, str]]:
-    by_pair, by_column = _schema_column_catalog()
-    texts = [str(question or "")]
-    texts.extend(str(item.get("feedback") or "") for item in feedback_history if isinstance(item, dict))
-    haystack = "\n".join(texts)
-    haystack_lower = haystack.lower()
-
-    matched: list[dict[str, str]] = []
-    seen_pairs: set[tuple[str, str]] = set()
-
-    for (table, column), entry in by_pair.items():
-        token = f"{table}.{column}".lower()
-        if token in haystack_lower and (table, column) not in seen_pairs:
-            matched.append(dict(entry))
-            seen_pairs.add((table, column))
-
-    for column_name, entries in by_column.items():
-        if len(entries) != 1:
-            continue
-        if re.search(rf"\b{re.escape(column_name)}\b", haystack, re.IGNORECASE):
-            entry = entries[0]
-            pair = (entry["table"], entry["column"])
-            if pair not in seen_pairs:
-                matched.append(dict(entry))
-                seen_pairs.add(pair)
-
-    return matched
-
-
-def _normalize_previous_selection(previous_selection: Any) -> dict[str, Any]:
-    if isinstance(previous_selection, ColumnSelectionCandidate):
-        return {
-            "selection_id": previous_selection.selection_id,
-            "question": previous_selection.question,
-            "tables": list(previous_selection.tables),
-            "columns": [dict(column) for column in previous_selection.columns],
-            "rationale": previous_selection.rationale,
-            "feedback_history": list(previous_selection.feedback_history),
-            "status": previous_selection.status,
-        }
-    if isinstance(previous_selection, dict):
-        return {
-            "selection_id": str(previous_selection.get("selection_id", "") or "").strip(),
-            "question": str(previous_selection.get("question", "") or "").strip(),
-            "tables": [str(value or "").strip() for value in list(previous_selection.get("tables") or []) if str(value or "").strip()],
-            "columns": [
-                {
-                    "table": str(column.get("table", "") or "").strip(),
-                    "column": str(column.get("column", "") or "").strip(),
-                    "description": str(column.get("description", "") or "").strip(),
-                }
-                for column in list(previous_selection.get("columns") or [])
-                if isinstance(column, dict)
-                and str(column.get("table", "") or "").strip()
-                and str(column.get("column", "") or "").strip()
-            ],
-            "rationale": str(previous_selection.get("rationale", "") or "").strip(),
-            "feedback_history": list(previous_selection.get("feedback_history") or []),
-            "status": str(previous_selection.get("status", "") or "").strip(),
-        }
-    return {
-        "selection_id": "",
-        "question": "",
-        "tables": [],
-        "columns": [],
-        "rationale": "",
-        "feedback_history": [],
-        "status": "",
-    }
-
-
-def _build_invalid_column_selection_candidate(
-    question: str,
-    context: DbRagContext,
-    feedback_history: list[dict[str, Any]],
-) -> ColumnSelectionCandidate:
-    columns = [{"table": entry.table, "column": entry.column} for entry in context.columns]
-    return ColumnSelectionCandidate(
-        selection_id=default_selection_id(question, context.table_names, columns, feedback_history),
-        question=question,
-        tables=[],
-        columns=[],
-        rationale=DB_RAG_CONTEXT_FALLBACK_RATIONALE,
-        feedback_history=feedback_history,
-    )
-
-
-def _default_selection_id(question: str, context: DbRagContext, feedback_history: list[dict[str, Any]]) -> str:
-    columns = [{"table": entry.table, "column": entry.column} for entry in context.columns]
-    return default_selection_id(question, context.table_names, columns, feedback_history)
-
+from ..retrieval import PAIRED_FORMS, decompose_query, retrieve_context_records, retrieve_single_query
+from ..vectorstore import OpenAIEmbeddingFunction
 
 @dataclass
 class DbRagService:
@@ -453,66 +80,12 @@ class DbRagService:
         recent_transcript: str,
     ) -> dict[str, Any]:
         del pending_kind
-
-        model = resolve_db_rag_reply_classifier_model()
-        if not model:
-            return {"label": "unknown", "confidence": 0.0}
-
-        api_key = str(os.getenv("DB_RAG_REPLY_CLASSIFIER_API_KEY", "") or "").strip()
-        if not api_key:
-            return {"label": "unknown", "confidence": 0.0}
-
-        try:
-            from openai import OpenAI
-        except ModuleNotFoundError:
-            return {"label": "unknown", "confidence": 0.0}
-
-        client_kwargs: dict[str, Any] = {"api_key": api_key}
-        base_url = str(os.getenv("DB_RAG_REPLY_CLASSIFIER_BASE_URL", "") or "").strip()
-        if base_url:
-            client_kwargs["base_url"] = base_url
-
-        try:
-            client = OpenAI(**client_kwargs)
-            response = client.chat.completions.create(
-                model=model,
-                response_format={"type": "json_object"},
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "You classify the latest user reply for a pending RePORT DB-RAG conversational gate. "
-                            "Return JSON only with keys label and confidence. "
-                            "Allowed labels: yes, no, substantive_followup, unknown."
-                        ),
-                    },
-                    {
-                        "role": "user",
-                        "content": (
-                            f"Pending question:\n{pending_question}\n\n"
-                            f"Recent transcript:\n{recent_transcript}\n\n"
-                            f"Latest user reply:\n{user_reply}\n\n"
-                            "Classify whether the user is agreeing to proceed, declining, asking a new substantive "
-                            "DB-RAG follow-up instead of answering yes/no, or remaining unclear."
-                        ),
-                    },
-                ],
-            )
-            content = coerce_text_content(getattr(response.choices[0].message, "content", ""))
-            parsed = parse_json_object(content) or {}
-        except Exception:
-            return {"label": "unknown", "confidence": 0.0}
-
-        label = str(parsed.get("label") or "").strip().lower()
-        if label not in {"yes", "no", "substantive_followup", "unknown"}:
-            return {"label": "unknown", "confidence": 0.0}
-
-        try:
-            confidence = float(parsed.get("confidence", 0.0))
-        except (TypeError, ValueError):
-            confidence = 0.0
-        confidence = max(0.0, min(1.0, confidence))
-        return {"label": label, "confidence": confidence}
+        return _classify_pending_reply(
+            pending_question=pending_question,
+            user_reply=user_reply,
+            recent_transcript=recent_transcript,
+            resolve_model=resolve_db_rag_reply_classifier_model,
+        )
 
     def readiness(self) -> dict[str, Any]:
         try:
