@@ -1,30 +1,19 @@
 from __future__ import annotations
 
 import json
+from functools import lru_cache
 
 from langchain_core.messages import AIMessage
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 from ..state import AgentState, MetaKeys
-from ..workflow_config import QA_RECENT_TURNS, TOOL_ROUTER_RECENT_TURNS
+from ..workflow_config import QA_RECENT_TURNS
 from utils.code_parser import extract_python_code
-from .code_guardrails import code_fingerprint, is_executable_python
-from .state_helpers import (
-    clear_clarification_meta,
-    enqueue_tool_requester,
-    get_agent_state,
-    set_clarification_meta,
-    update_agent_state,
-)
-from .tool_routing import (
-    format_tool_results,
-    latest_user_message,
-    request_tools_for_question,
-    should_route_tools,
-)
-from utils.message_window import window_messages
-from utils.llm_response import coerce_text_content
 from utils.dataset_artifacts import build_dataset_context, get_active_dataset_artifact
+from utils.llm_response import coerce_text_content
+from utils.message_window import window_messages
+from .code_guardrails import code_fingerprint, is_executable_python
+from .state_helpers import clear_clarification_meta, get_agent_state, set_clarification_meta, update_agent_state
+from .tool_routing import latest_user_message, should_route_tools
 
 NODE_NAME = "qa"
 NODE_CAPABILITY = (
@@ -67,6 +56,122 @@ def _replace_latest_human_message(messages: list, content: str) -> list:
     return updated_messages
 
 
+def _build_qa_system_prompt(context: str) -> str:
+    normalized_context = context or "No dataset or schema provided."
+    return (
+        "You are a helpful data scientist. Answer the user's question directly and clearly. "
+        "If the question requires analysis, explain the recommended steps without writing code "
+        "unless requested.\n"
+        "Use the available MCP tools when they materially improve the answer. If a tool requires "
+        "one specific missing field that is not present in the conversation, do not guess and do "
+        "not call the tool yet. Instead, ask a single clarification question.\n"
+        "When including math, use Markdown math delimiters compatible with Streamlit: inline math "
+        "with $...$ and display math with $$...$$. Do not use plain parentheses around LaTeX "
+        "commands.\n"
+        "Return valid JSON with exactly these keys: "
+        '{"answer": string, "needs_clarification": boolean, "clarification_question": string|null}.\n'
+        'Set "needs_clarification" to true only when the request is blocked by one specific '
+        "missing piece of required information. Do not use clarification for optional next steps "
+        'or offers like asking whether the user wants code.\n'
+        'When "needs_clarification" is true, put the single follow-up question in '
+        '"clarification_question" and set "answer" to an empty string.\n'
+        'When "needs_clarification" is false, put the full response in "answer" and set '
+        '"clarification_question" to null.\n'
+        "Dataset context (if available):\n"
+        f"{normalized_context}"
+    )
+
+
+def _serialize_tool_output(result) -> str:
+    try:
+        return json.dumps(result, ensure_ascii=False, default=str)
+    except TypeError:
+        return str(result)
+
+
+@lru_cache(maxsize=1)
+def _build_mcp_tools():
+    from langchain_core.tools import StructuredTool
+
+    from tools.mcp_pool import call_server_tool
+
+    def query_weather(
+        city: str,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> str:
+        """Get weather for a city and optional date range."""
+        return _serialize_tool_output(
+            call_server_tool(
+                "weather",
+                "query_weather",
+                city=city,
+                start_date=start_date,
+                end_date=end_date,
+            )
+        )
+
+    def get_weather_tips(season: str) -> str:
+        """Get seasonal weather tips."""
+        return _serialize_tool_output(
+            call_server_tool(
+                "weather",
+                "get_weather_tips",
+                season=season,
+            )
+        )
+
+    def search(query: str, max_results: int = 5) -> str:
+        """Run a web search."""
+        return _serialize_tool_output(
+            call_server_tool(
+                "search",
+                "search",
+                query=query,
+                max_results=max_results,
+            )
+        )
+
+    def calculate(expression: str) -> str:
+        """Evaluate a math expression."""
+        return _serialize_tool_output(
+            call_server_tool(
+                "calculator",
+                "calculate",
+                expression=expression,
+            )
+        )
+
+    return [
+        StructuredTool.from_function(query_weather),
+        StructuredTool.from_function(get_weather_tips),
+        StructuredTool.from_function(search),
+        StructuredTool.from_function(calculate),
+    ]
+
+
+def _create_qa_agent(llm, *, context: str):
+    from langchain.agents import create_agent
+
+    return create_agent(
+        model=llm,
+        tools=_build_mcp_tools(),
+        system_prompt=_build_qa_system_prompt(context),
+        name="qa_agent",
+    )
+
+
+def _extract_agent_response_text(agent_result) -> str:
+    if isinstance(agent_result, dict):
+        messages = list(agent_result.get("messages", []))
+        for message in reversed(messages):
+            if getattr(message, "type", None) == "ai":
+                text = coerce_text_content(getattr(message, "content", ""))
+                if text:
+                    return text
+    return coerce_text_content(agent_result)
+
+
 def qa_node(
     state: AgentState,
     llm,
@@ -78,116 +183,18 @@ def qa_node(
     elif callable(context):
         context = context(state)
 
-    qa_state = get_agent_state(state, "qa")
     question = question_override if question_override is not None else latest_user_message(state)
-    tool_requests = list(qa_state.get("tool_requests", []))
-    tool_results = list(qa_state.get("tool_results", []))
     prompt_messages = (
         _replace_latest_human_message(list(state.get("messages", [])), question)
         if question_override is not None
         else list(state.get("messages", []))
     )
-
     should_attempt_tool_routing = should_route_tools(question)
 
-    if question and not tool_results and not tool_requests and should_attempt_tool_routing:
-        effective_question = question
-        recent_msgs = window_messages(prompt_messages, max_turns=TOOL_ROUTER_RECENT_TURNS)
-
-        routing_result = request_tools_for_question(llm, effective_question, recent_messages=recent_msgs)
-        # Clarification needed — required tool field is missing and can't be inferred.
-        if routing_result.clarification_question:
-            messages = list(state.get("messages", []))
-            messages.append(AIMessage(content=routing_result.clarification_question))
-            meta = set_clarification_meta(
-                state.get("meta", {}),
-                return_node="qa",
-                kind="qa_tool",
-                pending_question=effective_question,
-            )
-            output = dict(state.get("output") or {})
-            output["qa_response"] = routing_result.clarification_question
-            observations = list(state.get("observations", []))
-            observations.append("qa: asked clarification for missing required tool field")
-            updated_state = {
-                **state,
-                "messages": messages,
-                "meta": meta,
-                "output": output,
-                "observations": observations,
-            }
-            return update_agent_state(
-                updated_state,
-                "qa",
-                {
-                    "status": "done",
-                    "awaiting_tool_clarification": True,
-                },
-            )
-
-        # Tool(s) identified — clear pending clarification state and enqueue.
-        if routing_result.tool_requests:
-            meta = clear_clarification_meta(state.get("meta") or {})
-            observations = list(state.get("observations", []))
-            observations.append("qa: requested tools")
-            updated_state = enqueue_tool_requester(
-                {
-                    **state,
-                    "meta":meta,
-                    "observations": observations,
-                },
-                "qa",
-            )
-            return update_agent_state(
-                updated_state,
-                "qa",
-                {
-                    "status": "pending",
-                    "tool_requests": routing_result.tool_requests,
-                    "awaiting_tool_clarification": False,
-                },
-            )
-
     windowed = window_messages(prompt_messages, max_turns=QA_RECENT_TURNS)
-    prompt = ChatPromptTemplate.from_messages(
-        [
-            (
-                "system",
-                "You are a helpful data scientist. Answer the user's question "
-                "directly and clearly. If the question requires analysis, explain the "
-                "recommended steps without writing code unless requested.\n"
-                "When including math, use Markdown math delimiters compatible with "
-                "Streamlit: inline math with $...$ and display math with $$...$$. "
-                "Do not use plain parentheses around LaTeX commands.\n"
-                "Return valid JSON with exactly these keys: "
-                '{{"answer": string, "needs_clarification": boolean, "clarification_question": string|null}}.\n'
-                'Set "needs_clarification" to true only when the request is blocked by one '
-                "specific missing piece of required information. Do not use clarification for "
-                "optional next steps or offers like asking whether the user wants code.\n"
-                'When "needs_clarification" is true, put the single follow-up question in '
-                '"clarification_question" and set "answer" to an empty string.\n'
-                'When "needs_clarification" is false, put the full response in "answer" and set '
-                '"clarification_question" to null.',
-            ),
-            (
-                "system",
-                "Dataset context (if available):\n{context}",
-            ),
-            (
-                "system",
-                "Tool results (if any):\n{tool_results}",
-            ),
-            MessagesPlaceholder("messages"),
-        ]
-    )
-    response = llm.invoke(
-        prompt.format_prompt(
-            messages=windowed,
-            context=context or "No dataset or schema provided.",
-            tool_results=format_tool_results(tool_results),
-        ).to_messages()
-    )
-    raw_response_text = coerce_text_content(response.content)
+    agent = _create_qa_agent(llm, context=context or "No dataset or schema provided.")
+    raw_response_text = _extract_agent_response_text(agent.invoke({"messages": windowed}))
+
     parsed_answer, explicit_clarification, clarification_question = _parse_structured_qa_response(
         raw_response_text
     )
@@ -244,5 +251,7 @@ def qa_node(
             "status": "done",
             "response": response_text,
             "awaiting_tool_clarification": awaiting_tool_clarification_for_agent,
+            "tool_requests": [],
+            "tool_results": [],
         },
     )

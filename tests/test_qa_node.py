@@ -62,6 +62,20 @@ class _LLM:
         return SimpleNamespace(content="ok")
 
 
+class _FakeAgent:
+    def __init__(self, response_text: str):
+        self.response_text = response_text
+        self.last_input = None
+
+    def invoke(self, agent_input):
+        self.last_input = agent_input
+        return {
+            "messages": [
+                _AIMessage(self.response_text),
+            ]
+        }
+
+
 def _install_stubs() -> None:
     messages_mod = ModuleType("langchain_core.messages")
     messages_mod.BaseMessage = object
@@ -91,88 +105,50 @@ def _fresh_qa_module():
     return importlib.import_module("graph.nodes.qa")
 
 
-def test_qa_node_includes_context_in_prompt() -> None:
+def test_build_qa_system_prompt_includes_context_and_math_contract() -> None:
     qa = _fresh_qa_module()
-    llm = _LLM()
+    rendered = qa._build_qa_system_prompt("Available columns:\n- sex\n- time")
 
-    state = {
-        "messages": [_HumanMessage("what variables inside the data")],
-        "output": {},
-        "meta": {"intent": "qa"},
-        "observations": [],
-        "agents": {"qa": {"tool_requests": [], "tool_results": []}},
-    }
-
-    qa.qa_node(state, llm, context="Available columns:\n- sex\n- time")
-
-    assert llm.last_messages is not None
-    rendered = "\n".join(m.get("content", "") for m in llm.last_messages)
     assert "Dataset context (if available):" in rendered
     assert "- sex" in rendered
-
-
-def test_qa_node_prompt_instructs_streamlit_math_delimiters() -> None:
-    qa = _fresh_qa_module()
-    llm = _LLM()
-
-    state = {
-        "messages": [_HumanMessage("What is 3/5 + 1/5?")],
-        "output": {},
-        "meta": {"intent": "qa"},
-        "observations": [],
-        "agents": {"qa": {"tool_requests": [], "tool_results": []}},
-    }
-
-    qa.qa_node(state, llm, context="")
-
-    assert llm.last_messages is not None
-    rendered = "\n".join(m.get("content", "") for m in llm.last_messages)
     assert "inline math with $...$ and display math with $$...$$" in rendered
     assert "Do not use plain parentheses around LaTeX commands." in rendered
 
 
-def test_qa_node_prompt_template_escapes_literal_json_braces() -> None:
-    original_format_prompt = _PromptTemplate.format_prompt
-
-    def _strict_format_prompt(self, **kwargs):
-        rendered = []
-        for role, template in self._messages:
-            rendered.append({"role": role, "content": template.format(**kwargs)})
-        return _FormattedPrompt(rendered)
-
-    _PromptTemplate.format_prompt = _strict_format_prompt
-    try:
-        qa = _fresh_qa_module()
-
-        state = {
-            "messages": [_HumanMessage("who are you")],
-            "output": {},
-            "meta": {},
-            "observations": [],
-            "agents": {"qa": {"tool_requests": [], "tool_results": []}},
-        }
-
-        result = qa.qa_node(state, _LLM(), context="")
-
-        assert result["output"]["qa_response"] == "ok"
-    finally:
-        _PromptTemplate.format_prompt = original_format_prompt
-
-
-def test_qa_node_routes_tools_after_clarification_followup() -> None:
+def test_qa_node_invokes_create_agent_adapter_with_replaced_question() -> None:
     qa = _fresh_qa_module()
+    agent = _FakeAgent('{"answer":"ok","needs_clarification":false,"clarification_question":null}')
+    captured = {}
 
-    class _LLM:
-        def __init__(self):
-            self.calls = 0
+    def _fake_create_qa_agent(llm, *, context):
+        captured["llm"] = llm
+        captured["context"] = context
+        return agent
 
-        def invoke(self, _messages):
-            self.calls += 1
-            if self.calls == 1:
-                return SimpleNamespace(content='{"clarification_question": "Which city in China would you like the weather for?"}')
-            return SimpleNamespace(content='{"tool_requests":[{"tool_name":"query_weather","payload":{"server":"weather","city":"Shanghai"}}]}')
+    qa._create_qa_agent = _fake_create_qa_agent
 
-    llm = _LLM()
+    state = {
+        "messages": [_HumanMessage("old question")],
+        "output": {},
+        "meta": {},
+        "observations": [],
+        "agents": {"qa": {"tool_requests": ["stale"], "tool_results": ["stale"]}},
+    }
+
+    result = qa.qa_node(state, _LLM(), context="Dataset context", question_override="new question")
+
+    assert captured["context"] == "Dataset context"
+    assert agent.last_input["messages"][-1].content == "new question"
+    assert result["output"]["qa_response"] == "ok"
+    assert result["agents"]["qa"]["tool_requests"] == []
+    assert result["agents"]["qa"]["tool_results"] == []
+
+
+def test_qa_node_sets_tool_clarification_meta_from_agent_response() -> None:
+    qa = _fresh_qa_module()
+    qa._create_qa_agent = lambda llm, *, context: _FakeAgent(
+        '{"answer":"","needs_clarification":true,"clarification_question":"Which city in China would you like the weather for?"}'
+    )
     state = {
         "messages": [_HumanMessage("What's weather in china today?")],
         "output": {},
@@ -181,7 +157,7 @@ def test_qa_node_routes_tools_after_clarification_followup() -> None:
         "agents": {"qa": {"tool_requests": [], "tool_results": []}},
     }
 
-    first = qa.qa_node(state, llm, context="")
+    first = qa.qa_node(state, _LLM(), context="")
     assert first["agents"]["qa"]["awaiting_tool_clarification"] is True
     assert first["output"]["qa_response"].startswith("Which city")
 
@@ -192,24 +168,9 @@ def test_qa_node_routes_tools_after_clarification_followup() -> None:
 
 def test_qa_node_sets_awaiting_clarification_when_llm_returns_structured_signal() -> None:
     qa = _fresh_qa_module()
-
-    class _LLM:
-        def __init__(self):
-            self.calls = 0
-
-        def invoke(self, _messages):
-            self.calls += 1
-            if self.calls == 1:
-                # Tool-routing LLM returns no tool and no clarification — falls through.
-                return SimpleNamespace(content='{"tool_requests": []}')
-            return SimpleNamespace(
-                content=(
-                    '{"answer":"","needs_clarification":true,'
-                    '"clarification_question":"Which city would you like weather for?"}'
-                )
-            )
-
-    llm = _LLM()
+    qa._create_qa_agent = lambda llm, *, context: _FakeAgent(
+        '{"answer":"","needs_clarification":true,"clarification_question":"Which city would you like weather for?"}'
+    )
     state = {
         "messages": [_HumanMessage("what's weather today")],
         "output": {},
@@ -218,7 +179,7 @@ def test_qa_node_sets_awaiting_clarification_when_llm_returns_structured_signal(
         "agents": {"qa": {"tool_requests": [], "tool_results": []}},
     }
 
-    result = qa.qa_node(state, llm, context="")
+    result = qa.qa_node(state, _LLM(), context="")
 
     assert result["meta"].get("awaiting_user_clarification") is True
     assert result["meta"].get("pending_question") == "what's weather today"
@@ -229,15 +190,9 @@ def test_qa_node_sets_awaiting_clarification_when_llm_returns_structured_signal(
 
 def test_qa_node_sets_generic_clarification_meta_for_non_tool_question() -> None:
     qa = _fresh_qa_module()
-
-    class _LLM:
-        def invoke(self, _messages):
-            return SimpleNamespace(
-                content=(
-                    '{"answer":"","needs_clarification":true,'
-                    '"clarification_question":"Which Boston do you mean?"}'
-                )
-            )
+    qa._create_qa_agent = lambda llm, *, context: _FakeAgent(
+        '{"answer":"","needs_clarification":true,"clarification_question":"Which Boston do you mean?"}'
+    )
 
     state = {
         "messages": [_HumanMessage("Tell me about Boston")],
@@ -257,10 +212,7 @@ def test_qa_node_sets_generic_clarification_meta_for_non_tool_question() -> None
 
 def test_qa_node_does_not_set_clarification_for_plaintext_followup_question() -> None:
     qa = _fresh_qa_module()
-
-    class _LLM:
-        def invoke(self, _messages):
-            return SimpleNamespace(content="Would you like sample code?")
+    qa._create_qa_agent = lambda llm, *, context: _FakeAgent("Would you like sample code?")
 
     state = {
         "messages": [_HumanMessage("Explain survival analysis")],
@@ -279,18 +231,9 @@ def test_qa_node_does_not_set_clarification_for_plaintext_followup_question() ->
 
 def test_qa_node_routes_tools_after_generic_clarification_followup() -> None:
     qa = _fresh_qa_module()
-
-    class _LLM:
-        def __init__(self):
-            self.calls = 0
-
-        def invoke(self, _messages):
-            self.calls += 1
-            if self.calls == 1:
-                return SimpleNamespace(content='{"clarification_question": "What expression should I calculate?"}')
-            return SimpleNamespace(content='{"tool_requests":[{"tool_name":"calculate","payload":{"server":"calculator","expression":"(2 + 3) * 4"}}]}')
-
-    llm = _LLM()
+    qa._create_qa_agent = lambda llm, *, context: _FakeAgent(
+        '{"answer":"","needs_clarification":true,"clarification_question":"What expression should I calculate?"}'
+    )
     state = {
         "messages": [_HumanMessage("Please calculate for me")],
         "output": {},
@@ -299,7 +242,7 @@ def test_qa_node_routes_tools_after_generic_clarification_followup() -> None:
         "agents": {"qa": {"tool_requests": [], "tool_results": []}},
     }
 
-    first = qa.qa_node(state, llm, context="")
+    first = qa.qa_node(state, _LLM(), context="")
     assert first["agents"]["qa"]["awaiting_tool_clarification"] is True
     assert first["output"]["qa_response"].startswith("What expression")
 
@@ -310,17 +253,12 @@ def test_qa_node_routes_tools_after_generic_clarification_followup() -> None:
 
 def test_qa_node_persists_executable_python_from_answer_for_later_run() -> None:
     qa = _fresh_qa_module()
-
-    class _CodeLLM:
-        def invoke(self, _messages):
-            return SimpleNamespace(
-                content=(
-                    "Use this:\n"
-                    "```python\n"
-                    "print('ready to run')\n"
-                    "```\n"
-                )
-            )
+    qa._create_qa_agent = lambda llm, *, context: _FakeAgent(
+        "Use this:\n"
+        "```python\n"
+        "print('ready to run')\n"
+        "```\n"
+    )
 
     state = {
         "messages": [_HumanMessage("Give me example Python code")],
@@ -330,7 +268,7 @@ def test_qa_node_persists_executable_python_from_answer_for_later_run() -> None:
         "agents": {"qa": {"tool_requests": [], "tool_results": []}},
     }
 
-    result = qa.qa_node(state, _CodeLLM(), context="")
+    result = qa.qa_node(state, _LLM(), context="")
 
     assert result["output"]["qa_response"].startswith("Use this:")
     assert result["output"]["generated_code"] == "print('ready to run')"
