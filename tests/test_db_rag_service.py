@@ -935,6 +935,57 @@ def test_retrieve_context_for_intent_applies_required_and_excluded_tables(monkey
     assert context.table_names == ["Form 2A - INDEX CASE: Clinical/Demographic Form"]
 
 
+def test_retrieve_context_for_intent_applies_required_and_excluded_columns(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    from db_rag import service
+
+    def _fake_retrieve_context_records(_llm, _table_collection, _column_collection, question, **kwargs):
+        return (
+            [{"table": "Form 1A", "text": "Form 1A summary"}],
+            [{"table": "Form 1A", "column": "SEX", "text": "SEX summary"}],
+        )
+
+    monkeypatch.setattr(service, "retrieve_context_records", _fake_retrieve_context_records)
+    monkeypatch.setattr(
+        service,
+        "_schema_column_catalog",
+        lambda: (
+            {
+                ("Form 1A", "AGE"): {"table": "Form 1A", "column": "AGE", "description": "Age in years"},
+                ("Form 1A", "SEX"): {"table": "Form 1A", "column": "SEX", "description": "Sex at enrollment"},
+            },
+            {},
+        ),
+    )
+
+    class _DbRagService(service.DbRagService):
+        def _load_collections(self):
+            return object(), object()
+
+    intent = service.DbRagIntent(
+        intent_id="intent-1",
+        source_question="subset age",
+        goal_text="subset age",
+        mode="extraction",
+        population=None,
+        requested_fields=["age"],
+        filters=[],
+        required_tables=["Form 1A"],
+        required_columns=["Form 1A.AGE"],
+        excluded_tables=[],
+        excluded_columns=["Form 1A.SEX"],
+        feedback_history=[],
+        status="active",
+    )
+
+    context = _DbRagService(llm=object()).retrieve_context_for_intent(intent)
+
+    assert context.table_names == ["Form 1A"]
+    assert {(entry.table, entry.column) for entry in context.columns} == {("Form 1A", "AGE")}
+    assert "Age in years" in context.column_context
+
+
 def test_prepare_column_selection_filters_invented_pairs(monkeypatch) -> None:
     _install_langchain_message_stubs(monkeypatch)
 
@@ -1368,6 +1419,153 @@ def test_prepare_column_selection_enforces_intent_snapshot_exclusions_after_merg
     selected_pairs = {(column["table"], column["column"]) for column in selection.columns}
     assert ("Cases and Controls Follow-Up Form", "SUBJID_PSEUDO") not in selected_pairs
     assert "Cases and Controls Follow-Up Form" not in selection.tables
+
+
+def test_prepare_column_selection_enforces_required_columns_after_llm_proposal(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    from db_rag import service
+
+    class _LLM:
+        def invoke(self, messages):
+            return SimpleNamespace(
+                content=json.dumps(
+                    {
+                        "selection_id": "sel-required",
+                        "rationale": "llm only selected one column",
+                        "tables": ["Form 1A"],
+                        "columns": [
+                            {"table": "Form 1A", "column": "AGE", "description": "Age in years"},
+                        ],
+                    }
+                )
+            )
+
+    monkeypatch.setattr(
+        service,
+        "_schema_column_catalog",
+        lambda: (
+            {
+                ("Form 1A", "AGE"): {"table": "Form 1A", "column": "AGE", "description": "Age in years"},
+                ("Form 1A", "SEX"): {"table": "Form 1A", "column": "SEX", "description": "Sex at enrollment"},
+            },
+            {},
+        ),
+    )
+
+    context = service.DbRagContext(
+        tables=[service.DbRagTableHit(table="Form 1A", text="Form 1A summary")],
+        columns=[
+            service.DbRagColumnHit(table="Form 1A", column="AGE", text="AGE summary"),
+            service.DbRagColumnHit(table="Form 1A", column="SEX", text="SEX summary"),
+        ],
+    )
+    selection = service.DbRagService(llm=_LLM()).prepare_column_selection(
+        "subset age and sex",
+        context,
+        intent_snapshot={
+            "required_tables": ["Form 1A"],
+            "required_columns": ["Form 1A.SEX"],
+            "excluded_tables": [],
+            "excluded_columns": [],
+        },
+    )
+
+    assert {(column["table"], column["column"]) for column in selection.columns} == {
+        ("Form 1A", "AGE"),
+        ("Form 1A", "SEX"),
+    }
+
+
+def test_prepare_column_selection_grounds_concept_level_feedback_into_exact_column(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    from db_rag import service
+
+    class _LLM:
+        def __init__(self):
+            self.calls = 0
+
+        def invoke(self, messages):
+            self.calls += 1
+            if self.calls == 1:
+                return SimpleNamespace(
+                    content=json.dumps(
+                        {
+                            "goal_text": "subset age from household contacts",
+                            "required_tables": ["Form 1B - Household Contact Screening Form"],
+                            "required_columns": ["Form 1B - Household Contact Screening Form.HC_AGE"],
+                            "excluded_tables": [],
+                            "excluded_columns": [],
+                        }
+                    )
+                )
+            return SimpleNamespace(
+                content=json.dumps(
+                    {
+                        "selection_id": "sel-grounded",
+                        "rationale": "selected age from the main index-case form only",
+                        "tables": ["Form 1A - Index Case Screening"],
+                        "columns": [
+                            {
+                                "table": "Form 1A - Index Case Screening",
+                                "column": "IS_AGE",
+                                "description": "Index case age",
+                            }
+                        ],
+                    }
+                )
+            )
+
+    monkeypatch.setattr(
+        service,
+        "_schema_column_catalog",
+        lambda: (
+            {
+                ("Form 1A - Index Case Screening", "IS_AGE"): {
+                    "table": "Form 1A - Index Case Screening",
+                    "column": "IS_AGE",
+                    "description": "Index case age",
+                },
+                ("Form 1B - Household Contact Screening Form", "HC_AGE"): {
+                    "table": "Form 1B - Household Contact Screening Form",
+                    "column": "HC_AGE",
+                    "description": "Household contact age",
+                },
+            },
+            {},
+        ),
+    )
+
+    context = service.DbRagContext(
+        tables=[
+            service.DbRagTableHit(table="Form 1A - Index Case Screening", text="Form 1A summary"),
+            service.DbRagTableHit(table="Form 1B - Household Contact Screening Form", text="Form 1B summary"),
+        ],
+        columns=[
+            service.DbRagColumnHit(table="Form 1A - Index Case Screening", column="IS_AGE", text="IS_AGE summary"),
+            service.DbRagColumnHit(table="Form 1B - Household Contact Screening Form", column="HC_AGE", text="HC_AGE summary"),
+        ],
+    )
+    db_rag_service = service.DbRagService(llm=_LLM())
+
+    selection = db_rag_service.prepare_column_selection(
+        "subset age",
+        context,
+        feedback_history=[{"feedback": "add age from household contacts"}],
+        intent_snapshot={
+            "goal_text": "subset age",
+            "required_tables": [],
+            "required_columns": [],
+            "excluded_tables": [],
+            "excluded_columns": [],
+        },
+    )
+
+    assert ("Form 1B - Household Contact Screening Form", "HC_AGE") in {
+        (column["table"], column["column"]) for column in selection.columns
+    }
+    assert "Form 1B - Household Contact Screening Form" in selection.tables
 
 
 def test_prepare_sql_candidate_uses_approved_columns_only(monkeypatch) -> None:

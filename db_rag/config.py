@@ -76,3 +76,9 @@ def resolve_db_rag_reranker_model() -> str | None:
         supported = ", ".join(SUPPORTED_DB_RAG_RERANKER_MODELS)
         raise ValueError(f"Unsupported DB_RAG_RERANKER_MODEL '{model}'. Supported values: {supported}.")
     return model
+
+
+def resolve_db_rag_reply_classifier_model() -> str | None:
+    load_dotenv()
+    model = str(os.getenv("DB_RAG_REPLY_CLASSIFIER_MODEL", "") or "").strip()
+    return model or None

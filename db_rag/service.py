@@ -98,6 +98,15 @@ class DbRagIntent:
     status: str = "active"
 
 
+@dataclass(frozen=True)
+class FeedbackConstraintSet:
+    goal_text: str
+    required_tables: tuple[str, ...] = ()
+    required_columns: tuple[str, ...] = ()
+    excluded_tables: tuple[str, ...] = ()
+    excluded_columns: tuple[str, ...] = ()
+
+
 @dataclass
 class ColumnSelectionCandidate:
     selection_id: str
@@ -159,6 +168,179 @@ def _lookup_schema_column(table: str, column: str) -> dict[str, str] | None:
 def _schema_table_names() -> set[str]:
     by_pair, _ = _schema_column_catalog()
     return {table for table, _column in by_pair}
+
+
+def _constraint_set_from_payload(payload: DbRagIntent | dict[str, Any] | None) -> FeedbackConstraintSet:
+    if isinstance(payload, DbRagIntent):
+        source = payload.__dict__
+    elif isinstance(payload, dict):
+        source = payload
+    else:
+        source = {}
+    return FeedbackConstraintSet(
+        goal_text=str(source.get("goal_text") or "").strip(),
+        required_tables=tuple(str(value or "").strip() for value in list(source.get("required_tables") or []) if str(value or "").strip()),
+        required_columns=tuple(str(value or "").strip() for value in list(source.get("required_columns") or []) if str(value or "").strip()),
+        excluded_tables=tuple(str(value or "").strip() for value in list(source.get("excluded_tables") or []) if str(value or "").strip()),
+        excluded_columns=tuple(str(value or "").strip() for value in list(source.get("excluded_columns") or []) if str(value or "").strip()),
+    )
+
+
+def _filter_and_inject_context_columns(
+    column_rows: list[dict[str, str]],
+    constraints: FeedbackConstraintSet,
+) -> list[dict[str, str]]:
+    filtered: list[dict[str, str]] = []
+    seen_pairs: set[tuple[str, str]] = set()
+
+    for entry in list(column_rows or []):
+        table = str(entry.get("table") or "").strip()
+        column = str(entry.get("column") or "").strip()
+        if not table or not column:
+            continue
+        if table in constraints.excluded_tables:
+            continue
+        qualified = f"{table}.{column}"
+        if qualified in constraints.excluded_columns:
+            continue
+        pair = (table, column)
+        if pair in seen_pairs:
+            continue
+        filtered.append(entry)
+        seen_pairs.add(pair)
+
+    for qualified in constraints.required_columns:
+        if "." not in qualified:
+            continue
+        table, column = qualified.split(".", 1)
+        pair = (table, column)
+        if pair in seen_pairs:
+            continue
+        schema_entry = _lookup_schema_column(table, column)
+        if schema_entry is None:
+            continue
+        filtered.append(
+            {
+                "table": table,
+                "column": column,
+                "text": schema_entry.get("description", ""),
+            }
+        )
+        seen_pairs.add(pair)
+
+    return filtered
+
+
+def _enforce_selection_constraints(
+    candidate: ColumnSelectionCandidate,
+    context: DbRagContext,
+    constraints: FeedbackConstraintSet,
+) -> ColumnSelectionCandidate:
+    valid_tables = set(context.table_names)
+    valid_columns = {(entry.table, entry.column) for entry in context.columns}
+
+    columns: list[dict[str, str]] = []
+    seen_pairs: set[tuple[str, str]] = set()
+    for entry in list(candidate.columns or []):
+        table = str(entry.get("table") or "").strip()
+        column = str(entry.get("column") or "").strip()
+        if not table or not column:
+            continue
+        if table in constraints.excluded_tables:
+            continue
+        qualified = f"{table}.{column}"
+        if qualified in constraints.excluded_columns:
+            continue
+        schema_entry = _lookup_schema_column(table, column)
+        if (table, column) not in valid_columns and schema_entry is None:
+            continue
+        description = str(entry.get("description") or "").strip()
+        if not description and schema_entry is not None:
+            description = schema_entry["description"]
+        pair = (table, column)
+        if pair in seen_pairs:
+            continue
+        columns.append({"table": table, "column": column, "description": description})
+        seen_pairs.add(pair)
+
+    for qualified in constraints.required_columns:
+        if "." not in qualified:
+            continue
+        table, column = qualified.split(".", 1)
+        pair = (table, column)
+        if pair in seen_pairs:
+            continue
+        schema_entry = _lookup_schema_column(table, column)
+        if (table, column) not in valid_columns and schema_entry is None:
+            continue
+        description = schema_entry["description"] if schema_entry is not None else ""
+        columns.append({"table": table, "column": column, "description": description})
+        seen_pairs.add(pair)
+
+    tables: list[str] = []
+    for table in list(candidate.tables or []):
+        table_name = str(table or "").strip()
+        if not table_name or table_name not in valid_tables:
+            continue
+        if table_name in constraints.excluded_tables:
+            continue
+        if table_name not in tables:
+            tables.append(table_name)
+
+    for table in constraints.required_tables:
+        if table in constraints.excluded_tables:
+            continue
+        if table in valid_tables and table not in tables:
+            tables.append(table)
+
+    for column in columns:
+        table = column["table"]
+        if table not in tables and table not in constraints.excluded_tables:
+            tables.append(table)
+
+    return ColumnSelectionCandidate(
+        selection_id=candidate.selection_id,
+        question=candidate.question,
+        tables=tables,
+        columns=columns,
+        rationale=candidate.rationale,
+        feedback_history=list(candidate.feedback_history),
+        status=candidate.status,
+    )
+
+
+def _merge_constraint_sets(*constraints_sets: FeedbackConstraintSet) -> FeedbackConstraintSet:
+    goal_text = ""
+    required_tables: list[str] = []
+    required_columns: list[str] = []
+    excluded_tables: list[str] = []
+    excluded_columns: list[str] = []
+
+    for constraints in constraints_sets:
+        if constraints.goal_text:
+            goal_text = constraints.goal_text
+        for table in constraints.required_tables:
+            if table not in required_tables:
+                required_tables.append(table)
+        for column in constraints.required_columns:
+            if column not in required_columns:
+                required_columns.append(column)
+        for table in constraints.excluded_tables:
+            if table not in excluded_tables:
+                excluded_tables.append(table)
+        for column in constraints.excluded_columns:
+            if column not in excluded_columns:
+                excluded_columns.append(column)
+
+    required_tables = [table for table in required_tables if table not in excluded_tables]
+    required_columns = [column for column in required_columns if column not in excluded_columns]
+    return FeedbackConstraintSet(
+        goal_text=goal_text,
+        required_tables=tuple(required_tables),
+        required_columns=tuple(required_columns),
+        excluded_tables=tuple(excluded_tables),
+        excluded_columns=tuple(excluded_columns),
+    )
 
 
 def _resolve_explicit_schema_mentions(
@@ -355,6 +537,7 @@ class DbRagService:
         *,
         reranker_model: str | None = None,
     ) -> DbRagContext:
+        constraints = _constraint_set_from_payload(intent)
         table_collection, column_collection = self._load_collections()
         table_rows, column_rows = retrieve_context_records(
             self.llm,
@@ -362,15 +545,56 @@ class DbRagService:
             column_collection,
             intent.goal_text,
             reranker_model=reranker_model,
-            required_tables=list(intent.required_tables),
-            excluded_tables=list(intent.excluded_tables),
+            required_tables=list(constraints.required_tables),
+            excluded_tables=list(constraints.excluded_tables),
         )
+        column_rows = _filter_and_inject_context_columns(column_rows, constraints)
         return DbRagContext(
             tables=[DbRagTableHit(**entry) for entry in table_rows],
             columns=[DbRagColumnHit(**entry) for entry in column_rows],
             table_context="\n\n".join(entry["text"] for entry in table_rows),
             column_context="\n\n".join(entry["text"] for entry in column_rows),
         )
+
+    def ground_feedback_constraints(
+        self,
+        question: str,
+        context: DbRagContext,
+        *,
+        feedback_history: list[dict[str, Any]] | None = None,
+        previous_selection: Any = None,
+        intent_snapshot: dict[str, Any] | None = None,
+    ) -> FeedbackConstraintSet:
+        from langchain_core.messages import HumanMessage, SystemMessage
+
+        normalized_feedback_history = list(feedback_history or [])
+        normalized_previous_selection = _normalize_previous_selection(previous_selection)
+        response = self.llm.invoke(
+            [
+                SystemMessage(
+                    content=(
+                        "You are grounding human review feedback for a RePORT DB-RAG column selection task. "
+                        "Map concept-level feedback onto exact schema table names and exact table.column strings "
+                        "using only the provided retrieved context and previous selection. "
+                        "Return JSON only with keys: "
+                        '{"goal_text": string, "required_tables": [string], "required_columns": [string], '
+                        '"excluded_tables": [string], "excluded_columns": [string]}.'
+                    )
+                ),
+                HumanMessage(
+                    content=(
+                        f"Question:\n{question}\n\n"
+                        f"Table context:\n{context.table_context or 'none'}\n\n"
+                        f"Column context:\n{context.column_context or 'none'}\n\n"
+                        f"Intent snapshot:\n{json.dumps(intent_snapshot or {}, indent=2, sort_keys=True)}\n\n"
+                        f"Feedback history:\n{json.dumps(normalized_feedback_history, indent=2, sort_keys=True)}\n\n"
+                        f"Previous selection candidate:\n{json.dumps(normalized_previous_selection, indent=2, sort_keys=True)}"
+                    )
+                ),
+            ]
+        )
+        parsed = parse_json_object(coerce_text_content(getattr(response, "content", ""))) or {}
+        return _constraint_set_from_payload(parsed)
 
     def answer_question(self, question: str) -> dict[str, Any]:
         from langchain_core.messages import HumanMessage, SystemMessage
@@ -611,6 +835,15 @@ class DbRagService:
 
         normalized_feedback_history = list(feedback_history or [])
         normalized_previous_selection = _normalize_previous_selection(previous_selection)
+        base_constraints = _constraint_set_from_payload(intent_snapshot)
+        grounded_constraints = self.ground_feedback_constraints(
+            question,
+            context,
+            feedback_history=normalized_feedback_history,
+            previous_selection=previous_selection,
+            intent_snapshot=intent_snapshot,
+        )
+        constraints = _merge_constraint_sets(base_constraints, grounded_constraints)
         valid_tables = set(context.table_names)
         valid_columns = {(entry.table, entry.column) for entry in context.columns}
         explicit_schema_columns = _resolve_explicit_schema_mentions(question, normalized_feedback_history)
@@ -624,16 +857,6 @@ class DbRagService:
             for column in normalized_previous_selection.get("columns", [])
             if _lookup_schema_column(column["table"], column["column"]) is not None
         ]
-        intent_excluded_tables = {
-            str(value or "").strip()
-            for value in list((intent_snapshot or {}).get("excluded_tables") or [])
-            if str(value or "").strip()
-        }
-        intent_excluded_columns = {
-            str(value or "").strip()
-            for value in list((intent_snapshot or {}).get("excluded_columns") or [])
-            if str(value or "").strip()
-        }
         response = self.llm.invoke(
             [
                 SystemMessage(
@@ -655,6 +878,7 @@ class DbRagService:
                         f"Table context:\n{context.table_context or 'none'}\n\n"
                         f"Column context:\n{context.column_context or 'none'}\n\n"
                         f"Intent snapshot:\n{json.dumps(intent_snapshot or {}, indent=2, sort_keys=True)}\n\n"
+                        f"Grounded constraints:\n{json.dumps(constraints.__dict__, indent=2, sort_keys=True)}\n\n"
                         f"Feedback history:\n{json.dumps(normalized_feedback_history, indent=2, sort_keys=True)}\n\n"
                         f"Previous selection candidate:\n{json.dumps(normalized_previous_selection, indent=2, sort_keys=True)}\n\n"
                         f"Explicit schema constraints:\n{json.dumps(explicit_valid_columns, indent=2, sort_keys=True)}"
@@ -671,7 +895,7 @@ class DbRagService:
         if isinstance(raw_tables, list):
             for value in raw_tables:
                 table = str(value or "").strip()
-                if table and table in valid_tables and table not in tables and table not in intent_excluded_tables:
+                if table and table in valid_tables and table not in tables and table not in constraints.excluded_tables:
                     tables.append(table)
 
         raw_columns = parsed.get("columns")
@@ -684,9 +908,9 @@ class DbRagService:
                 column = str(item.get("column", "") or "").strip()
                 if not table or not column:
                     continue
-                if table in intent_excluded_tables:
+                if table in constraints.excluded_tables:
                     continue
-                if f"{table}.{column}" in intent_excluded_columns:
+                if f"{table}.{column}" in constraints.excluded_columns:
                     continue
                 schema_entry = _lookup_schema_column(table, column)
                 if (table, column) not in valid_columns and schema_entry is None:
@@ -699,8 +923,8 @@ class DbRagService:
         constrained_pairs = {
             (column["table"], column["column"]): column
             for column in [*explicit_valid_columns, *constrained_columns]
-            if column["table"] not in intent_excluded_tables
-            and f'{column["table"]}.{column["column"]}' not in intent_excluded_columns
+            if column["table"] not in constraints.excluded_tables
+            and f'{column["table"]}.{column["column"]}' not in constraints.excluded_columns
         }
         current_pairs = {(column["table"], column["column"]) for column in columns}
         for pair, column in constrained_pairs.items():
@@ -712,8 +936,8 @@ class DbRagService:
         columns = [
             column
             for column in columns
-            if column["table"] not in intent_excluded_tables
-            and f'{column["table"]}.{column["column"]}' not in intent_excluded_columns
+            if column["table"] not in constraints.excluded_tables
+            and f'{column["table"]}.{column["column"]}' not in constraints.excluded_columns
         ]
 
         if not tables and columns:
@@ -738,7 +962,7 @@ class DbRagService:
         if not columns:
             return _build_invalid_column_selection_candidate(question, context, normalized_feedback_history)
 
-        return ColumnSelectionCandidate(
+        candidate = ColumnSelectionCandidate(
             selection_id=selection_id,
             question=question,
             tables=tables,
@@ -746,6 +970,7 @@ class DbRagService:
             rationale=rationale,
             feedback_history=normalized_feedback_history,
         )
+        return _enforce_selection_constraints(candidate, context, constraints)
 
     def prepare_sql_candidate(
         self,

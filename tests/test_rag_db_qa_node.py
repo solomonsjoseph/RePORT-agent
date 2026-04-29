@@ -752,6 +752,89 @@ def test_rag_db_extraction_opt_in_unclear_reply_reasks_confirmation() -> None:
     assert "reply with 'yes'" in updated["output"]["qa_response"].lower()
 
 
+def test_rag_db_extraction_opt_in_uses_service_classifier_for_ambiguous_affirmative() -> None:
+    rag = _fresh_rag_module()
+
+    captured: dict[str, object] = {}
+
+    class _Service:
+        def readiness(self):
+            return {"ready": True, "message": ""}
+
+        def classify_pending_reply(self, *, pending_kind, pending_question, user_reply, recent_transcript):
+            captured["pending_kind"] = pending_kind
+            captured["pending_question"] = pending_question
+            captured["user_reply"] = user_reply
+            captured["recent_transcript"] = recent_transcript
+            return {"label": "yes", "confidence": 0.93}
+
+        def retrieve_context_for_intent(self, intent, *, reranker_model=None):
+            return SimpleNamespace(
+                tables=[SimpleNamespace(table="Form 2A - INDEX CASE: Clinical/Demographic Form", text="table summary")],
+                columns=[SimpleNamespace(table="Form 2A - INDEX CASE: Clinical/Demographic Form", column="IS_AGE", text="age summary")],
+                table_names=["Form 2A - INDEX CASE: Clinical/Demographic Form"],
+                column_names=["IS_AGE"],
+            )
+
+        def prepare_column_selection(
+            self,
+            question,
+            context,
+            feedback_history=None,
+            previous_selection=None,
+            intent_snapshot=None,
+        ):
+            return SimpleNamespace(
+                selection_id="sel-classifier",
+                question=question,
+                tables=["Form 2A - INDEX CASE: Clinical/Demographic Form"],
+                columns=[{"table": "Form 2A - INDEX CASE: Clinical/Demographic Form", "column": "IS_AGE", "description": "Age in years"}],
+                rationale="selected required extraction columns",
+                feedback_history=[],
+                status="awaiting_review",
+            )
+
+    state = {
+        "messages": [_HumanMessage("that works")],
+        "output": {},
+        "observations": [],
+        "meta": {"clarification_kind": "rag_db_extraction_opt_in"},
+        "agents": {
+            "rag_db_qa": {
+                "active_intent": {
+                    "intent_id": "intent-opt-in",
+                    "source_question": "query my database",
+                    "goal_text": "subset age, gender, diabetes status, and final outcome among index case",
+                    "mode": "extraction",
+                    "population": "index case",
+                    "requested_fields": ["age", "gender", "diabetes status", "final outcome"],
+                    "filters": [],
+                    "required_tables": [],
+                    "required_columns": [],
+                    "excluded_tables": [],
+                    "excluded_columns": [],
+                    "feedback_history": [],
+                    "status": "active",
+                },
+                "pending_extraction_opt_in": {
+                    "question": "Would you like me to identify the tables and columns suitable for this extraction?",
+                    "intent_id": "intent-opt-in",
+                    "goal_text": "subset age, gender, diabetes status, and final outcome among index case",
+                    "status": "awaiting_reply",
+                },
+            }
+        },
+        "artifacts": {"datasets": {}},
+    }
+
+    updated = rag.rag_db_qa_node(state, llm=object(), provider="openai", service=_Service())
+
+    assert updated["agents"]["rag_db_qa"]["thread_status"] == "awaiting_column_review"
+    assert updated["agents"]["rag_db_qa"]["pending_column_review"]["selection_id"] == "sel-classifier"
+    assert captured["pending_kind"] == "rag_db_extraction_opt_in"
+    assert captured["user_reply"] == "that works"
+
+
 def test_rag_db_extraction_opt_in_substantive_followup_continues_db_rag_qa() -> None:
     rag = _fresh_rag_module()
 
