@@ -194,6 +194,26 @@ def test_resolve_db_rag_reranker_model_returns_none_when_unset(monkeypatch) -> N
     assert config.resolve_db_rag_reranker_model() is None
 
 
+def test_resolve_db_rag_reply_classifier_model_returns_none_when_unset(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    from db_rag import config
+
+    monkeypatch.delenv("DB_RAG_REPLY_CLASSIFIER_MODEL", raising=False)
+
+    assert config.resolve_db_rag_reply_classifier_model() is None
+
+
+def test_resolve_db_rag_reply_classifier_model_returns_stripped_value(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    from db_rag import config
+
+    monkeypatch.setenv("DB_RAG_REPLY_CLASSIFIER_MODEL", " gpt-4o-mini ")
+
+    assert config.resolve_db_rag_reply_classifier_model() == "gpt-4o-mini"
+
+
 def test_resolve_db_rag_reranker_model_validates_supported_values(monkeypatch) -> None:
     _install_langchain_message_stubs(monkeypatch)
 
@@ -217,6 +237,99 @@ def test_resolve_db_rag_models_accept_voyage_values(monkeypatch) -> None:
 
     assert config.resolve_db_rag_embedding_model() == "voyage-4-large"
     assert config.resolve_db_rag_reranker_model() == "rerank-2.5"
+
+
+def test_classify_pending_reply_returns_unknown_when_model_is_unset(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    from db_rag import service
+
+    monkeypatch.setattr(service, "resolve_db_rag_reply_classifier_model", lambda: None)
+
+    db_rag_service = service.DbRagService(llm=object())
+
+    result = db_rag_service.classify_pending_reply(
+        pending_kind="rag_db_extraction_opt_in",
+        pending_question="Would you like me to identify the tables and columns suitable for this extraction?",
+        user_reply="that works",
+        recent_transcript="Human: that works",
+    )
+
+    assert result == {"label": "unknown", "confidence": 0.0}
+
+
+def test_classify_pending_reply_normalizes_valid_json_response(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    from db_rag import service
+
+    class _ChatCompletions:
+        def create(self, **kwargs):
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(content='{"label": "yes", "confidence": 0.91}')
+                    )
+                ]
+            )
+
+    class _OpenAI:
+        def __init__(self, **kwargs) -> None:
+            assert kwargs["api_key"] == "test-key"
+            assert kwargs["base_url"] == "https://api.example.test/v1"
+            self.chat = SimpleNamespace(completions=_ChatCompletions())
+
+    monkeypatch.setattr(service, "resolve_db_rag_reply_classifier_model", lambda: "gpt-4o-mini")
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=_OpenAI))
+    monkeypatch.setenv("DB_RAG_REPLY_CLASSIFIER_API_KEY", "test-key")
+    monkeypatch.setenv("DB_RAG_REPLY_CLASSIFIER_BASE_URL", "https://api.example.test/v1")
+
+    db_rag_service = service.DbRagService(llm=object())
+
+    result = db_rag_service.classify_pending_reply(
+        pending_kind="rag_db_extraction_opt_in",
+        pending_question="Would you like me to identify the tables and columns suitable for this extraction?",
+        user_reply="that works",
+        recent_transcript="Human: that works",
+    )
+
+    assert result == {"label": "yes", "confidence": 0.91}
+
+
+def test_classify_pending_reply_rejects_invalid_label(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    from db_rag import service
+
+    class _ChatCompletions:
+        def create(self, **kwargs):
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(content='{"label": "approve", "confidence": 0.88}')
+                    )
+                ]
+            )
+
+    class _OpenAI:
+        def __init__(self, **kwargs) -> None:
+            self.chat = SimpleNamespace(completions=_ChatCompletions())
+
+    monkeypatch.setattr(service, "resolve_db_rag_reply_classifier_model", lambda: "gpt-4o-mini")
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=_OpenAI))
+    monkeypatch.setenv("DB_RAG_REPLY_CLASSIFIER_API_KEY", "test-key")
+    monkeypatch.setenv("DB_RAG_REPLY_CLASSIFIER_BASE_URL", "https://api.example.test/v1")
+
+    db_rag_service = service.DbRagService(llm=object())
+
+    result = db_rag_service.classify_pending_reply(
+        pending_kind="rag_db_extraction_opt_in",
+        pending_question="Would you like me to identify the tables and columns suitable for this extraction?",
+        user_reply="that works",
+        recent_transcript="Human: that works",
+    )
+
+    assert result == {"label": "unknown", "confidence": 0.0}
 
 
 def test_openrouter_reranker_uses_openrouter_credentials(monkeypatch) -> None:

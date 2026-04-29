@@ -84,6 +84,14 @@ def rag_db_qa_node(
         intent = _serialize_intent(rag_state.get("active_intent") or {})
         goal_text = str(intent.get("goal_text") or pending_extraction_opt_in.get("goal_text") or "").strip()
         opt_in_status = _classify_opt_in_reply(question)
+        if opt_in_status not in {"yes", "no"} and hasattr(service, "classify_pending_reply"):
+            classified = service.classify_pending_reply(
+                pending_kind="rag_db_extraction_opt_in",
+                pending_question=str(pending_extraction_opt_in.get("question") or "").strip(),
+                user_reply=question,
+                recent_transcript=_render_db_rag_recent_turns(state, question),
+            ) or {}
+            opt_in_status = str(classified.get("label") or "").strip().lower() or "unknown"
         if opt_in_status == "yes":
             if not goal_text:
                 updated = _append_ai_response(
