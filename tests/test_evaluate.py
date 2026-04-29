@@ -132,10 +132,10 @@ def test_evaluate_retrieval_computes_summary(tmp_path):
     assert summary["total_questions"] == 2
     assert summary["scored_questions"] == 1
     assert summary["unanswerable"] == 1
-    assert summary["table_recall@k"] == 1.0
+    assert summary["table_recall@4"] == 1.0
     assert summary["table_mrr"] == 1.0
-    assert summary["column_recall@k"] == 0.5
-    assert summary["column_precision@k"] == 0.5
+    assert summary["column_recall@12"] == 0.5
+    assert summary["column_precision@12"] == 0.5
     assert summary["column_mrr"] == 1.0
     assert summary["easy_table_recall"] == 1.0
     assert len(details.index) == 2
@@ -201,8 +201,8 @@ def test_evaluate_retrieval_marks_failed_question_as_na_and_continues(tmp_path):
     assert summary["scored_questions"] == 1
     assert summary["unanswerable"] == 0
     assert summary["errored_questions"] == 1
-    assert summary["table_recall@k"] == 1.0
-    assert summary["column_recall@k"] == 1.0
+    assert summary["table_recall@4"] == 1.0
+    assert summary["column_recall@12"] == 1.0
     assert details.iloc[0]["table_hit"] == "N/A"
     assert details.iloc[0]["table_rank"] == "N/A"
     assert details.iloc[0]["column_recall"] == "N/A"
@@ -263,8 +263,8 @@ def test_main_writes_summary_and_detail_files(monkeypatch, tmp_path, capsys):
     assert summary_path.exists()
 
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
-    assert summary["table_recall@k"] == 1.0
-    assert summary["column_recall@k"] == 1.0
+    assert summary["table_recall@4"] == 1.0
+    assert summary["column_recall@12"] == 1.0
     assert summary["reranker_model"] is None
 
 
@@ -323,42 +323,20 @@ def test_build_runtime_retriever_uses_current_db_rag_runtime(monkeypatch):
             calls["llm_kwargs"] = kwargs
             return "runtime-llm"
 
-    class _PersistentClient:
-        def __init__(self, *, path):
-            calls["client_path"] = path
+    class _Service:
+        def __init__(self, *, llm, indexing_model=None):
+            calls["service_init"] = {"llm": llm, "indexing_model": indexing_model}
 
-        def get_collection(self, name, embedding_function):
-            calls.setdefault("collections", []).append((name, embedding_function))
-            return f"{name}-collection"
-
-    def fake_embedding_function(*, model):
-        calls["embedding_model"] = model
-        return "embedding-function"
-
-    def fake_retrieve_context_records(
-        llm,
-        table_collection,
-        column_collection,
-        question,
-        *,
-        reranker_model="none",
-        debug=False,
-    ):
-        calls["retrieval_args"] = {
-            "llm": llm,
-            "table_collection": table_collection,
-            "column_collection": column_collection,
-            "question": question,
-            "reranker_model": reranker_model,
-            "debug": debug,
-        }
-        return ([{"table": "Form 1A", "text": "table context"}], [])
+        def retrieve_context_records(self, question, *, reranker_model=None, debug=False):
+            calls["retrieval_args"] = {
+                "question": question,
+                "reranker_model": reranker_model,
+                "debug": debug,
+            }
+            return ([{"table": "Form 1A", "text": "table context"}], [])
 
     monkeypatch.setattr(adapter, "_get_quick_test_module", lambda: _QuickTest)
-    monkeypatch.setattr(adapter, "_get_chromadb_module", lambda: type("_Chromadb", (), {"PersistentClient": _PersistentClient}))
-    monkeypatch.setattr(adapter, "_get_openai_embedding_function_class", lambda: fake_embedding_function)
-    monkeypatch.setattr(adapter, "_get_retrieve_context_records", lambda: fake_retrieve_context_records)
-    monkeypatch.setattr(adapter, "chroma_dir_for_model", lambda model: f"/tmp/{model}")
+    monkeypatch.setattr(adapter, "_get_db_rag_service_class", lambda: _Service)
     monkeypatch.setattr(adapter, "load_manifest_for_model", lambda model: {"embedding_model": model})
 
     retriever = adapter.build_runtime_retriever(indexing_model="Qwen/Qwen3-Embedding-4B")
@@ -366,12 +344,8 @@ def test_build_runtime_retriever_uses_current_db_rag_runtime(monkeypatch):
 
     assert table_hits == [{"table": "Form 1A", "text": "table context"}]
     assert column_hits == []
-    assert calls["embedding_model"] == "Qwen/Qwen3-Embedding-4B"
-    assert calls["client_path"] == "/tmp/Qwen/Qwen3-Embedding-4B"
+    assert calls["service_init"] == {"llm": "runtime-llm", "indexing_model": "Qwen/Qwen3-Embedding-4B"}
     assert calls["retrieval_args"] == {
-        "llm": "runtime-llm",
-        "table_collection": "table_summaries-collection",
-        "column_collection": "column_chunks-collection",
         "question": "age",
         "reranker_model": None,
         "debug": True,

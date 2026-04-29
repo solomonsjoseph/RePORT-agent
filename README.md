@@ -1,7 +1,6 @@
 # RePORT-agent
 A multi-agent framework for RePORT India studies.
 
-
 ## Orchestrator-driven workflow
 The LangGraph workflow is orchestrator-driven: a lightweight planning node chooses
 the next specialized agent based on the current state, recent observations, and

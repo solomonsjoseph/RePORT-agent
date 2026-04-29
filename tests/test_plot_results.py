@@ -81,8 +81,10 @@ def test_render_benchmark_figure_writes_png(tmp_path):
                 "total_questions": 4,
                 "scored_questions": 4,
                 "unanswerable": 0,
-                "table_recall@k": 0.75,
+                "table_recall@4": 0.75,
                 "table_mrr": 0.4583,
+                "column_recall@12": 0.75,
+                "column_precision@12": 0.2375,
                 "column_mrr": 0.4583,
                 "embedding_model": "Qwen/Qwen3-Embedding-4B",
                 "reranker_model": "cohere/rerank-v3.5",
@@ -97,6 +99,58 @@ def test_render_benchmark_figure_writes_png(tmp_path):
 
     assert output_path.exists()
     assert output_path.stat().st_size > 0
+
+
+def test_render_benchmark_figure_uses_explicit_metric_keys_and_titles(tmp_path, monkeypatch):
+    from db_rag.benchmark import plot_results
+
+    run_dir = tmp_path / "test-tag"
+    run_dir.mkdir()
+    detail_path = run_dir / "details.csv"
+    summary_path = run_dir / "summary.json"
+    output_path = run_dir / "figure.png"
+
+    detail_path.write_text(
+        "\n".join(
+            [
+                "question,difficulty,expected_tables,predicted_tables,table_hit,table_rank,expected_columns,predicted_columns,matched_columns,column_recall,column_precision,column_mrr,error",
+                "Q1,easy,T1,T1,True,1,C1,C1,C1,1.0,0.5,1.0,",
+                "Q2,medium,T2,T2,True,2,C2,C2,C2,1.0,0.25,0.5,",
+                "Q3,hard,T3,T3,False,,C3,CX,,0.0,0.0,0.0,",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    summary_path.write_text(
+        json.dumps(
+            {
+                "total_questions": 3,
+                "scored_questions": 3,
+                "unanswerable": 0,
+                "table_recall@4": 0.67,
+                "table_mrr": 0.5,
+                "column_recall@12": 0.6667,
+                "column_precision@12": 0.25,
+                "column_mrr": 0.5,
+                "embedding_model": "voyage-4-large",
+                "reranker_model": "voyage/rerank-2.5",
+                "provider": "anthropic",
+                "model": "claude-opus-4-1-20250805",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(plot_results.plt, "close", lambda fig: None)
+
+    plot_results.render_benchmark_figure(detail_path=detail_path, summary_path=summary_path, output_path=output_path)
+
+    figure = plot_results.plt.gcf()
+    header_text = " ".join(text.get_text() for text in figure.texts)
+    axis_titles = [axis.get_title(loc="left") for axis in figure.axes]
+
+    assert "Table Recall@4 = 0.67" in header_text
+    assert axis_titles == ["Column Recall@12", "Column Precision@12", "Column F1@12"]
 
 
 def test_main_supports_run_dir(tmp_path, capsys):
@@ -119,8 +173,10 @@ def test_main_supports_run_dir(tmp_path, capsys):
                 "total_questions": 1,
                 "scored_questions": 1,
                 "unanswerable": 0,
-                "table_recall@k": 1.0,
+                "table_recall@4": 1.0,
                 "table_mrr": 1.0,
+                "column_recall@12": 1.0,
+                "column_precision@12": 1.0,
                 "column_mrr": 1.0,
                 "embedding_model": "Qwen/Qwen3-Embedding-4B",
                 "reranker_model": None,

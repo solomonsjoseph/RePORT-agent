@@ -77,6 +77,7 @@ class DbRagUnanswerableError(ValueError):
 @dataclass
 class DbRagService:
     llm: Any
+    indexing_model: str | None = None
 
     def classify_pending_reply(
         self,
@@ -136,7 +137,7 @@ class DbRagService:
     def _load_collections(self):
         import chromadb
 
-        model = resolve_db_rag_embedding_model()
+        model = self.indexing_model or resolve_db_rag_embedding_model()
         load_manifest_for_model(model)
         client = chromadb.PersistentClient(path=str(chroma_dir_for_model(model)))
         ef = OpenAIEmbeddingFunction(model=model)
@@ -165,14 +166,10 @@ class DbRagService:
         debug: bool = False,
         reranker_model: str | None = None,
     ) -> DbRagContext:
-        table_collection, column_collection = self._load_collections()
-        table_rows, column_rows = retrieve_context_records(
-            self.llm,
-            table_collection,
-            column_collection,
+        table_rows, column_rows = self.retrieve_context_records(
             question,
-            reranker_model=reranker_model,
             debug=debug,
+            reranker_model=reranker_model,
         )
         tables = [DbRagTableHit(**entry) for entry in table_rows]
         columns = [DbRagColumnHit(**entry) for entry in column_rows]
@@ -183,6 +180,27 @@ class DbRagService:
             column_context="\n\n".join(entry.text for entry in columns),
         )
 
+    def retrieve_context_records(
+        self,
+        question: str,
+        *,
+        debug: bool = False,
+        reranker_model: str | None = None,
+        required_tables: list[str] | None = None,
+        excluded_tables: list[str] | None = None,
+    ) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+        table_collection, column_collection = self._load_collections()
+        return retrieve_context_records(
+            self.llm,
+            table_collection,
+            column_collection,
+            question,
+            reranker_model=reranker_model,
+            debug=debug,
+            required_tables=required_tables,
+            excluded_tables=excluded_tables,
+        )
+
     def retrieve_context_for_intent(
         self,
         intent: DbRagIntent,
@@ -190,11 +208,7 @@ class DbRagService:
         reranker_model: str | None = None,
     ) -> DbRagContext:
         constraints = _constraint_set_from_payload(intent)
-        table_collection, column_collection = self._load_collections()
-        table_rows, column_rows = retrieve_context_records(
-            self.llm,
-            table_collection,
-            column_collection,
+        table_rows, column_rows = self.retrieve_context_records(
             intent.goal_text,
             reranker_model=reranker_model,
             required_tables=list(constraints.required_tables),
