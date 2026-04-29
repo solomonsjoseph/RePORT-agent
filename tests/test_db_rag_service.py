@@ -201,7 +201,7 @@ def test_resolve_db_rag_reply_classifier_model_returns_none_when_unset(monkeypat
 
     monkeypatch.delenv("DB_RAG_REPLY_CLASSIFIER_MODEL", raising=False)
 
-    assert config.resolve_db_rag_reply_classifier_model() is None
+    assert config.resolve_db_rag_reply_classifier_model() == "gpt-4o-mini"
 
 
 def test_resolve_db_rag_reply_classifier_model_returns_stripped_value(monkeypatch) -> None:
@@ -294,6 +294,51 @@ def test_classify_pending_reply_normalizes_valid_json_response(monkeypatch) -> N
     )
 
     assert result == {"label": "yes", "confidence": 0.91}
+
+
+def test_classify_pending_reply_uses_default_model_and_openai_api_key_fallback(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    from db_rag import service
+
+    captured: dict[str, object] = {}
+
+    class _ChatCompletions:
+        def create(self, **kwargs):
+            captured["model"] = kwargs["model"]
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(content='{"label": "no", "confidence": 0.75}')
+                    )
+                ]
+            )
+
+    class _OpenAI:
+        def __init__(self, **kwargs) -> None:
+            captured["api_key"] = kwargs["api_key"]
+            captured["base_url"] = kwargs.get("base_url")
+            self.chat = SimpleNamespace(completions=_ChatCompletions())
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=_OpenAI))
+    monkeypatch.delenv("DB_RAG_REPLY_CLASSIFIER_MODEL", raising=False)
+    monkeypatch.delenv("DB_RAG_REPLY_CLASSIFIER_API_KEY", raising=False)
+    monkeypatch.delenv("DB_RAG_REPLY_CLASSIFIER_BASE_URL", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-fallback-key")
+
+    db_rag_service = service.DbRagService(llm=object())
+
+    result = db_rag_service.classify_pending_reply(
+        pending_kind="rag_db_extraction_opt_in",
+        pending_question="Would you like me to identify the tables and columns suitable for this extraction?",
+        user_reply="not yet",
+        recent_transcript="Human: not yet",
+    )
+
+    assert result == {"label": "no", "confidence": 0.75}
+    assert captured["model"] == "gpt-4o-mini"
+    assert captured["api_key"] == "openai-fallback-key"
+    assert captured["base_url"] is None
 
 
 def test_classify_pending_reply_rejects_invalid_label(monkeypatch) -> None:

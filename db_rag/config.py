@@ -81,4 +81,4 @@ def resolve_db_rag_reranker_model() -> str | None:
 def resolve_db_rag_reply_classifier_model() -> str | None:
     load_dotenv()
     model = str(os.getenv("DB_RAG_REPLY_CLASSIFIER_MODEL", "") or "").strip()
-    return model or None
+    return model or "gpt-4o-mini"

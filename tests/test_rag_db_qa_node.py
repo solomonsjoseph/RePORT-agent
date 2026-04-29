@@ -795,7 +795,7 @@ def test_rag_db_extraction_opt_in_uses_service_classifier_for_ambiguous_affirmat
             )
 
     state = {
-        "messages": [_HumanMessage("that works")],
+        "messages": [_HumanMessage("fine by me")],
         "output": {},
         "observations": [],
         "meta": {"clarification_kind": "rag_db_extraction_opt_in"},
@@ -832,7 +832,131 @@ def test_rag_db_extraction_opt_in_uses_service_classifier_for_ambiguous_affirmat
     assert updated["agents"]["rag_db_qa"]["thread_status"] == "awaiting_column_review"
     assert updated["agents"]["rag_db_qa"]["pending_column_review"]["selection_id"] == "sel-classifier"
     assert captured["pending_kind"] == "rag_db_extraction_opt_in"
-    assert captured["user_reply"] == "that works"
+    assert captured["user_reply"] == "fine by me"
+
+
+def test_rag_db_extraction_opt_in_accepts_common_affirmative_without_classifier() -> None:
+    rag = _fresh_rag_module()
+
+    class _Service:
+        def readiness(self):
+            return {"ready": True, "message": ""}
+
+        def classify_pending_reply(self, **kwargs):
+            raise AssertionError("classifier should not run for deterministic affirmative replies")
+
+        def retrieve_context_for_intent(self, intent, *, reranker_model=None):
+            return SimpleNamespace(
+                tables=[SimpleNamespace(table="Form 2A - INDEX CASE: Clinical/Demographic Form", text="table summary")],
+                columns=[SimpleNamespace(table="Form 2A - INDEX CASE: Clinical/Demographic Form", column="IS_AGE", text="age summary")],
+                table_names=["Form 2A - INDEX CASE: Clinical/Demographic Form"],
+                column_names=["IS_AGE"],
+            )
+
+        def prepare_column_selection(
+            self,
+            question,
+            context,
+            feedback_history=None,
+            previous_selection=None,
+            intent_snapshot=None,
+        ):
+            return SimpleNamespace(
+                selection_id="sel-deterministic",
+                question=question,
+                tables=["Form 2A - INDEX CASE: Clinical/Demographic Form"],
+                columns=[{"table": "Form 2A - INDEX CASE: Clinical/Demographic Form", "column": "IS_AGE", "description": "Age in years"}],
+                rationale="selected required extraction columns",
+                feedback_history=[],
+                status="awaiting_review",
+            )
+
+    state = {
+        "messages": [_HumanMessage("that works")],
+        "output": {},
+        "observations": [],
+        "meta": {"clarification_kind": "rag_db_extraction_opt_in"},
+        "agents": {
+            "rag_db_qa": {
+                "active_intent": {
+                    "intent_id": "intent-opt-in",
+                    "source_question": "query my database",
+                    "goal_text": "subset age among index case",
+                    "mode": "extraction",
+                    "population": "index case",
+                    "requested_fields": ["age"],
+                    "filters": [],
+                    "required_tables": [],
+                    "required_columns": [],
+                    "excluded_tables": [],
+                    "excluded_columns": [],
+                    "feedback_history": [],
+                    "status": "active",
+                },
+                "pending_extraction_opt_in": {
+                    "question": "Would you like me to identify the tables and columns suitable for this extraction?",
+                    "intent_id": "intent-opt-in",
+                    "goal_text": "subset age among index case",
+                    "status": "awaiting_reply",
+                },
+            }
+        },
+        "artifacts": {"datasets": {}},
+    }
+
+    updated = rag.rag_db_qa_node(state, llm=object(), provider="openai", service=_Service())
+
+    assert updated["agents"]["rag_db_qa"]["thread_status"] == "awaiting_column_review"
+    assert updated["agents"]["rag_db_qa"]["pending_column_review"]["selection_id"] == "sel-deterministic"
+
+
+def test_rag_db_extraction_opt_in_accepts_common_negative_without_classifier() -> None:
+    rag = _fresh_rag_module()
+
+    class _Service:
+        def readiness(self):
+            return {"ready": True, "message": ""}
+
+        def classify_pending_reply(self, **kwargs):
+            raise AssertionError("classifier should not run for deterministic negative replies")
+
+    state = {
+        "messages": [_HumanMessage("not yet")],
+        "output": {},
+        "observations": [],
+        "meta": {"clarification_kind": "rag_db_extraction_opt_in"},
+        "agents": {
+            "rag_db_qa": {
+                "active_intent": {
+                    "intent_id": "intent-opt-in",
+                    "source_question": "query my database",
+                    "goal_text": "subset age among index case",
+                    "mode": "extraction",
+                    "population": "index case",
+                    "requested_fields": ["age"],
+                    "filters": [],
+                    "required_tables": [],
+                    "required_columns": [],
+                    "excluded_tables": [],
+                    "excluded_columns": [],
+                    "feedback_history": [],
+                    "status": "active",
+                },
+                "pending_extraction_opt_in": {
+                    "question": "Would you like me to identify the tables and columns suitable for this extraction?",
+                    "intent_id": "intent-opt-in",
+                    "goal_text": "subset age among index case",
+                    "status": "awaiting_reply",
+                },
+            }
+        },
+        "artifacts": {"datasets": {}},
+    }
+
+    updated = rag.rag_db_qa_node(state, llm=object(), provider="openai", service=_Service())
+
+    assert updated["agents"]["rag_db_qa"]["thread_status"] == "answered_metadata"
+    assert "won't prepare" in updated["output"]["qa_response"].lower()
 
 
 def test_rag_db_extraction_opt_in_substantive_followup_continues_db_rag_qa() -> None:

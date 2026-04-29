@@ -26,9 +26,13 @@ _AFFIRMATIVE_REPLIES = {
     "sure",
     "ok",
     "okay",
+    "sounds good",
+    "that works",
+    "works for me",
     "please do",
     "do it",
     "go ahead",
+    "let's do it",
 }
 _NEGATIVE_REPLIES = {
     "n",
@@ -36,8 +40,11 @@ _NEGATIVE_REPLIES = {
     "nope",
     "nah",
     "not now",
+    "not yet",
     "don't",
     "do not",
+    "skip it",
+    "no thanks",
 }
 _NON_INFORMATIVE_FOLLOWUPS = {
     "k",

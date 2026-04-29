@@ -22,6 +22,8 @@ def classify_pending_reply(
 
     api_key = str(os.getenv("DB_RAG_REPLY_CLASSIFIER_API_KEY", "") or "").strip()
     if not api_key:
+        api_key = str(os.getenv("OPENAI_API_KEY", "") or "").strip()
+    if not api_key:
         return {"label": "unknown", "confidence": 0.0}
 
     try:
