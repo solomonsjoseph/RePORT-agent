@@ -1,5 +1,5 @@
 # RePORT-agent
-An AI for RePORT India studies (demo).
+An AI Agent for RePORT India studies (demo).
 
 ## Orchestrator-driven workflow
 The LangGraph workflow is orchestrator-driven: a lightweight planning node chooses
@@ -57,9 +57,18 @@ ANTHROPIC_API_KEY="YOUR_ANTHROPIC_API_KEY"
 ```bash
 python -m streamlit run streamlit_app.py
 ```
-
-### Activate system
+ ### Activate system
 In the pop up webpage, enter the API key in the field and click submit. If `.env` was set up previously, choose API provide and click submit directly.
+
+### Clean saved app datasets
+Datasets saved by the app are stored in `runtime/datasets/`. These files are
+inside the repository and are not cleaned by macOS temp cleanup. To remove all
+saved app dataset artifacts:
+
+```bash
+rm -rf runtime/datasets/*
+```
+
 
 ## RAG DB
 

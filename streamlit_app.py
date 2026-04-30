@@ -615,7 +615,7 @@ if state:
 
     if dataset_ids:
         default_index = dataset_ids.index(active_dataset_id) if active_dataset_id in dataset_ids else 0
-        with st.expander("🧪 Saved Datasets", expanded=False):
+        with st.expander("💾 Saved Datasets", expanded=False):
             selected_dataset_id = st.selectbox(
                 "Choose a dataset artifact",
                 options=dataset_ids,
