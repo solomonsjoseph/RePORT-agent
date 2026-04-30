@@ -120,11 +120,16 @@ def derive_planner_memory(state: AgentState) -> dict:
     planner = dict(state.get("planner") or {})
     previous_memory = dict(planner.get("memory") or {})
     previous_goal = str(previous_memory.get("active_user_goal") or "").strip()
-    effective_goal = latest if _is_substantive_user_message(latest) else (previous_goal or latest)
+    meta = dict(state.get("meta") or {})
+    if meta.get(MetaKeys.AWAITING_USER_CLARIFICATION):
+        effective_goal = previous_goal or latest
+    else:
+        effective_goal = latest if _is_substantive_user_message(latest) else (previous_goal or latest)
     summary = str(previous_memory.get("conversation_intent_summary") or effective_goal).strip()
 
     return {
         "active_user_goal": effective_goal,
+        "latest_user_update": latest,
         "conversation_intent_summary": summary,
         "unresolved_user_constraints": list(
             previous_memory.get("unresolved_user_constraints") or []

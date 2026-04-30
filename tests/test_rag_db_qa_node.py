@@ -174,6 +174,10 @@ def test_rag_db_metadata_qa_answers_without_pending_sql_state() -> None:
     assert "pending_sql_candidate" not in updated["agents"]["rag_db_qa"]
     assert "pending_column_review" not in updated["agents"]["rag_db_qa"]
     assert "awaiting_user_clarification" not in updated["meta"]
+    events = updated["artifacts"]["conversation_events"]
+    assert events[-1]["type"] == "assistant"
+    assert events[-1]["actor"] == "rag_db_qa"
+    assert "cohort membership and sex" in events[-1]["text"]
 
 
 def test_rag_db_qa_passes_reranker_model_to_retrieval() -> None:
@@ -347,6 +351,12 @@ def test_rag_db_qa_replays_pending_sql_candidate_without_execution() -> None:
     assert updated["agents"]["rag_db_qa"]["pending_sql_candidate"]["selection_id"] == "sel-decline"
     assert updated["agents"]["rag_db_qa"]["pending_column_review"]["status"] == "approved"
     assert updated["agents"]["rag_db_qa"]["last_database_question"] == "How many male participants are in cohort A?"
+    events = updated["artifacts"]["conversation_events"]
+    assert [event["type"] for event in events[-3:]] == ["assistant", "sql", "review_request"]
+    assert events[-1]["review_kind"] == "rag_db_sql_execution"
+    sql_artifact_id = events[-2]["artifact_id"]
+    assert updated["artifacts"]["files"][sql_artifact_id]["kind"] == "sql"
+    assert updated["artifacts"]["files"][sql_artifact_id]["content"] == 'SELECT "AGE", "SEX" FROM "Form 1A"'
 
 
 def test_rag_db_qa_combines_stale_qa_followup_context_when_taking_over() -> None:

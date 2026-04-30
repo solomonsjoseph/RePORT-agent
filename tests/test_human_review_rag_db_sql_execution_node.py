@@ -123,6 +123,11 @@ def test_human_review_rag_db_sql_execution_approve_executes_prepared_sql(tmp_pat
     assert "pending_sql_candidate" not in updated["agents"]["rag_db_qa"]
     assert "pending_column_review" not in updated["agents"]["rag_db_qa"]
     assert updated["agents"]["rag_db_qa"]["status"] == "done"
+    assert updated["agents"]["rag_db_qa"]["active_thread"] is False
+    assert updated["agents"]["rag_db_qa"]["thread_status"] == "completed"
+    events = updated["artifacts"]["conversation_events"]
+    assert events[0]["type"] == "review_decision"
+    assert events[0]["decision"] == "approve"
 
 
 def test_human_review_rag_db_sql_execution_regenerate_requests_revision() -> None:
@@ -169,6 +174,8 @@ def test_human_review_rag_db_sql_execution_regenerate_requests_revision() -> Non
     assert history[-1]["action"] == "regenerate"
     assert "Human requested SQL regeneration." in history[-1]["feedback"]
     assert "Use the cohort A final outcome table instead." in history[-1]["feedback"]
+    assert updated["artifacts"]["conversation_events"][-1]["type"] == "review_decision"
+    assert updated["artifacts"]["conversation_events"][-1]["decision"] == "regenerate"
 
 
 def test_human_review_rag_db_sql_execution_regenerate_preserves_feedback_history_for_intent_update() -> None:
@@ -214,7 +221,7 @@ def test_human_review_rag_db_sql_execution_regenerate_preserves_feedback_history
     assert updated["agents"]["rag_db_qa"]["pending_column_review"]["goal_text"] == "subset age and outcome among index cases"
 
 
-def test_human_review_rag_db_sql_execution_approve_clears_pending_state_on_execution_error() -> None:
+def test_human_review_rag_db_sql_execution_approve_keeps_recovery_state_on_execution_error() -> None:
     mod, _, captured = _fresh_module(action="approve")
 
     class BinderException(Exception):
@@ -282,11 +289,12 @@ def test_human_review_rag_db_sql_execution_approve_clears_pending_state_on_execu
         "type": "BinderException",
         "message": 'Referenced column "SEX" not found in FROM clause',
     }
-    assert "workflow stopped" in updated["output"]["qa_response"]
+    assert "workflow stopped" not in updated["output"]["qa_response"]
+    assert "failed" in updated["output"]["qa_response"]
     assert "pending_sql_candidate" not in updated["agents"]["rag_db_qa"]
-    assert "pending_column_review" not in updated["agents"]["rag_db_qa"]
+    assert updated["agents"]["rag_db_qa"]["pending_column_review"]["status"] == "needs_revision"
     assert updated["agents"]["rag_db_qa"]["status"] == "error"
-    assert updated["agents"]["rag_db_qa"]["active_thread"] is False
+    assert updated["agents"]["rag_db_qa"]["active_thread"] is True
 
 
 def test_human_review_rag_db_sql_execution_approve_autocorrects_and_retries_until_success() -> None:

@@ -46,6 +46,7 @@ def clear_clarification_meta(meta: dict[str, Any] | None) -> dict[str, Any]:
     updated.pop(MetaKeys.PENDING_QUESTION, None)
     updated.pop(MetaKeys.CLARIFICATION_RETURN_NODE, None)
     updated.pop(MetaKeys.CLARIFICATION_KIND, None)
+    updated.pop(MetaKeys.SEMANTIC_LAST_ACTION, None)
     return updated
 
 

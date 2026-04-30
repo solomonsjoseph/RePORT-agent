@@ -43,6 +43,8 @@ def test_terminal_execution_error_node_emits_detailed_policy_message() -> None:
     assert "sandbox stopped this request" in updated["messages"][-1].content.lower()
     assert "subprocess" in updated["messages"][-1].content
     assert updated["output"]["qa_response"] == updated["messages"][-1].content
+    assert updated["artifacts"]["conversation_events"][-2]["type"] == "assistant"
+    assert updated["artifacts"]["conversation_events"][-1]["type"] == "error"
     assert updated["agents"]["terminal_execution_error"]["status"] == "done"
 
 

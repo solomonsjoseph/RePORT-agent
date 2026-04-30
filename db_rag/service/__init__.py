@@ -685,7 +685,14 @@ class DbRagService:
             raise DbRagUnanswerableError(sql)
         valid, error = validate_sql(sql)
         if not valid:
-            raise ValueError(error or "SQL validation failed.")
+            repair_seed = PreparedSqlCandidate(
+                question=question,
+                sql=sql,
+                tables=approved_tables,
+                columns=approved_columns,
+                selection_id=approved_selection.selection_id,
+            )
+            return self.repair_prepared_sql_candidate(repair_seed, error or "SQL validation failed.")
         return PreparedSqlCandidate(
             question=question,
             sql=sql,

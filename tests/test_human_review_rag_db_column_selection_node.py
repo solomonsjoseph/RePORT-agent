@@ -70,6 +70,10 @@ def test_human_review_rag_db_column_selection_approve_marks_selection_approved()
     assert captured["payload"]["selection_id"] == "sel-1"
     assert updated["agents"]["rag_db_qa"]["pending_column_review"]["status"] == "approved"
     assert updated["agents"]["rag_db_qa"]["pending_column_review"]["selection_id"] == "sel-1"
+    events = updated["artifacts"]["conversation_events"]
+    assert events[-1]["type"] == "review_decision"
+    assert events[-1]["review_kind"] == "rag_db_column_selection"
+    assert events[-1]["decision"] == "approve"
 
 
 def test_human_review_rag_db_column_selection_regeneration_appends_feedback() -> None:
@@ -99,6 +103,7 @@ def test_human_review_rag_db_column_selection_regeneration_appends_feedback() ->
     assert "Human requested regeneration." in review["feedback_history"][-1]["feedback"]
     assert "Include the age column too." in review["feedback_history"][-1]["feedback"]
     assert "timestamp" in review["feedback_history"][-1]
+    assert updated["artifacts"]["conversation_events"][-1]["decision"] == "regenerate"
 
 
 def test_human_review_rag_db_column_selection_unknown_action_keeps_explanation_with_feedback() -> None:

@@ -1,10 +1,15 @@
+from __future__ import annotations
+
 import io
 import json
-import re
 import zipfile
 from datetime import datetime, timezone
+from pathlib import Path
 
 from langchain_core.messages import AIMessage, HumanMessage
+
+from graph.state_views import get_artifact_files, get_conversation_events
+from utils.display_history import build_display_history
 
 
 def _json_safe(value):
@@ -21,6 +26,11 @@ def _json_safe(value):
 
 
 def _message_role(message):
+    message_type = getattr(message, "type", None)
+    if message_type == "human":
+        return "human"
+    if message_type == "ai":
+        return "ai"
     if isinstance(message, HumanMessage):
         return "human"
     if isinstance(message, AIMessage):
@@ -44,127 +54,83 @@ def serialize_messages(messages):
     return serialized
 
 
-_FENCED_BLOCK_RE = re.compile(r"```(?P<lang>[^\n`]*)\n(?P<body>.*?)\n```", re.DOTALL)
-_CODE_LABEL_HINTS = ("generated code", "code", "python")
-_OUTPUT_LABEL_HINTS = ("output", "result", "stdout")
+def _artifact_extension(kind: str, mime: str | None) -> str:
+    if kind == "figure" or mime == "image/png":
+        return ".png"
+    if kind == "code":
+        return ".py"
+    if kind == "text":
+        return ".txt"
+    if kind == "sql":
+        return ".sql"
+    return ".json"
 
 
-def _artifact_entry(
-    message_index: int,
-    artifact_type: str,
-    filename: str,
-    content_source: str,
-    label: str,
-):
-    return {
-        "message_index": message_index,
-        "artifact_type": artifact_type,
-        "filename": filename,
-        "role": "ai",
-        "content_source": content_source,
-        "label": label,
-    }
+def _artifact_bytes(record: dict) -> bytes:
+    content = record.get("content")
+    kind = str(record.get("kind") or "")
+    mime = record.get("mime")
+    if kind == "figure" or mime == "image/png":
+        path_value = dict(content or {}).get("path") if isinstance(content, dict) else None
+        if isinstance(path_value, str) and path_value:
+            return Path(path_value).read_bytes()
+        raise ValueError("figure artifact is missing a readable path")
+    if isinstance(content, str):
+        return content.encode("utf-8")
+    return json.dumps(content, indent=2, ensure_ascii=False).encode("utf-8")
 
 
-def _nearest_label_before(content: str, start: int) -> str:
-    context = content[:start]
-    lines = [line.strip().lower() for line in context.splitlines() if line.strip()]
-    return lines[-1] if lines else ""
+def _artifact_manifest_and_files(state: dict) -> tuple[list[dict], list[tuple[str, bytes]]]:
+    artifact_files = get_artifact_files(state)
+    manifest: list[dict] = []
+    archive_files: list[tuple[str, bytes]] = []
+    for artifact_id, record in artifact_files.items():
+        kind = str(record.get("kind") or "artifact")
+        mime = record.get("mime")
+        extension = _artifact_extension(kind, mime if isinstance(mime, str) or mime is None else None)
+        filename = f"artifacts/{artifact_id}{extension}"
+        manifest.append(
+            {
+                "artifact_id": artifact_id,
+                "kind": kind,
+                "producer": record.get("producer"),
+                "mime": mime,
+                "summary": record.get("summary"),
+                "created_at": record.get("created_at"),
+                "filename": filename,
+                "content_source": "artifacts.files",
+            }
+        )
+        archive_files.append((filename, _artifact_bytes(record)))
+    return manifest, archive_files
 
 
-def _extract_text_artifacts(message_index: int, content: str):
-    artifacts = []
-    text = str(content or "")
-
-    for match in _FENCED_BLOCK_RE.finditer(text):
-        body = match.group("body")
-        language = str(match.group("lang") or "").strip().lower()
-        label = _nearest_label_before(text, match.start())
-
-        if (
-            language == "python"
-            or any(hint in label for hint in _CODE_LABEL_HINTS)
-        ):
-            artifacts.append(
-                (
-                    _artifact_entry(
-                        message_index=message_index,
-                        artifact_type="generated_code",
-                        filename=f"artifacts/message_{message_index:03d}_generated_code.py",
-                        content_source="assistant_message.content",
-                        label="Generated code",
-                    ),
-                    body.rstrip() + "\n",
-                )
-            )
-            continue
-
-        if any(hint in label for hint in _OUTPUT_LABEL_HINTS):
-            artifacts.append(
-                (
-                    _artifact_entry(
-                        message_index=message_index,
-                        artifact_type="output_text",
-                        filename=f"artifacts/message_{message_index:03d}_output.txt",
-                        content_source="assistant_message.content",
-                        label="Output",
-                    ),
-                    body.rstrip() + "\n",
-                )
-            )
-
-    return artifacts
-
-
-def _extract_message_artifacts(messages):
-    manifest = []
-    files = []
-
-    for message_index, message in enumerate(messages, start=1):
-        if _message_role(message) != "ai":
-            continue
-
-        content = getattr(message, "content", "") or ""
-        additional_kwargs = dict(getattr(message, "additional_kwargs", {}) or {})
-
-        for artifact_entry, artifact_text in _extract_text_artifacts(message_index, content):
-            manifest.append(artifact_entry)
-            files.append((artifact_entry["filename"], artifact_text.encode("utf-8")))
-
-        figure_png = additional_kwargs.get("figure_png")
-        if isinstance(figure_png, bytes) and figure_png:
-            artifact_entry = _artifact_entry(
-                message_index=message_index,
-                artifact_type="figure",
-                filename=f"artifacts/message_{message_index:03d}_figure.png",
-                content_source="assistant_message.additional_kwargs.figure_png",
-                label="Figure",
-            )
-            manifest.append(artifact_entry)
-            files.append((artifact_entry["filename"], figure_png))
-
-    return manifest, files
-
-
-def build_thread_export(thread_id, provider, model_name, messages, output):
-    serialized_messages = serialize_messages(messages)
-    artifacts_manifest, artifact_files = _extract_message_artifacts(messages)
+def build_thread_export(thread_id, provider, model_name, state):
+    state = dict(state or {})
+    display_messages = build_display_history(state)
+    runtime_messages = serialize_messages(list(state.get("messages", [])))
+    display_conversation = serialize_messages(display_messages)
+    conversation_events = get_conversation_events(state)
+    artifacts_manifest, artifact_files = _artifact_manifest_and_files(state)
+    output = dict(state.get("output") or {})
     export_payload = {
         "thread_id": thread_id,
         "provider": provider,
         "model_name": model_name,
         "exported_at": datetime.now(timezone.utc).isoformat(),
-        "conversation": serialized_messages,
+        "conversation": display_conversation,
+        "conversation_events": conversation_events,
+        "runtime_messages": runtime_messages,
         "artifacts": artifacts_manifest,
         "output": {
             "text": output.get("text", ""),
             "generated_code": output.get("generated_code", ""),
-            "has_figure_png": bool(output.get("figure_png")),
+            "has_figure_png": bool(output.get("figure_artifact_id")),
         },
     }
 
     transcript_lines = []
-    for entry in serialized_messages:
+    for entry in display_conversation:
         role = entry["role"].upper()
         transcript_lines.append(f"## {role}\n\n{entry['content']}\n")
 

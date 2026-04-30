@@ -6,6 +6,7 @@ import hashlib
 import io
 import tempfile
 import requests
+from pathlib import Path
 # from pathlib import Path
 import uuid
 import time
@@ -58,12 +59,16 @@ from utils.streamlit_config import (
 from utils.run_manager import GraphRunManager
 from utils.export_thread import build_thread_export
 from utils.message_window import compact_messages
+from utils.display_history import build_display_history, serialize_display_history
+from graph.conversation_events import ensure_conversation_state
+from graph.state_views import get_conversation_events
 from utils.streamlit_interrupts import (
     blocking_review_notice,
     should_block_chat_submission,
     should_render_review_interrupt,
 )
-from utils.dataset_artifacts import persist_dataset_artifact, load_dataset_artifact
+from utils.dataset_artifacts import build_dataset_artifacts_patch, persist_dataset_artifact, load_dataset_artifact
+from utils.message_attachments import build_user_message_attachments
 
 WELCOME_MESSAGE = "Hello! Ask me anything ..."
 # --------------------------
@@ -371,7 +376,7 @@ def initial_graph_state(user_message: HumanMessage, uploaded_artifact: dict | No
 
     Later turns should send only message deltas so checkpointed graph state is preserved.
     """
-    return {
+    return ensure_conversation_state({
         "messages": [user_message],
         "output": {},
         "artifacts": {
@@ -398,19 +403,29 @@ def initial_graph_state(user_message: HumanMessage, uploaded_artifact: dict | No
             "workflow_trace": [],
             "thread_id": st.session_state.thread_id,
         },
-    }
+    })
 
 
-def next_turn_payload(user_message: HumanMessage) -> dict:
+def next_turn_payload(
+    user_message: HumanMessage,
+    uploaded_artifact: dict | None = None,
+    checkpoint_state: dict | None = None,
+) -> dict:
     """Send only the new user message so checkpointed graph state is preserved.
 
     The orchestrator itself is responsible for resetting transient turn state on
     genuine new turns. Passing a full replacement payload here destroys
     clarification context such as pending_question and clarification_return_node.
     """
-    return {
+    payload = {
         "messages": [user_message],
     }
+    if uploaded_artifact:
+        payload["artifacts"] = build_dataset_artifacts_patch(
+            (checkpoint_state or {}).get("artifacts"),
+            uploaded_artifact,
+        )
+    return payload
 
 snapshot = app.get_state(config)
 has_graph_state = bool(snapshot and snapshot.values)
@@ -465,8 +480,8 @@ if pending_resume:
 #         }
 #     )
 
-if state and state.get("messages"):
-    st.session_state.chat_history = compact_messages(state["messages"])
+if state:
+    st.session_state.chat_history = build_display_history(state)
 
 latest_chat_is_human = bool(st.session_state.chat_history) and isinstance(
     st.session_state.chat_history[-1], HumanMessage
@@ -476,8 +491,7 @@ export_bytes = build_thread_export(
     thread_id=st.session_state.thread_id,
     provider=provider,
     model_name=model_name,
-    messages=st.session_state.chat_history,
-    output=output,
+    state={**state, "output": output} if state else {"output": output, "messages": st.session_state.chat_history},
 )
 executor_ok = state.get("agents", {}).get("executor", {}).get("run_status") == "ok" if state else False
 meta = state.get("meta", {}) if state else {}
@@ -507,12 +521,12 @@ for msg in display_history:
         st.markdown(msg.content)
 
         if isinstance(msg, AIMessage):
-            fig = (msg.additional_kwargs or {}).get("figure_png")
-            if fig:
-                st.image(fig)
+            fig_path = (msg.additional_kwargs or {}).get("figure_path")
+            if fig_path:
+                st.image(fig_path)
                 st.download_button(
                     label="⬇️ Download plot (PNG)",
-                    data=fig,
+                    data=Path(fig_path).read_bytes(),
                     file_name="plot.png",
                     mime="image/png",
                     key=f"dl_{id(msg)}",
@@ -529,6 +543,11 @@ if not interrupt_event and dismissed_interrupt_id:
 
 if show_debug_state:
     st.write("current state values from langraph are:", state)
+    if state:
+        with st.expander("Rendered conversation history", expanded=False):
+            st.write(serialize_display_history(build_display_history(state)))
+        with st.expander("Semantic conversation events", expanded=False):
+            st.write(get_conversation_events(state))
     st.write("Next nodes:", snapshot.next)
     st.write("interrupts:", snapshot.interrupts)
     if interrupt_event:
@@ -664,22 +683,25 @@ with st.container():
         )
 
 if submitted_question and user_text and not chat_submission_blocked:
-    user_message = HumanMessage(content=user_text)
+    uploaded_artifact = None
+    if uploaded_csv and uploaded_schema:
+        uploaded_artifact = persist_dataset_artifact(
+            runtime_root=None,
+            thread_id=st.session_state.thread_id,
+            dataset_id=f"uploaded-{dataset_signature[:8]}",
+            kind="uploaded",
+            dataframe=df,
+            schema=schema,
+            provenance={"source": "upload", "dataset_signature": dataset_signature},
+        )
+    user_message = HumanMessage(
+        content=user_text,
+        additional_kwargs={"attachments": build_user_message_attachments(uploaded_artifact)},
+    )
 
     if has_graph_state:
-        initial_payload = next_turn_payload(user_message)
+        initial_payload = next_turn_payload(user_message, uploaded_artifact, snapshot.values)
     else:
-        uploaded_artifact = None
-        if uploaded_csv and uploaded_schema:
-            uploaded_artifact = persist_dataset_artifact(
-                runtime_root=None,
-                thread_id=st.session_state.thread_id,
-                dataset_id=f"uploaded-{dataset_signature[:8]}",
-                kind="uploaded",
-                dataframe=df,
-                schema=schema,
-                provenance={"source": "upload", "dataset_signature": dataset_signature},
-            )
         initial_payload = initial_graph_state(user_message, uploaded_artifact)
 
     submitted = run_manager.submit(

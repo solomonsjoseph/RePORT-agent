@@ -9,6 +9,7 @@ from ...workflow_config import (
     RECENT_OBSERVATIONS_LIMIT,
     WORKFLOW_TRACE_TAIL,
 )
+from .policy import _latest_attachment_summary
 from ..action_metadata import ACTION_CAPABILITIES
 from .state_logic import _latest_user_message, build_planner_recent_turns
 
@@ -70,5 +71,6 @@ def build_planner_context(state: dict, available_actions: list[str]) -> dict:
         ],
         "planner_memory": planner_memory,
         "recent_turns_for_planner": recent_turns_for_planner,
+        "latest_turn_attachments": _latest_attachment_summary(state),
         "artifacts": artifacts,
     }

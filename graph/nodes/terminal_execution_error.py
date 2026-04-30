@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from langchain_core.messages import AIMessage
 
+from ..conversation_events import append_conversation_event, build_assistant_event, build_error_event
+from ..state import MetaKeys
 from .state_helpers import update_agent_state
 
 NODE_NAME = "terminal_execution_error"
@@ -52,6 +54,25 @@ def terminal_execution_error_node(state):
         "messages": messages,
         "output": output,
     }
+    updated_state = append_conversation_event(
+        updated_state,
+        build_assistant_event(
+            actor="terminal_execution_error",
+            user_turn_hash=str((state.get("meta") or {}).get(MetaKeys.LAST_USER_MESSAGE_HASH) or "").strip() or None,
+            text=response_text,
+            status="done",
+        ),
+    )
+    updated_state = append_conversation_event(
+        updated_state,
+        build_error_event(
+            actor="terminal_execution_error",
+            user_turn_hash=str((state.get("meta") or {}).get(MetaKeys.LAST_USER_MESSAGE_HASH) or "").strip() or None,
+            text=response_text,
+            error=error,
+            status="error",
+        ),
+    )
     return update_agent_state(
         updated_state,
         "terminal_execution_error",

@@ -25,6 +25,11 @@ def _error_signature(error: dict) -> str:
 def derive_workflow_status(state: dict) -> dict:
     artifacts = get_artifacts(state)
     meta = dict(state.get("meta") or {})
+    effective_last_action = (
+        meta.get(MetaKeys.SEMANTIC_LAST_ACTION)
+        if state.get("last_action") == "clarification"
+        else state.get("last_action")
+    )
     executor = get_node_data(state, "executor")
     review = get_node_data(state, "human_review")
     error = dict(artifacts.get("error") or {})
@@ -81,17 +86,29 @@ def derive_workflow_status(state: dict) -> dict:
             "blocker_signature": f"waiting_for_rag_db_sql_review:{selection_id}",
         }
 
-    if error.get("category") == "db_rag_sql" and state.get("last_action") in {
+    if error.get("category") == "db_rag_sql" and effective_last_action in {
         "rag_db_qa",
         "human_review_rag_db_sql_execution",
     }:
         return {
             "milestone": "db_rag_sql_error",
-            "completion_status": "complete",
+            "completion_status": "blocked_waiting",
             "blocker_signature": f"db_rag_sql_error:{error.get('type')}:{_error_signature(error)}",
         }
 
-    if state.get("last_action") == "terminal_execution_error" and terminal_error_category in TERMINAL_EXECUTION_ERROR_CATEGORIES:
+    if (
+        output.get("qa_response")
+        and rag_db_qa.get("thread_status") == "completed"
+        and effective_last_action == "human_review_rag_db_sql_execution"
+        and not _has_unanswered_human_message(state)
+    ):
+        return {
+            "milestone": "db_rag_sql_completed",
+            "completion_status": "complete",
+            "blocker_signature": None,
+        }
+
+    if effective_last_action == "terminal_execution_error" and terminal_error_category in TERMINAL_EXECUTION_ERROR_CATEGORIES:
         return {
             "milestone": "terminal_error",
             "completion_status": "complete",
@@ -159,7 +176,7 @@ def derive_workflow_status(state: dict) -> dict:
     if (
         output.get("qa_response")
         and not has_code
-        and state.get("last_action") in {"qa", "rag_db_qa"}
+        and effective_last_action in {"qa", "rag_db_qa"}
         and not _has_unanswered_human_message(state)
     ):
         return {

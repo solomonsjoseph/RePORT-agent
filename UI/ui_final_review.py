@@ -21,9 +21,9 @@ def ui_final_review(app, config, payload, interrupt_id, queue_resume):
     if payload["output"]:
         st.text("Output:")
         st.code(payload["output"], language="text")
-    if payload['figure_png']:
+    if payload.get("figure_path"):
         st.text("Generated Figure:")
-        st.image(payload['figure_png'])
+        st.image(payload["figure_path"])
 
     confirm_key = f"confirm_approve_{ui_type}"
     suggestion_key = f"suggestion_{ui_type}_{interrupt_id}"

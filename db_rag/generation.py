@@ -74,25 +74,76 @@ def build_sql_policy_text() -> str:
     )
 
 
+def _mask_sql_literals_identifiers_and_comments(sql: str) -> str:
+    masked: list[str] = []
+    quote_char: str | None = None
+    i = 0
+    while i < len(sql):
+        char = sql[i]
+        if quote_char:
+            masked.append(" ")
+            if char == quote_char:
+                if i + 1 < len(sql) and sql[i + 1] == quote_char:
+                    masked.append(" ")
+                    i += 2
+                    continue
+                quote_char = None
+            i += 1
+            continue
+        if char == "-" and i + 1 < len(sql) and sql[i + 1] == "-":
+            masked.extend("  ")
+            i += 2
+            while i < len(sql) and sql[i] not in "\r\n":
+                masked.append(" ")
+                i += 1
+            continue
+        if char == "/" and i + 1 < len(sql) and sql[i + 1] == "*":
+            masked.extend("  ")
+            i += 2
+            while i < len(sql):
+                if sql[i] == "*" and i + 1 < len(sql) and sql[i + 1] == "/":
+                    masked.extend("  ")
+                    i += 2
+                    break
+                masked.append(" ")
+                i += 1
+            continue
+        if char in {"'", '"'}:
+            quote_char = char
+            masked.append(" ")
+            i += 1
+            continue
+        masked.append(char)
+        i += 1
+    return "".join(masked)
+
+
 def check_sql_quality(sql: str) -> list[str]:
     warnings: list[str] = []
-    sql_upper = str(sql or "").upper()
-    if "ORDER BY" in sql_upper and "NULLS LAST" not in sql_upper and "NULLS FIRST" not in sql_upper:
+    policy_sql_upper = _mask_sql_literals_identifiers_and_comments(str(sql or "")).upper()
+    if re.search(r"\bORDER\s+BY\b", policy_sql_upper) and not re.search(r"\bNULLS\s+(?:LAST|FIRST)\b", policy_sql_upper):
         warnings.append("ORDER BY without NULLS LAST or NULLS FIRST is not allowed.")
-    if "/" in sql and "NULLIF" not in sql_upper:
+    if "/" in policy_sql_upper and not re.search(r"\bNULLIF\s*\(", policy_sql_upper):
         warnings.append("Division without NULLIF is not allowed.")
-    if "COUNT(*)" in sql_upper and "WHERE" not in sql_upper and "GROUP BY" not in sql_upper:
+    if (
+        re.search(r"\bCOUNT\s*\(\s*\*\s*\)", policy_sql_upper)
+        and not re.search(r"\bWHERE\b", policy_sql_upper)
+        and not re.search(r"\bGROUP\s+BY\b", policy_sql_upper)
+    ):
         warnings.append("COUNT(*) without WHERE or GROUP BY is not allowed.")
     return warnings
 
 
 def validate_sql(sql: str) -> tuple[bool, str | None]:
-    sql_upper = str(sql or "").strip().upper()
+    policy_sql = _mask_sql_literals_identifiers_and_comments(str(sql or ""))
+    sql_upper = policy_sql.strip().upper()
     if is_unanswerable_response(sql):
         return True, None
     if not sql_upper.startswith(("SELECT", "WITH")):
         return False, "Only read-only SELECT/WITH SQL is allowed."
-    if any(keyword in sql_upper for keyword in _DANGEROUS_SQL):
+    if re.search(r";\s*\S", sql_upper):
+        return False, "SQL contains multiple statements, which is not allowed."
+    if any(re.search(rf"\b{re.escape(keyword)}\b", sql_upper) for keyword in _DANGEROUS_SQL):
         return False, "SQL contains disallowed mutating or DDL keywords."
 
     try:

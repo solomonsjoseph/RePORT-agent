@@ -1836,6 +1836,71 @@ def test_validate_sql_rejects_division_without_nullif() -> None:
     assert "NULLIF" in str(error)
 
 
+def test_validate_sql_allows_slash_inside_quoted_table_name() -> None:
+    from db_rag.generation import validate_sql
+
+    valid, error = validate_sql(
+        'SELECT "SUBJID_PSEUDO", "IC_DMDX" FROM "Form 2A - INDEX CASE: Clinical/Demographic Form"'
+    )
+
+    assert valid is True
+    assert error is None
+
+
+def test_validate_sql_allows_safety_keywords_inside_identifiers_literals_and_comments() -> None:
+    from db_rag.generation import validate_sql
+
+    valid, error = validate_sql(
+        """
+        -- DROP TABLE should be ignored in comments
+        SELECT "CREATE_FLAG", 'DELETE is not a statement' AS "note"
+        FROM "Form 1A - Replacement Tracking"
+        """
+    )
+
+    assert valid is True
+    assert error is None
+
+
+def test_validate_sql_rejects_real_mutating_statement() -> None:
+    from db_rag.generation import validate_sql
+
+    valid, error = validate_sql('SELECT "AGE" FROM "Form 1A"; DROP TABLE "Form 1A"')
+
+    assert valid is False
+    assert "multiple statements" in str(error).lower()
+
+
+def test_validate_sql_ignores_order_by_inside_literal_and_comment() -> None:
+    from db_rag.generation import validate_sql
+
+    valid, error = validate_sql(
+        """
+        SELECT 'ORDER BY appears in text' AS "note", "AGE"
+        FROM "Form 1A"
+        -- ORDER BY "AGE"
+        """
+    )
+
+    assert valid is True
+    assert error is None
+
+
+def test_validate_sql_ignores_count_star_inside_literal_and_comment() -> None:
+    from db_rag.generation import validate_sql
+
+    valid, error = validate_sql(
+        """
+        SELECT 'COUNT(*)' AS "note", "AGE"
+        FROM "Form 1A"
+        -- COUNT(*)
+        """
+    )
+
+    assert valid is True
+    assert error is None
+
+
 def test_validate_sql_rejects_count_star_without_where_or_group_by() -> None:
     from db_rag.generation import validate_sql
 
@@ -1868,6 +1933,39 @@ def test_prepare_sql_candidate_rejects_unapproved_selection(monkeypatch) -> None
 
     with pytest.raises(ValueError, match="approved"):
         db_rag_service.prepare_sql_candidate("subset age and sex", selection)
+
+
+def test_prepare_sql_candidate_repairs_validation_failure(monkeypatch) -> None:
+    _install_langchain_message_stubs(monkeypatch)
+
+    from db_rag import service
+
+    responses = [
+        'SELECT "A" / "B" FROM "Form 1A"',
+        'SELECT "A" / NULLIF("B", 0) FROM "Form 1A"',
+    ]
+
+    class _LLM:
+        def invoke(self, messages):
+            return SimpleNamespace(content=responses.pop(0))
+
+    selection = service.ColumnSelectionCandidate(
+        selection_id="sel-approved",
+        question="calculate ratio",
+        tables=["Form 1A"],
+        columns=[
+            {"table": "Form 1A", "column": "A", "description": "Numerator"},
+            {"table": "Form 1A", "column": "B", "description": "Denominator"},
+        ],
+        rationale="approved selection",
+        status="approved",
+    )
+    db_rag_service = service.DbRagService(llm=_LLM())
+
+    candidate = db_rag_service.prepare_sql_candidate("calculate ratio", selection)
+
+    assert candidate.sql == 'SELECT "A" / NULLIF("B", 0) FROM "Form 1A"'
+    assert responses == []
 
 
 def test_execute_sql_flow_debug_returns_sql_preparation_details(monkeypatch) -> None:

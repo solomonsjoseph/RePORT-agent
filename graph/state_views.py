@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from copy import deepcopy
 
+from .conversation_events import ensure_conversation_state
+from .conversation_schema import JsonObject
+
 
 def _merge_dicts(base: dict | None, patch: dict | None) -> dict:
     merged = dict(base or {})
@@ -15,13 +18,26 @@ def _merge_dicts(base: dict | None, patch: dict | None) -> dict:
 
 
 def get_artifacts(state: dict) -> dict:
-    artifacts = dict(state.get("artifacts") or {})
+    validated_state = ensure_conversation_state(state)
+    artifacts = dict(validated_state.get("artifacts") or {})
     output = dict(state.get("output") or {})
     artifacts.setdefault("generated_code", output.get("generated_code"))
     artifacts.setdefault("execution_output", output.get("text"))
     artifacts.setdefault("error", output.get("error"))
     artifacts.setdefault("tool_results", output.get("tool_results"))
     return artifacts
+
+
+def get_conversation_events(state: dict) -> list[JsonObject]:
+    validated_state = ensure_conversation_state(state)
+    artifacts = dict(validated_state.get("artifacts") or {})
+    return deepcopy(list(artifacts.get("conversation_events") or []))
+
+
+def get_artifact_files(state: dict) -> dict[str, JsonObject]:
+    validated_state = ensure_conversation_state(state)
+    artifacts = dict(validated_state.get("artifacts") or {})
+    return deepcopy(dict(artifacts.get("files") or {}))
 
 
 def get_node_data(state: dict, node_name: str) -> dict:
@@ -48,6 +64,9 @@ def merge_state_patch(state: dict, patch: dict) -> dict:
             updated[key] = value
 
     artifacts = dict(updated.get("artifacts") or {})
+    if artifacts:
+        updated = ensure_conversation_state(updated)
+        artifacts = dict(updated.get("artifacts") or {})
     if artifacts:
         output = dict(updated.get("output") or {})
         if "generated_code" in artifacts:

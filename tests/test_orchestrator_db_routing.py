@@ -140,6 +140,47 @@ def test_orchestrator_does_not_force_rag_db_qa_from_clinical_fields_alone() -> N
     assert updated["next_action"] == "qa"
 
 
+def test_orchestrator_prefers_attached_dataset_analysis_over_generic_schema_wording() -> None:
+    orchestrator = _fresh_orchestrator()
+
+    state = {
+        "messages": [
+            SimpleNamespace(
+                type="human",
+                content="Use the attached schema and dataset to fit a Cox model stratified by adherence.",
+                additional_kwargs={
+                    "attachments": [
+                        {"artifact_id": "uploaded-abcd1234", "kind": "dataset", "role": "primary"},
+                        {"artifact_id": "uploaded-abcd1234.schema", "kind": "schema", "role": "supporting"},
+                    ]
+                },
+            )
+        ],
+        "output": {},
+        "artifacts": {
+            "datasets": {"uploaded-abcd1234": {"id": "uploaded-abcd1234", "kind": "uploaded"}},
+            "active_dataset_id": "uploaded-abcd1234",
+        },
+        "observations": [],
+        "last_action": None,
+        "orchestrator": {},
+        "agents": {
+            "executor": {"run_status": "idle"},
+            "human_review": {"before_run_decision": None, "final_decision": None},
+            "rag_db_qa": {},
+        },
+        "meta": {"error_iterations": 0, "workflow_trace": []},
+    }
+
+    updated = orchestrator.orchestrator_node(
+        state,
+        _LLM("not-json"),
+        ["qa", "rag_db_qa", "generate_code", "end"],
+    )
+
+    assert updated["next_action"] == "generate_code"
+
+
 def test_orchestrator_routes_database_overview_to_rag_db_qa() -> None:
     orchestrator = _fresh_orchestrator()
 
@@ -416,6 +457,57 @@ def test_orchestrator_keeps_rag_db_thread_for_referential_followup() -> None:
             "rag_db_qa": {"active_thread": True},
         },
         "meta": {"error_iterations": 0, "workflow_trace": ["orchestrator", "rag_db_qa"]},
+    }
+
+    updated = orchestrator.orchestrator_node(
+        state,
+        _LLM(json.dumps({"action": "qa", "thought": "fallback"})),
+        ["qa", "rag_db_qa", "generate_code", "end"],
+    )
+
+    assert updated["next_action"] == "rag_db_qa"
+
+
+def test_orchestrator_routes_fresh_followup_after_db_rag_sql_error() -> None:
+    orchestrator = _fresh_orchestrator()
+
+    state = {
+        "messages": [
+            SimpleNamespace(type="human", content="subset index case age gender and diabetes"),
+            SimpleNamespace(
+                type="ai",
+                content=(
+                    "I could not prepare valid read-only SQL from the approved DB-RAG selection.\n\n"
+                    "Details: ValueError: Division without NULLIF is not allowed."
+                ),
+            ),
+            SimpleNamespace(type="human", content="what happened to the SQL?"),
+        ],
+        "output": {
+            "qa_response": "I could not prepare valid read-only SQL from the approved DB-RAG selection.",
+            "error": {
+                "category": "db_rag_sql",
+                "type": "ValueError",
+                "message": "Division without NULLIF is not allowed.",
+            },
+        },
+        "observations": [],
+        "last_action": "rag_db_qa",
+        "orchestrator": {},
+        "agents": {
+            "executor": {"run_status": "idle"},
+            "human_review": {"before_run_decision": None, "final_decision": None},
+            "rag_db_qa": {
+                "status": "error",
+                "active_thread": True,
+                "thread_status": "error",
+            },
+        },
+        "artifacts": {"datasets": {}},
+        "meta": {
+            "error_iterations": 0,
+            "workflow_trace": ["orchestrator", "rag_db_qa"],
+        },
     }
 
     updated = orchestrator.orchestrator_node(

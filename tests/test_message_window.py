@@ -17,6 +17,13 @@ class _HumanMessage:
 
 class _AIMessage:
     type = "ai"
+    def __init__(self, content: str = "", additional_kwargs: dict | None = None):
+        self.content = content
+        self.additional_kwargs = additional_kwargs or {}
+
+
+class _ToolMessage:
+    type = "tool"
     def __init__(self, content: str = ""):
         self.content = content
 
@@ -26,6 +33,7 @@ def _install_stubs() -> None:
     messages_mod.BaseMessage = object
     messages_mod.HumanMessage = _HumanMessage
     messages_mod.AIMessage = _AIMessage
+    messages_mod.ToolMessage = _ToolMessage
 
     langchain_core_mod = ModuleType("langchain_core")
     langchain_core_mod.messages = messages_mod
@@ -111,3 +119,40 @@ def test_window_messages_drops_blank_ai_messages() -> None:
     msgs = [_HumanMessage("q1"), _AIMessage(""), _HumanMessage("q2"), _AIMessage("a2")]
     result = window_messages(msgs, max_turns=10)
     assert [msg.content for msg in result] == ["q1", "q2", "a2"]
+
+
+def test_window_messages_strips_completed_tool_trace_messages() -> None:
+    window_messages = _fresh_window_messages()
+    msgs = [
+        _HumanMessage("weather?"),
+        _AIMessage("", additional_kwargs={"tool_calls": [{"name": "query_weather", "args": {"city": "Boston"}}]}),
+        _ToolMessage('{"city":"Boston"}'),
+        _AIMessage("Boston is cool today."),
+    ]
+
+    result = window_messages(msgs, max_turns=10)
+
+    assert [msg.content for msg in result] == ["weather?", "Boston is cool today."]
+
+
+def test_window_messages_keeps_user_visible_turns_after_tool_trace_stripping() -> None:
+    window_messages = _fresh_window_messages()
+    msgs = [
+        _HumanMessage("old question"),
+        _AIMessage("old answer"),
+        _HumanMessage("weather?"),
+        _AIMessage("", additional_kwargs={"tool_calls": [{"name": "query_weather", "args": {"city": "Boston"}}]}),
+        _ToolMessage('{"city":"Boston"}'),
+        _AIMessage("Boston is cool today."),
+        _HumanMessage("write survival code"),
+        _AIMessage("ok"),
+    ]
+
+    result = window_messages(msgs, max_turns=2)
+
+    assert [msg.content for msg in result] == [
+        "weather?",
+        "Boston is cool today.",
+        "write survival code",
+        "ok",
+    ]

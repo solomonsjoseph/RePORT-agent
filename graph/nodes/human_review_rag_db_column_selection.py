@@ -5,6 +5,8 @@ from typing import Any
 
 from langgraph.types import interrupt
 
+from ..conversation_events import append_conversation_event, build_review_decision_event
+from ..state import MetaKeys
 from .state_helpers import update_agent_state
 
 NODE_NAME = "human_review_rag_db_column_selection"
@@ -73,4 +75,16 @@ def human_review_rag_db_column_selection_node(state):
             "rag_db_qa": rag_state,
         },
     }
+    meta = dict(updated_state.get("meta") or {})
+    updated_state = append_conversation_event(
+        updated_state,
+        build_review_decision_event(
+            actor="human_review_rag_db_column_selection",
+            user_turn_hash=str(meta.get(MetaKeys.LAST_USER_MESSAGE_HASH) or "").strip() or None,
+            review_kind="rag_db_column_selection",
+            decision=action or "regenerate",
+            text=feedback_text or ("Approved DB-RAG column selection." if action == "approve" else "Requested DB-RAG column selection revision."),
+            status="done",
+        ),
+    )
     return update_agent_state(updated_state, "rag_db_qa", rag_state)

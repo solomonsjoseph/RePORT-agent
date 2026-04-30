@@ -97,14 +97,22 @@ def _fresh_clarification_module():
     return importlib.import_module("graph.nodes.clarification")
 
 
-def test_clarification_node_resumes_qa_tool_followup_and_enqueues_tool() -> None:
+def test_clarification_node_resumes_qa_tool_followup_via_qa_node() -> None:
     clarification = _fresh_clarification_module()
+    captured: dict[str, object] = {}
 
-    class _LLM:
-        def invoke(self, _messages):
-            return SimpleNamespace(
-                content='{"tool_requests":[{"tool_name":"query_weather","payload":{"server":"weather","city":"Boston"}}]}'
-            )
+    def _fake_qa_node(state, llm, context="", question_override=None):
+        captured["state"] = state
+        captured["context"] = context
+        captured["question_override"] = question_override
+        return {
+            **state,
+            "output": {"qa_response": "Boston weather is 72F."},
+            "messages": list(state.get("messages", [])) + [_AIMessage("Boston weather is 72F.")],
+            "agents": {"qa": {"status": "done", "tool_requests": [], "tool_results": []}},
+        }
+
+    clarification.qa_node = _fake_qa_node
 
     state = {
         "messages": [
@@ -123,10 +131,11 @@ def test_clarification_node_resumes_qa_tool_followup_and_enqueues_tool() -> None
         "agents": {"qa": {"awaiting_tool_clarification": True, "tool_requests": [], "tool_results": []}},
     }
 
-    updated = clarification.clarification_node(state, _LLM(), context="")
+    updated = clarification.clarification_node(state, object(), context="")
 
-    assert updated["agents"]["qa"]["status"] == "pending"
-    assert updated["agents"]["qa"]["tool_requests"][0]["tool_name"] == "query_weather"
+    assert captured["question_override"] == "What's weather today?\n\nUser clarification: Boston"
+    assert "awaiting_user_clarification" not in captured["state"]["meta"]
+    assert updated["agents"]["qa"]["tool_requests"] == []
     assert "awaiting_user_clarification" not in updated["meta"]
 
 
@@ -264,3 +273,50 @@ def test_clarification_node_resumes_rag_db_extraction_opt_in_with_refinement() -
 
     assert captured["question_override"] == "yes, but only among confirmed index cases"
     assert "awaiting_user_clarification" not in captured["meta"]
+
+
+def test_clarification_node_resumes_generate_code_with_pending_question_context() -> None:
+    clarification = _fresh_clarification_module()
+    captured: dict[str, object] = {}
+
+    def _fake_generate_code_node(state, llm, context="", question_override=None):
+        captured["state"] = state
+        captured["context"] = context
+        captured["question_override"] = question_override
+        return {
+            **state,
+            "output": {"generated_code": "print(123)", "qa_response": "Prepared code."},
+            "agents": {"generate_code": {"status": "done"}},
+        }
+
+    clarification.generate_code_node = _fake_generate_code_node
+
+    state = {
+        "messages": [
+            _HumanMessage("Perform survival analysis stratified by treatment adherence"),
+            _AIMessage("Which event column should I use?"),
+            _HumanMessage("Use OS_EVENT"),
+        ],
+        "output": {"qa_response": "Which event column should I use?"},
+        "meta": {
+            "awaiting_user_clarification": True,
+            "pending_question": "Perform survival analysis stratified by treatment adherence",
+            "clarification_return_node": "generate_code",
+            "clarification_kind": "generate_code",
+        },
+        "observations": [],
+        "agents": {"generate_code": {}, "human_review": {}},
+    }
+
+    updated = clarification.clarification_node(
+        state,
+        object(),
+        context={"runtime_datasets": True},
+    )
+
+    assert captured["question_override"] == (
+        "Perform survival analysis stratified by treatment adherence\n\n"
+        "User clarification: Use OS_EVENT"
+    )
+    assert "awaiting_user_clarification" not in captured["state"]["meta"]
+    assert updated["output"]["generated_code"] == "print(123)"

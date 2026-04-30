@@ -5,6 +5,13 @@ from functools import lru_cache
 
 from langchain_core.messages import AIMessage
 
+from ..conversation_events import (
+    append_conversation_event,
+    build_assistant_event,
+    build_clarification_event,
+    build_tool_call_event,
+    build_tool_result_event,
+)
 from ..state import AgentState, MetaKeys
 from ..workflow_config import QA_RECENT_TURNS
 from utils.code_parser import extract_python_code
@@ -13,6 +20,7 @@ from utils.llm_response import coerce_text_content
 from utils.message_window import window_messages
 from .code_guardrails import code_fingerprint, is_executable_python
 from .state_helpers import clear_clarification_meta, get_agent_state, set_clarification_meta, update_agent_state
+from .orchestrator.state_logic import _user_message_hash
 from .tool_routing import latest_user_message, should_route_tools
 
 NODE_NAME = "qa"
@@ -62,6 +70,9 @@ def _build_qa_system_prompt(context: str) -> str:
         "You are a helpful data scientist. Answer the user's question directly and clearly. "
         "If the question requires analysis, explain the recommended steps without writing code "
         "unless requested.\n"
+        "If the request is dataset-specific analytical setup or column-role mapping for uploaded "
+        "or local data, do not ask for dataset-specific column-role mapping here; that belongs "
+        "to the code-generation workflow.\n"
         "Use the available MCP tools when they materially improve the answer. If a tool requires "
         "one specific missing field that is not present in the conversation, do not guess and do "
         "not call the tool yet. Instead, ask a single clarification question.\n"
@@ -172,6 +183,126 @@ def _extract_agent_response_text(agent_result) -> str:
     return coerce_text_content(agent_result)
 
 
+def _extract_agent_trace_messages(agent_result, input_messages: list) -> list:
+    if not isinstance(agent_result, dict):
+        return []
+
+    agent_messages = list(agent_result.get("messages", []))
+    if not agent_messages:
+        return []
+
+    if len(agent_messages) >= len(input_messages):
+        candidate = agent_messages[len(input_messages):]
+        if candidate:
+            return [message for message in candidate if getattr(message, "type", None) != "human"]
+
+    return [message for message in agent_messages if getattr(message, "type", None) != "human"]
+
+
+def _current_user_turn_hash(state: AgentState) -> str | None:
+    meta = dict(state.get("meta") or {})
+    return str(meta.get(MetaKeys.LAST_USER_MESSAGE_HASH) or _user_message_hash(state) or "") or None
+
+
+def _iter_tool_calls(message) -> list[tuple[str, dict]]:
+    additional_kwargs = dict(getattr(message, "additional_kwargs", {}) or {})
+    tool_calls = additional_kwargs.get("tool_calls") or []
+    parsed_calls: list[tuple[str, dict]] = []
+    if not isinstance(tool_calls, list):
+        return parsed_calls
+
+    for tool_call in tool_calls:
+        if not isinstance(tool_call, dict):
+            continue
+        tool_name = (
+            tool_call.get("name")
+            or tool_call.get("tool")
+            or ((tool_call.get("function") or {}).get("name") if isinstance(tool_call.get("function"), dict) else None)
+        )
+        if not isinstance(tool_name, str) or not tool_name.strip():
+            continue
+        raw_args = tool_call.get("args")
+        if raw_args is None and isinstance(tool_call.get("function"), dict):
+            raw_args = tool_call["function"].get("arguments")
+        if isinstance(raw_args, str):
+            try:
+                parsed_args = json.loads(raw_args)
+            except json.JSONDecodeError:
+                parsed_args = {"raw": raw_args}
+        elif isinstance(raw_args, dict):
+            parsed_args = raw_args
+        else:
+            parsed_args = {}
+        if not isinstance(parsed_args, dict):
+            parsed_args = {"raw": parsed_args}
+        parsed_calls.append((tool_name.strip(), parsed_args))
+    return parsed_calls
+
+
+def _tool_message_name(message) -> str:
+    name = getattr(message, "name", None)
+    if isinstance(name, str) and name.strip():
+        return name.strip()
+    additional_kwargs = dict(getattr(message, "additional_kwargs", {}) or {})
+    for key in ("name", "tool", "tool_name"):
+        value = additional_kwargs.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    tool_call_id = getattr(message, "tool_call_id", None)
+    if isinstance(tool_call_id, str) and tool_call_id.strip():
+        return tool_call_id.strip()
+    return "tool"
+
+
+def _append_qa_semantic_events(
+    state: AgentState,
+    trace_messages: list,
+    response_text: str,
+    *,
+    explicit_clarification: bool,
+) -> AgentState:
+    user_turn_hash = _current_user_turn_hash(state)
+    updated_state = state
+    for message in trace_messages:
+        message_type = getattr(message, "type", None)
+        if message_type == "ai":
+            for tool_name, tool_args in _iter_tool_calls(message):
+                updated_state = append_conversation_event(
+                    updated_state,
+                    build_tool_call_event(
+                        actor="qa",
+                        user_turn_hash=user_turn_hash,
+                        tool=tool_name,
+                        args=tool_args,
+                    ),
+                )
+        elif message_type == "tool":
+            updated_state = append_conversation_event(
+                updated_state,
+                build_tool_result_event(
+                    actor="qa",
+                    user_turn_hash=user_turn_hash,
+                    tool=_tool_message_name(message),
+                    text=coerce_text_content(getattr(message, "content", "")),
+                    artifact_id=None,
+                ),
+            )
+
+    if explicit_clarification:
+        event = build_clarification_event(
+            actor="qa",
+            user_turn_hash=user_turn_hash,
+            text=response_text,
+        )
+    else:
+        event = build_assistant_event(
+            actor="qa",
+            user_turn_hash=user_turn_hash,
+            text=response_text,
+        )
+    return append_conversation_event(updated_state, event)
+
+
 def qa_node(
     state: AgentState,
     llm,
@@ -193,14 +324,19 @@ def qa_node(
 
     windowed = window_messages(prompt_messages, max_turns=QA_RECENT_TURNS)
     agent = _create_qa_agent(llm, context=context or "No dataset or schema provided.")
-    raw_response_text = _extract_agent_response_text(agent.invoke({"messages": windowed}))
+    agent_result = agent.invoke({"messages": windowed})
+    raw_response_text = _extract_agent_response_text(agent_result)
 
     parsed_answer, explicit_clarification, clarification_question = _parse_structured_qa_response(
         raw_response_text
     )
     response_text = clarification_question if explicit_clarification else (parsed_answer or raw_response_text)
     messages = list(state.get("messages", []))
-    messages.append(AIMessage(content=response_text))
+    trace_messages = _extract_agent_trace_messages(agent_result, windowed)
+    if trace_messages:
+        messages.extend(trace_messages)
+    else:
+        messages.append(AIMessage(content=response_text))
 
     observations = list(state.get("observations", []))
     meta = dict(state.get("meta", {}))
@@ -229,8 +365,14 @@ def qa_node(
     }
     output = dict(updated_state.get("output") or {})
     output["qa_response"] = response_text
+    updated_state = _append_qa_semantic_events(
+        updated_state,
+        trace_messages,
+        response_text,
+        explicit_clarification=explicit_clarification,
+    )
     code = extract_python_code(response_text)
-    if is_executable_python(code):
+    if not explicit_clarification and is_executable_python(code):
         output["generated_code"] = code
         meta[MetaKeys.CURRENT_CODE_HASH] = code_fingerprint(code)
         meta.pop(MetaKeys.FINAL_APPROVED_CODE_HASH, None)

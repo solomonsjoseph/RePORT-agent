@@ -2,14 +2,21 @@ from __future__ import annotations
 
 from typing import Iterable
 
+from ...conversation_events import (
+    append_conversation_event,
+    build_routing_decision_event,
+    build_user_event,
+    has_conversation_event,
+)
 from ...state import AgentState, MetaKeys
 from ...state_views import get_planner_state, merge_state_patch
 from ..node_registry import NODE_REGISTRY_MAP
-from ..tool_routing import is_tool_requested
+from ..tool_routing import is_tool_requested, latest_user_message
 from .action_mask import mask_actions
 from .planner import llm_plan_next_action
 from .policy import (
     DETERMINISTIC_CONTROL_ACTIONS,
+    _is_dataset_analysis_request,
     _next_tool_requester,
     _tool_request_queue,
     select_planner_fallback_action,
@@ -27,6 +34,7 @@ from .state_logic import (
     derive_planner_memory,
 )
 from .workflow_status import derive_workflow_status
+from ..state_helpers import clear_clarification_meta
 
 
 def _record_planner_decision(
@@ -132,6 +140,8 @@ def _refresh_planner_memory(state: AgentState) -> AgentState:
 
 
 def _should_end_for_completion(state: AgentState) -> bool:
+    if _has_unanswered_human_message(state):
+        return False
     meta = dict(state.get("meta") or {})
     completion = meta.get(MetaKeys.COMPLETION_STATUS)
     if completion == "complete":
@@ -235,7 +245,16 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
     if fresh_unanswered_user_turn:
         if was_awaiting_clarification:
             clarification_return_node = meta.get(MetaKeys.CLARIFICATION_RETURN_NODE)
-            if _is_soft_qa_followup(meta):
+            if (
+                clarification_return_node == "qa"
+                and "generate_code" in available_action_set
+                and _is_dataset_analysis_request({**state, "output": output, "agents": agents, "meta": meta})
+            ):
+                meta = clear_clarification_meta(meta)
+                meta[MetaKeys.LAST_USER_MESSAGE_HASH] = current_hash
+                next_action = "generate_code"
+                orchestrator_state["next_action"] = next_action
+            elif _is_soft_qa_followup(meta):
                 next_action = None
                 defer_qa_followup_clarification_to_planner = True
                 orchestrator_state.pop("next_action", None)
@@ -345,7 +364,7 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
     workflow_trace.append("orchestrator")
     meta[MetaKeys.WORKFLOW_TRACE] = workflow_trace[-100:]
 
-    return {
+    state = {
         **state,
         "next_action": next_action,
         "last_action": state.get("last_action"),
@@ -356,3 +375,30 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
         "agents": agents,
         "meta": meta,
     }
+    if current_hash and fresh_unanswered_user_turn and not has_conversation_event(
+        state,
+        event_type="user",
+        user_turn_hash=current_hash,
+        actor="user",
+    ):
+        user_text = latest_user_message(state)
+        state = append_conversation_event(
+            state,
+            build_user_event(
+                actor="user",
+                user_turn_hash=current_hash,
+                text=user_text,
+            ),
+        )
+
+    if next_action:
+        state = append_conversation_event(
+            state,
+            build_routing_decision_event(
+                actor="orchestrator",
+                user_turn_hash=current_hash,
+                decision=next_action,
+            ),
+        )
+
+    return state

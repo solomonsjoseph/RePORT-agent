@@ -5,6 +5,14 @@ import json
 from langchain_core.messages import AIMessage
 from langchain_core.messages import HumanMessage
 
+from ..conversation_events import (
+    append_conversation_event,
+    build_assistant_event,
+    build_clarification_event,
+    build_code_event,
+    store_thread_artifact,
+)
+from .orchestrator.state_logic import _user_message_hash
 from prompts.generate_prompt import make_generate_code_prompt
 from utils.llm_response import coerce_text_content
 from utils.message_window import window_messages
@@ -33,6 +41,11 @@ _FALLBACK_CLARIFICATION_QUESTION = (
     "Please restate your request with the specific analysis, transformation, or columns "
     "you want in the generated code."
 )
+
+
+def _current_user_turn_hash(state: dict) -> str | None:
+    meta = dict(state.get("meta") or {})
+    return str(meta.get(MetaKeys.LAST_USER_MESSAGE_HASH) or _user_message_hash(state) or "") or None
 
 
 def _latest_human_content(messages) -> str:
@@ -97,7 +110,13 @@ def _parse_generate_payload(text: str) -> tuple[dict | None, str | None]:
     return None, "invalid_response_type"
 
 
-def _clarification_state(state: dict, question: str, messages) -> dict:
+def _clarification_state(
+    state: dict,
+    question: str,
+    messages,
+    *,
+    pending_question: str | None,
+) -> dict:
     msgs = list(state.get("messages", []))
     msgs.append(AIMessage(content=question))
     output = dict(state.get("output") or {})
@@ -109,7 +128,7 @@ def _clarification_state(state: dict, question: str, messages) -> dict:
         state.get("meta", {}),
         return_node="generate_code",
         kind="generate_code",
-        pending_question=_latest_human_content(messages),
+        pending_question=pending_question,
     )
     updated_state = {
         **state,
@@ -117,7 +136,7 @@ def _clarification_state(state: dict, question: str, messages) -> dict:
         "output": output,
         "meta": meta,
     }
-    return update_agent_state(
+    updated_state = update_agent_state(
         updated_state,
         "generate_code",
         {
@@ -126,9 +145,18 @@ def _clarification_state(state: dict, question: str, messages) -> dict:
             "notes": ["Model returned clarification instead of executable code."],
         },
     )
+    return append_conversation_event(
+        updated_state,
+        build_clarification_event(
+            actor="generate_code",
+            user_turn_hash=_current_user_turn_hash(state),
+            text=question,
+            status="active",
+        ),
+    )
 
 
-def generate_code_node(state, llm, context):
+def generate_code_node(state, llm, context, question_override=None):
     generate_state = get_agent_state(state, "generate_code")
     messages = state.get("messages", [])
     tool_results = list(generate_state.get("tool_results", []))
@@ -141,9 +169,9 @@ def generate_code_node(state, llm, context):
         output["tool_results"] = format_tool_results(tool_results)
 
     resolved_context = context(state) if callable(context) else context
-    latest_human = _latest_human_content(messages)
+    latest_human = str(question_override or _latest_human_content(messages) or "").strip()
     meta = dict(state.get("meta", {}))
-    if isinstance(context, dict) and context.get("runtime_datasets"):
+    if isinstance(resolved_context, dict) and resolved_context.get("runtime_datasets"):
         selected_artifact, selection_reason = choose_analysis_dataset(
             state,
             latest_user_message=latest_human,
@@ -153,6 +181,7 @@ def generate_code_node(state, llm, context):
                 state,
                 "Which dataset should I analyze: the uploaded dataset or the latest extracted subset?",
                 messages,
+                pending_question=latest_human,
             )
         if selected_artifact is not None:
             resolved_context = build_dataset_context(selected_artifact)
@@ -178,10 +207,20 @@ def generate_code_node(state, llm, context):
         payload, _error = _parse_generate_payload(response_text)
 
     if payload is None:
-        return _clarification_state(state, _FALLBACK_CLARIFICATION_QUESTION, messages)
+        return _clarification_state(
+            state,
+            _FALLBACK_CLARIFICATION_QUESTION,
+            messages,
+            pending_question=latest_human,
+        )
 
     if payload["response_type"] == "clarification":
-        return _clarification_state(state, payload["question"], messages)
+        return _clarification_state(
+            state,
+            payload["question"],
+            messages,
+            pending_question=latest_human,
+        )
 
     code = payload["code"]
     output = dict(state.get("output") or {})
@@ -220,6 +259,38 @@ def generate_code_node(state, llm, context):
         "agents": agents,
         "meta": meta,
     }
+    updated_state = store_thread_artifact(
+        updated_state,
+        {
+            "kind": "code",
+            "producer": "generate_code",
+            "mime": "text/x-python",
+            "summary": payload["summary"],
+            "content": code,
+        },
+    )
+    artifact_id = next(reversed(dict(updated_state.get("artifacts") or {}).get("files") or {}))
+    updated_state = append_conversation_event(
+        updated_state,
+        build_assistant_event(
+            actor="generate_code",
+            user_turn_hash=_current_user_turn_hash(state),
+            text=payload["summary"],
+            status="done",
+        ),
+    )
+    assistant_event_id = str((updated_state.get("artifacts") or {}).get("conversation_events", [])[-1]["event_id"])
+    updated_state = append_conversation_event(
+        updated_state,
+        build_code_event(
+            actor="generate_code",
+            user_turn_hash=_current_user_turn_hash(state),
+            artifact_id=artifact_id,
+            text=payload["summary"],
+            status="done",
+            parent_event_id=assistant_event_id,
+        ),
+    )
     return update_agent_state(
         updated_state,
         "generate_code",

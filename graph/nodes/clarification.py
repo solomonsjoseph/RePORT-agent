@@ -1,23 +1,11 @@
 from __future__ import annotations
 
-from langchain_core.messages import AIMessage
-
 from ..state import AgentState, MetaKeys
-from ..workflow_config import (
-    CLARIFICATION_RECENT_TURNS,
-    CLARIFICATION_WITH_PENDING_RECENT_TURNS,
-)
 from .generate_code import generate_code_node
 from .qa import qa_node
 from .rag_db_qa import rag_db_qa_node
-from .state_helpers import (
-    clear_clarification_meta,
-    enqueue_tool_requester,
-    set_clarification_meta,
-    update_agent_state,
-)
-from .tool_routing import latest_user_message, request_tools_for_question
-from utils.message_window import window_messages
+from .state_helpers import clear_clarification_meta
+from .tool_routing import latest_user_message
 
 NODE_NAME = "clarification"
 NODE_CAPABILITY = (
@@ -26,79 +14,31 @@ NODE_CAPABILITY = (
 )
 
 
+def _with_semantic_last_action(state: AgentState, action: str) -> AgentState:
+    meta = dict(state.get("meta") or {})
+    meta[MetaKeys.SEMANTIC_LAST_ACTION] = action
+    return {
+        **state,
+        "meta": meta,
+    }
+
+
 def _resume_qa_tool_clarification(state: AgentState, llm) -> AgentState:
     question = latest_user_message(state)
     pending_question = (state.get("meta") or {}).get(MetaKeys.PENDING_QUESTION)
     if pending_question:
         effective_question = f"{pending_question}\n\nUser clarification: {question}"
-        recent_msgs = window_messages(
-            state.get("messages", []),
-            max_turns=CLARIFICATION_WITH_PENDING_RECENT_TURNS,
-        )
     else:
         effective_question = question
-        recent_msgs = window_messages(
-            state.get("messages", []),
-            max_turns=CLARIFICATION_RECENT_TURNS,
-        )
-
-    routing_result = request_tools_for_question(llm, effective_question, recent_messages=recent_msgs)
-    if routing_result.clarification_question:
-        messages = list(state.get("messages", []))
-        messages.append(AIMessage(content=routing_result.clarification_question))
-        meta = set_clarification_meta(
-            state.get("meta", {}),
-            return_node="qa",
-            kind="qa_tool",
-            pending_question=effective_question,
-        )
-        output = dict(state.get("output") or {})
-        output["qa_response"] = routing_result.clarification_question
-        observations = list(state.get("observations", []))
-        observations.append("clarification: asked follow-up for missing tool field")
-        updated_state = {
-            **state,
-            "messages": messages,
-            "meta": meta,
-            "output": output,
-            "observations": observations,
-        }
-        return update_agent_state(
-            updated_state,
-            "qa",
-            {
-                "status": "done",
-                "awaiting_tool_clarification": True,
-            },
-        )
-
-    if routing_result.tool_requests:
-        meta = clear_clarification_meta(state.get("meta") or {})
-        observations = list(state.get("observations", []))
-        observations.append("clarification: resolved qa tool clarification")
-        updated_state = enqueue_tool_requester(
-            {
-                **state,
-                "meta": meta,
-                "observations": observations,
-            },
-            "qa",
-        )
-        return update_agent_state(
-            updated_state,
-            "qa",
-            {
-                "status": "pending",
-                "tool_requests": routing_result.tool_requests,
-                "awaiting_tool_clarification": False,
-            },
-        )
 
     resumed_state = {
         **state,
         "meta": clear_clarification_meta(state.get("meta") or {}),
     }
-    return qa_node(resumed_state, llm)
+    return _with_semantic_last_action(
+        qa_node(resumed_state, llm, question_override=effective_question),
+        "qa",
+    )
 
 
 def clarification_node(state: AgentState, llm, context: str = "") -> AgentState:
@@ -125,18 +65,40 @@ def clarification_node(state: AgentState, llm, context: str = "") -> AgentState:
 
     if meta.get(MetaKeys.CLARIFICATION_RETURN_NODE) == "generate_code":
         if isinstance(context, dict):
-            return generate_code_node(resumed_state, llm, context)
-        return generate_code_node(resumed_state, llm, context)
-    if meta.get(MetaKeys.CLARIFICATION_RETURN_NODE) == "rag_db_qa":
-        if isinstance(context, dict):
-            return rag_db_qa_node(
+            return _with_semantic_last_action(
+                generate_code_node(
+                    resumed_state,
+                    llm,
+                    context,
+                    question_override=effective_question,
+                ),
+                "generate_code",
+            )
+        return _with_semantic_last_action(
+            generate_code_node(
                 resumed_state,
                 llm,
-                provider=str(context.get("provider") or ""),
-                service=context.get("db_rag_service"),
-                reranker_model=context.get("db_rag_reranker_model"),
+                context,
                 question_override=effective_question,
+            ),
+            "generate_code",
+        )
+    if meta.get(MetaKeys.CLARIFICATION_RETURN_NODE) == "rag_db_qa":
+        if isinstance(context, dict):
+            return _with_semantic_last_action(
+                rag_db_qa_node(
+                    resumed_state,
+                    llm,
+                    provider=str(context.get("provider") or ""),
+                    service=context.get("db_rag_service"),
+                    reranker_model=context.get("db_rag_reranker_model"),
+                    question_override=effective_question,
+                ),
+                "rag_db_qa",
             )
         raise ValueError("rag_db_qa clarification resume requires a context mapping with provider and db_rag_service")
 
-    return qa_node(resumed_state, llm, context, question_override=effective_question)
+    return _with_semantic_last_action(
+        qa_node(resumed_state, llm, context, question_override=effective_question),
+        "qa",
+    )

@@ -68,6 +68,28 @@ def test_direct_rag_db_answer_is_classified_as_answered_complete() -> None:
     assert status["blocker_signature"] is None
 
 
+def test_clarification_resumed_qa_answer_is_classified_as_answered_complete() -> None:
+    state = {
+        "messages": [],
+        "output": {"qa_response": "Boston weather today is cool and rainy."},
+        "agents": {
+            "executor": {"run_status": "idle"},
+            "human_review": {"before_run_decision": None, "after_error_decision": None, "final_decision": None},
+        },
+        "meta": {
+            "workflow_trace": ["orchestrator", "qa", "orchestrator", "clarification"],
+            "semantic_last_action": "qa",
+        },
+        "last_action": "clarification",
+    }
+
+    status = derive_workflow_status(state)
+
+    assert status["milestone"] == "answered"
+    assert status["completion_status"] == "complete"
+    assert status["blocker_signature"] is None
+
+
 def test_pending_rag_db_column_review_is_blocked_waiting() -> None:
     state = {
         "agents": {
@@ -132,7 +154,7 @@ def test_pending_rag_db_sql_review_is_blocked_waiting() -> None:
     assert status["blocker_signature"] == "waiting_for_rag_db_sql_review:sel-1"
 
 
-def test_db_rag_sql_execution_error_is_complete_after_sql_review_node_runs() -> None:
+def test_db_rag_sql_execution_error_is_blocked_waiting_after_sql_review_node_runs() -> None:
     state = {
         "output": {
             "qa_response": "DB-RAG SQL execution failed and the workflow stopped.",
@@ -158,8 +180,34 @@ def test_db_rag_sql_execution_error_is_complete_after_sql_review_node_runs() -> 
     status = derive_workflow_status(state)
 
     assert status["milestone"] == "db_rag_sql_error"
-    assert status["completion_status"] == "complete"
+    assert status["completion_status"] == "blocked_waiting"
     assert status["blocker_signature"].startswith("db_rag_sql_error:BinderException:")
+
+
+def test_completed_db_rag_sql_execution_is_complete() -> None:
+    state = {
+        "output": {
+            "qa_response": "Read-only SQL execution completed with 1 result row(s).",
+            "generated_sql": 'SELECT "AGE" FROM "Form 1A"',
+        },
+        "agents": {
+            "executor": {"run_status": "idle"},
+            "human_review": {"before_run_decision": None, "after_error_decision": None, "final_decision": None},
+            "rag_db_qa": {
+                "status": "done",
+                "active_thread": False,
+                "thread_status": "completed",
+            },
+        },
+        "meta": {},
+        "last_action": "human_review_rag_db_sql_execution",
+    }
+
+    status = derive_workflow_status(state)
+
+    assert status["milestone"] == "db_rag_sql_completed"
+    assert status["completion_status"] == "complete"
+    assert status["blocker_signature"] is None
 
 
 def test_generated_code_without_ticket_is_awaiting_run_review() -> None:

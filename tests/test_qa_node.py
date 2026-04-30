@@ -8,8 +8,9 @@ from types import ModuleType, SimpleNamespace
 class _AIMessage:
     type = "ai"
 
-    def __init__(self, content: str):
+    def __init__(self, content: str, additional_kwargs: dict | None = None):
         self.content = content
+        self.additional_kwargs = additional_kwargs or {}
 
 
 class _HumanMessage:
@@ -23,6 +24,16 @@ class _MessagesPlaceholder:
     def __init__(self, variable_name: str, optional: bool = False) -> None:
         self.variable_name = variable_name
         self.optional = optional
+
+
+class _ToolMessage:
+    type = "tool"
+
+    def __init__(self, content: str, name: str | None = None, tool_call_id: str | None = None):
+        self.content = content
+        self.name = name
+        self.tool_call_id = tool_call_id
+        self.additional_kwargs = {}
 
 
 class _FormattedPrompt:
@@ -80,6 +91,7 @@ def _install_stubs() -> None:
     messages_mod = ModuleType("langchain_core.messages")
     messages_mod.BaseMessage = object
     messages_mod.AIMessage = _AIMessage
+    messages_mod.ToolMessage = _ToolMessage
 
     prompts_mod = ModuleType("langchain_core.prompts")
     prompts_mod.ChatPromptTemplate = _ChatPromptTemplate
@@ -113,6 +125,7 @@ def test_build_qa_system_prompt_includes_context_and_math_contract() -> None:
     assert "- sex" in rendered
     assert "inline math with $...$ and display math with $$...$$" in rendered
     assert "Do not use plain parentheses around LaTeX commands." in rendered
+    assert "do not ask for dataset-specific column-role mapping here" in rendered.lower()
 
 
 def test_qa_node_invokes_create_agent_adapter_with_replaced_question() -> None:
@@ -142,6 +155,70 @@ def test_qa_node_invokes_create_agent_adapter_with_replaced_question() -> None:
     assert result["output"]["qa_response"] == "ok"
     assert result["agents"]["qa"]["tool_requests"] == []
     assert result["agents"]["qa"]["tool_results"] == []
+
+
+def test_qa_node_preserves_agent_tool_trace_messages() -> None:
+    qa = _fresh_qa_module()
+    input_human = _HumanMessage("what's weather today")
+    agent_messages = [
+        input_human,
+        _AIMessage(""),
+        _ToolMessage('{"city":"Boston","forecast":"rain"}'),
+        _AIMessage('{"answer":"Boston weather today is rainy.","needs_clarification":false,"clarification_question":null}'),
+    ]
+    qa._create_qa_agent = lambda llm, *, context: _FakeAgent("")
+    qa._create_qa_agent = lambda llm, *, context: SimpleNamespace(
+        invoke=lambda agent_input: {"messages": agent_messages}
+    )
+
+    state = {
+        "messages": [input_human],
+        "output": {},
+        "meta": {},
+        "observations": [],
+        "agents": {"qa": {"tool_requests": [], "tool_results": []}},
+    }
+
+    result = qa.qa_node(state, _LLM(), context="")
+
+    assert [getattr(message, "type", None) for message in result["messages"]] == ["human", "ai", "tool", "ai"]
+    assert result["messages"][-1].content.startswith('{"answer":"Boston weather today is rainy.')
+    assert result["output"]["qa_response"] == "Boston weather today is rainy."
+
+
+def test_qa_node_does_not_append_synthetic_question_override_human_message() -> None:
+    qa = _fresh_qa_module()
+    original_human = _HumanMessage("boston")
+    agent_messages = [
+        _HumanMessage("what's weather today\n\nUser clarification: boston"),
+        _AIMessage('{"answer":"Boston weather today is rainy.","needs_clarification":false,"clarification_question":null}'),
+    ]
+    qa._create_qa_agent = lambda llm, *, context: SimpleNamespace(
+        invoke=lambda agent_input: {"messages": agent_messages}
+    )
+
+    state = {
+        "messages": [
+            _HumanMessage("what's weather today"),
+            _AIMessage("Which city would you like the weather for today?"),
+            original_human,
+        ],
+        "output": {},
+        "meta": {},
+        "observations": [],
+        "agents": {"qa": {"tool_requests": [], "tool_results": []}},
+    }
+
+    result = qa.qa_node(
+        state,
+        _LLM(),
+        context="",
+        question_override="what's weather today\n\nUser clarification: boston",
+    )
+
+    human_messages = [message.content for message in result["messages"] if getattr(message, "type", None) == "human"]
+    assert human_messages == ["what's weather today", "boston"]
+    assert result["output"]["qa_response"] == "Boston weather today is rainy."
 
 
 def test_qa_node_sets_tool_clarification_meta_from_agent_response() -> None:
@@ -186,6 +263,133 @@ def test_qa_node_sets_awaiting_clarification_when_llm_returns_structured_signal(
     assert result["meta"].get("clarification_return_node") == "qa"
     assert result["agents"]["qa"]["awaiting_tool_clarification"] is True
     assert result["output"]["qa_response"] == "Which city would you like weather for?"
+    assert "generated_code" not in result["output"]
+
+
+def test_qa_node_emits_assistant_event_for_answer() -> None:
+    qa = _fresh_qa_module()
+    qa._create_qa_agent = lambda llm, *, context: SimpleNamespace(
+        invoke=lambda agent_input: {
+            "messages": [
+                _HumanMessage("what is the answer"),
+                _AIMessage("The answer is 42."),
+            ]
+        }
+    )
+
+    state = {
+        "messages": [_HumanMessage("what is the answer")],
+        "output": {},
+        "meta": {},
+        "observations": [],
+        "agents": {"qa": {"tool_requests": [], "tool_results": []}},
+        "artifacts": {
+            "conversation_events": [],
+            "conversation_events_version": 1,
+            "artifact_manifest_version": 1,
+            "files": {},
+        },
+    }
+
+    result = qa.qa_node(state, _LLM(), context="")
+
+    from graph.state_views import get_conversation_events
+
+    events = get_conversation_events(result)
+    assert [event["type"] for event in events] == ["assistant"]
+    assert events[0]["text"] == "The answer is 42."
+    assert events[0]["user_turn_hash"]
+    assert [message.content for message in result["messages"]] == ["what is the answer", "The answer is 42."]
+
+
+def test_qa_node_emits_clarification_event_for_structured_followup() -> None:
+    qa = _fresh_qa_module()
+    qa._create_qa_agent = lambda llm, *, context: SimpleNamespace(
+        invoke=lambda agent_input: {
+            "messages": [
+                _HumanMessage("what is the missing field"),
+                _AIMessage(
+                    '{"answer":"","needs_clarification":true,"clarification_question":"Which city do you mean?"}'
+                ),
+            ]
+        }
+    )
+
+    state = {
+        "messages": [_HumanMessage("what is the missing field")],
+        "output": {},
+        "meta": {},
+        "observations": [],
+        "agents": {"qa": {"tool_requests": [], "tool_results": []}},
+        "artifacts": {
+            "conversation_events": [],
+            "conversation_events_version": 1,
+            "artifact_manifest_version": 1,
+            "files": {},
+        },
+    }
+
+    result = qa.qa_node(state, _LLM(), context="")
+
+    from graph.state_views import get_conversation_events
+
+    events = get_conversation_events(result)
+    assert [event["type"] for event in events] == ["clarification"]
+    assert events[0]["text"] == "Which city do you mean?"
+    assert events[0]["user_turn_hash"]
+    assert result["output"]["qa_response"] == "Which city do you mean?"
+
+
+def test_qa_node_emits_tool_trace_events_when_agent_returns_tool_calls() -> None:
+    qa = _fresh_qa_module()
+    qa._create_qa_agent = lambda llm, *, context: SimpleNamespace(
+        invoke=lambda agent_input: {
+            "messages": [
+                _HumanMessage("what's the weather"),
+                _AIMessage(
+                    "",
+                    additional_kwargs={
+                        "tool_calls": [
+                            {
+                                "name": "query_weather",
+                                "args": {"city": "Boston"},
+                            }
+                        ]
+                    },
+                ),
+                _ToolMessage('{"city":"Boston","forecast":"rain"}', name="query_weather"),
+                _AIMessage(
+                    '{"answer":"Boston weather is rainy.","needs_clarification":false,"clarification_question":null}'
+                ),
+            ]
+        }
+    )
+
+    state = {
+        "messages": [_HumanMessage("what's the weather")],
+        "output": {},
+        "meta": {},
+        "observations": [],
+        "agents": {"qa": {"tool_requests": [], "tool_results": []}},
+        "artifacts": {
+            "conversation_events": [],
+            "conversation_events_version": 1,
+            "artifact_manifest_version": 1,
+            "files": {},
+        },
+    }
+
+    result = qa.qa_node(state, _LLM(), context="")
+
+    from graph.state_views import get_conversation_events
+
+    events = get_conversation_events(result)
+    assert [event["type"] for event in events] == ["tool_call", "tool_result", "assistant"]
+    assert events[0]["tool"] == "query_weather"
+    assert events[0]["args"] == {"city": "Boston"}
+    assert events[1]["tool"] == "query_weather"
+    assert events[1]["text"] == '{"city":"Boston","forecast":"rain"}'
+    assert events[2]["text"] == "Boston weather is rainy."
 
 
 def test_qa_node_sets_generic_clarification_meta_for_non_tool_question() -> None:

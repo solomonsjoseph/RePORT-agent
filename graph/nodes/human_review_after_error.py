@@ -1,6 +1,7 @@
 from langgraph.types import interrupt
 from langchain_core.messages import HumanMessage
 
+from ..conversation_events import append_conversation_event, build_review_decision_event
 from ..state import MetaKeys
 from .state_helpers import update_agent_state
 
@@ -37,6 +38,17 @@ def human_review_after_error_node(state):
         "meta": meta,
         "output": output,
     }
+    updated_state = append_conversation_event(
+        updated_state,
+        build_review_decision_event(
+            actor="human_review_after_error",
+            user_turn_hash=str(meta.get(MetaKeys.LAST_USER_MESSAGE_HASH) or "").strip() or None,
+            review_kind="after_error_review",
+            decision=str(decision or ""),
+            text=str(suggestion or ("Requested code regeneration after execution failure." if decision == "regenerate" else "Reviewed repeated execution failure.")),
+            status="done",
+        ),
+    )
     updated_state = update_agent_state(
         updated_state,
         "executor",

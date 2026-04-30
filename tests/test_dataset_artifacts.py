@@ -53,6 +53,59 @@ def test_register_dataset_artifact_sets_active_pointer_for_new_subset() -> None:
     assert updated["artifacts"]["datasets"]["subset-1"]["kind"] == "subset"
 
 
+def test_register_dataset_artifact_preserves_existing_artifact_metadata() -> None:
+    from utils.dataset_artifacts import register_dataset_artifact
+
+    state = {
+        "artifacts": {
+            "conversation_events": [{"event_id": "event-1"}],
+            "files": {"file-1": {"kind": "code"}},
+            "datasets": {},
+            "active_dataset_id": None,
+        }
+    }
+
+    updated = register_dataset_artifact(
+        state,
+        {
+            "id": "uploaded-1",
+            "kind": "uploaded",
+            "path": "/tmp/uploaded.parquet",
+            "schema_path": "/tmp/uploaded.schema.json",
+        },
+        make_active=True,
+    )
+
+    assert updated["artifacts"]["conversation_events"] == [{"event_id": "event-1"}]
+    assert updated["artifacts"]["files"] == {"file-1": {"kind": "code"}}
+    assert updated["artifacts"]["active_dataset_id"] == "uploaded-1"
+    assert updated["artifacts"]["datasets"]["uploaded-1"]["schema_path"] == "/tmp/uploaded.schema.json"
+
+
+def test_build_dataset_artifacts_patch_registers_upload_for_later_turn() -> None:
+    from utils.dataset_artifacts import build_dataset_artifacts_patch
+
+    current_artifacts = {
+        "conversation_events": [{"event_id": "event-1"}],
+        "files": {"file-1": {"kind": "code"}},
+        "datasets": {},
+        "active_dataset_id": None,
+    }
+    uploaded_artifact = {
+        "id": "uploaded-1",
+        "kind": "uploaded",
+        "path": "/tmp/uploaded.parquet",
+        "schema_path": "/tmp/uploaded.schema.json",
+    }
+
+    patch = build_dataset_artifacts_patch(current_artifacts, uploaded_artifact)
+
+    assert patch["datasets"]["uploaded-1"] == uploaded_artifact
+    assert patch["active_dataset_id"] == "uploaded-1"
+    assert patch["conversation_events"] == [{"event_id": "event-1"}]
+    assert patch["files"] == {"file-1": {"kind": "code"}}
+
+
 def test_choose_analysis_dataset_requires_explicit_choice_when_uploaded_and_subset_exist() -> None:
     from utils.dataset_artifacts import choose_analysis_dataset
 

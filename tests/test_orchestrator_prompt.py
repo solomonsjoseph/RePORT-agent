@@ -721,7 +721,17 @@ def test_orchestrator_routes_attached_data_analysis_to_generate_code() -> None:
     orchestrator = importlib.import_module("graph.nodes.orchestrator")
 
     state = {
-        "messages": [SimpleNamespace(type="human", content="Can you perform survival analysis on my attached data?")],
+        "messages": [
+            SimpleNamespace(
+                type="human",
+                content="Can you perform survival analysis on my attached data?",
+                additional_kwargs={
+                    "attachments": [
+                        {"artifact_id": "uploaded-abcd1234", "kind": "dataset", "role": "primary"}
+                    ]
+                },
+            )
+        ],
         "output": {},
         "observations": [],
         "last_action": None,
@@ -735,7 +745,149 @@ def test_orchestrator_routes_attached_data_analysis_to_generate_code() -> None:
 
     fallback = orchestrator.orchestrator_node(state, _LLM("not-json"), ["qa", "generate_code", "end"])
 
-    assert fallback["next_action"] == "qa"
+    assert fallback["next_action"] == "generate_code"
+
+
+def test_orchestrator_escapes_qa_clarification_when_dataset_analysis_signal_appears() -> None:
+    _install_langchain_and_langgraph_stubs()
+    orchestrator = importlib.import_module("graph.nodes.orchestrator")
+
+    state = {
+        "messages": [
+            SimpleNamespace(type="ai", content="What are the duration and event columns?"),
+            SimpleNamespace(
+                type="human",
+                content="Use the attached dataset and schema for survival analysis by adherence.",
+                additional_kwargs={
+                    "attachments": [
+                        {"artifact_id": "uploaded-abcd1234", "kind": "dataset", "role": "primary"}
+                    ]
+                },
+                id="turn-2",
+            ),
+        ],
+        "output": {},
+        "observations": [],
+        "last_action": "qa",
+        "orchestrator": {},
+        "planner": {
+            "memory": {
+                "active_user_goal": "Perform survival analysis on my attached data",
+                "conversation_intent_summary": "Perform survival analysis on my attached data",
+                "unresolved_user_constraints": [],
+            }
+        },
+        "agents": {
+            "executor": {"run_status": "idle"},
+            "human_review": {"before_run_decision": None, "final_decision": None},
+            "qa": {},
+        },
+        "meta": {
+            "awaiting_user_clarification": True,
+            "clarification_return_node": "qa",
+            "clarification_kind": "qa_followup",
+            "pending_question": "Perform survival analysis on my attached data",
+            "workflow_trace": ["orchestrator", "qa", "orchestrator"],
+            "last_user_message_hash": "stalehash",
+        },
+    }
+
+    updated = orchestrator.orchestrator_node(
+        state,
+        _LLM("not-json"),
+        ["clarification", "qa", "generate_code", "end"],
+    )
+
+    assert updated["next_action"] == "generate_code"
+    assert updated["meta"].get("awaiting_user_clarification") in (None, False)
+    assert updated["meta"].get("clarification_return_node") in (None, "")
+    assert updated["meta"].get("pending_question") in (None, "")
+
+
+def test_orchestrator_escapes_qa_clarification_when_reply_only_references_uploaded_schema() -> None:
+    _install_langchain_and_langgraph_stubs()
+    orchestrator = importlib.import_module("graph.nodes.orchestrator")
+
+    state = {
+        "messages": [
+            SimpleNamespace(
+                type="human",
+                content="Perform survival analysis stratified by treatment adherence on my attached data",
+                additional_kwargs={
+                    "attachments": [
+                        {"artifact_id": "uploaded-abcd1234", "kind": "dataset", "role": "primary"}
+                    ]
+                },
+                id="turn-1",
+            ),
+            SimpleNamespace(type="ai", content="What are the duration and event columns?"),
+            SimpleNamespace(
+                type="human",
+                content="Use the uploaded schema context",
+                additional_kwargs={
+                    "attachments": [
+                        {"artifact_id": "uploaded-abcd1234", "kind": "dataset", "role": "primary"},
+                        {"artifact_id": "uploaded-abcd1234.schema", "kind": "schema", "role": "supporting"},
+                    ]
+                },
+                id="turn-2",
+            ),
+        ],
+        "output": {},
+        "observations": [],
+        "last_action": "qa",
+        "orchestrator": {},
+        "planner": {
+            "memory": {
+                "active_user_goal": "Perform survival analysis stratified by treatment adherence on my attached data",
+                "conversation_intent_summary": "Perform survival analysis stratified by treatment adherence on my attached data",
+                "unresolved_user_constraints": [],
+            }
+        },
+        "agents": {
+            "executor": {"run_status": "idle"},
+            "human_review": {"before_run_decision": None, "final_decision": None},
+            "qa": {},
+        },
+        "meta": {
+            "awaiting_user_clarification": True,
+            "clarification_return_node": "qa",
+            "clarification_kind": "qa_followup",
+            "pending_question": "Perform survival analysis stratified by treatment adherence on my attached data",
+            "workflow_trace": ["orchestrator", "qa", "orchestrator"],
+            "last_user_message_hash": "stalehash",
+        },
+    }
+
+    updated = orchestrator.orchestrator_node(
+        state,
+        _LLM("not-json"),
+        ["clarification", "qa", "generate_code", "end"],
+    )
+
+    assert updated["next_action"] == "generate_code"
+
+
+def test_derive_planner_memory_preserves_goal_during_clarification() -> None:
+    _install_langchain_and_langgraph_stubs()
+    state_logic = importlib.import_module("graph.nodes.orchestrator.state_logic")
+
+    state = {
+        "messages": [SimpleNamespace(type="human", content="Use the uploaded schema", id="turn-2")],
+        "planner": {
+            "memory": {
+                "active_user_goal": "Perform survival analysis stratified by adherence",
+                "conversation_intent_summary": "Perform survival analysis stratified by adherence",
+                "unresolved_user_constraints": [],
+            }
+        },
+        "meta": {"awaiting_user_clarification": True},
+    }
+
+    memory = state_logic.derive_planner_memory(state)
+
+    assert memory["active_user_goal"] == "Perform survival analysis stratified by adherence"
+    assert memory["latest_user_update"] == "Use the uploaded schema"
 
 
 def test_orchestrator_regenerate_before_run_routes_back_to_generate_code() -> None:
@@ -906,6 +1058,47 @@ def test_orchestrator_ends_deterministically_after_completed_rag_db_answer() -> 
 
     assert updated["next_action"] == "end"
     assert updated["meta"]["workflow_milestone"] == "answered"
+    assert updated["meta"]["completion_status"] == "complete"
+    assert len(llm.calls) == 0
+
+
+def test_orchestrator_ends_after_completed_db_rag_sql_execution() -> None:
+    _install_langchain_and_langgraph_stubs()
+    orchestrator = importlib.import_module("graph.nodes.orchestrator")
+
+    llm = _LLM('{"action":"rag_db_qa","thought":"keep querying"}')
+    state = {
+        "messages": [
+            SimpleNamespace(type="human", content="yes"),
+            SimpleNamespace(type="ai", content="Read-only SQL execution completed with 1 result row(s)."),
+        ],
+        "output": {
+            "qa_response": "Read-only SQL execution completed with 1 result row(s).",
+            "generated_sql": 'SELECT "AGE" FROM "Form 1A"',
+        },
+        "observations": [],
+        "last_action": "human_review_rag_db_sql_execution",
+        "orchestrator": {},
+        "agents": {
+            "executor": {"run_status": "idle"},
+            "human_review": {"before_run_decision": None, "final_decision": None},
+            "rag_db_qa": {
+                "status": "done",
+                "active_thread": False,
+                "thread_status": "completed",
+            },
+        },
+        "meta": {"workflow_trace": ["orchestrator", "human_review_rag_db_sql_execution"]},
+    }
+
+    updated = orchestrator.orchestrator_node(
+        llm=llm,
+        state=state,
+        available_actions=["qa", "rag_db_qa", "human_review_rag_db_sql_execution", "end"],
+    )
+
+    assert updated["next_action"] == "end"
+    assert updated["meta"]["workflow_milestone"] == "db_rag_sql_completed"
     assert updated["meta"]["completion_status"] == "complete"
     assert len(llm.calls) == 0
 

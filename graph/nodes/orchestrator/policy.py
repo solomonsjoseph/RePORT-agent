@@ -5,6 +5,7 @@ from functools import lru_cache
 from ...state import AgentState, MetaKeys
 from ..state_helpers import get_agent_state
 from .policy_contract import DEFAULT_POLICY_PATH, OrchestratorPolicyContract, load_policy_contract
+from utils.message_attachments import latest_attachment_summary, latest_message_attachments
 
 
 def _latest_human_message(state: AgentState) -> str:
@@ -12,6 +13,14 @@ def _latest_human_message(state: AgentState) -> str:
         if getattr(message, "type", None) == "human":
             return str(getattr(message, "content", "") or "").strip().lower()
     return ""
+
+
+def _latest_message_attachments(state: AgentState) -> list[dict[str, str]]:
+    return latest_message_attachments(state)
+
+
+def _latest_attachment_summary(state: AgentState) -> dict[str, object]:
+    return latest_attachment_summary(state)
 
 
 def _is_explicit_code_request(state: AgentState) -> bool:
@@ -40,6 +49,71 @@ def _is_explicit_code_request(state: AgentState) -> bool:
 def _has_uploaded_dataset(state: AgentState) -> bool:
     datasets = dict((state.get("artifacts") or {}).get("datasets") or {})
     return any(dataset.get("kind") == "uploaded" for dataset in datasets.values())
+
+
+def _has_local_dataframe_artifact(state: AgentState) -> bool:
+    datasets = dict((state.get("artifacts") or {}).get("datasets") or {})
+    return bool(datasets)
+
+
+def _dataset_analysis_text(state: AgentState) -> str:
+    latest = " ".join(_latest_human_message(state).split())
+    meta = dict(state.get("meta") or {})
+    if (
+        meta.get(MetaKeys.AWAITING_USER_CLARIFICATION)
+        and meta.get(MetaKeys.CLARIFICATION_RETURN_NODE) == "qa"
+    ):
+        pending_question = " ".join(str(meta.get(MetaKeys.PENDING_QUESTION) or "").strip().lower().split())
+        if pending_question:
+            return f"{pending_question} {latest}".strip()
+    return latest
+
+
+def _is_dataset_analysis_request(state: AgentState) -> bool:
+    latest = _dataset_analysis_text(state)
+    if not latest:
+        return False
+
+    attachments = _latest_message_attachments(state)
+    has_dataset_attachment = any(item.get("kind") == "dataset" for item in attachments)
+    if not has_dataset_attachment and not _has_local_dataframe_artifact(state):
+        return False
+
+    action_markers = (
+        "perform",
+        "analy",
+        "fit",
+        "plot",
+        "stratif",
+        "regress",
+        "summar",
+        "clean",
+        "transform",
+        "compare",
+        "estimate",
+        "calculate",
+        "compute",
+        "run",
+        "model",
+    )
+    analysis_domain_markers = (
+        "survival analysis",
+        "kaplan-meier",
+        "kaplan meier",
+        "cox model",
+        "cox regression",
+        "treatment adherence",
+        "adherence",
+        "dataset",
+        "data",
+        "csv",
+        "cohort",
+        "schema",
+    )
+
+    return any(marker in latest for marker in action_markers) and any(
+        marker in latest for marker in analysis_domain_markers
+    )
 
 
 def _mentions_explicit_rag_database(text: str) -> bool:
@@ -93,6 +167,7 @@ def _always(_state: AgentState) -> bool:
 
 
 PREDICATE_REGISTRY = {
+    "dataset_analysis_request": _is_dataset_analysis_request,
     "explicit_code_request": _is_explicit_code_request,
     "prefer_rag_db_qa": _prefer_rag_db_qa,
     "always": _always,

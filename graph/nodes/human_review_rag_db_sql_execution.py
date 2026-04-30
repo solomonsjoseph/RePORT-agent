@@ -5,6 +5,8 @@ from typing import Any
 
 from langgraph.types import interrupt
 
+from ..conversation_events import append_conversation_event, build_review_decision_event
+from ..state import MetaKeys
 from .rag_db_qa import _deserialize_prepared_sql_candidate, _execute_prepared_sql_candidate
 from .state_helpers import update_agent_state
 
@@ -51,7 +53,18 @@ def human_review_rag_db_sql_execution_node(state, service):
     suggestion = str(feedback.get("suggestion") or feedback.get("feedback") or feedback.get("message") or "").strip()
 
     if action == "approve":
-        return _execute_prepared_sql_candidate(state, rag_state, candidate, service)
+        updated_state = append_conversation_event(
+            state,
+            build_review_decision_event(
+                actor="human_review_rag_db_sql_execution",
+                user_turn_hash=str((state.get("meta") or {}).get(MetaKeys.LAST_USER_MESSAGE_HASH) or "").strip() or None,
+                review_kind="rag_db_sql_execution",
+                decision="approve",
+                text="Approved prepared DB-RAG SQL for execution.",
+                status="done",
+            ),
+        )
+        return _execute_prepared_sql_candidate(updated_state, rag_state, candidate, service)
 
     explanation = (
         "Human requested SQL regeneration."
@@ -78,4 +91,15 @@ def human_review_rag_db_sql_execution_node(state, service):
             "rag_db_qa": rag_state,
         },
     }
+    updated_state = append_conversation_event(
+        updated_state,
+        build_review_decision_event(
+            actor="human_review_rag_db_sql_execution",
+            user_turn_hash=str((state.get("meta") or {}).get(MetaKeys.LAST_USER_MESSAGE_HASH) or "").strip() or None,
+            review_kind="rag_db_sql_execution",
+            decision=action or "regenerate",
+            text=suggestion,
+            status="done",
+        ),
+    )
     return update_agent_state(updated_state, "rag_db_qa", rag_state)

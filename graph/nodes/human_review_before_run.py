@@ -1,5 +1,7 @@
 from langgraph.types import interrupt
 from langchain_core.messages import HumanMessage
+from ..conversation_events import append_conversation_event, build_review_decision_event
+from ..state import MetaKeys
 from .state_helpers import update_agent_state
 
 NODE_NAME = "human_review_before_run"
@@ -28,6 +30,17 @@ def human_review_before_run_node(state):
         "messages": messages,
         "meta": meta,
     }
+    updated_state = append_conversation_event(
+        updated_state,
+        build_review_decision_event(
+            actor="human_review_before_run",
+            user_turn_hash=str(meta.get(MetaKeys.LAST_USER_MESSAGE_HASH) or "").strip() or None,
+            review_kind="before_run_review",
+            decision=str(decision or ""),
+            text=str(suggestion or ("Approved generated code for execution." if decision == "approve" else "Requested code regeneration before execution.")),
+            status="done",
+        ),
+    )
     return update_agent_state(
         updated_state,
         "human_review",

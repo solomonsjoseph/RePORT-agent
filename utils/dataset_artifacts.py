@@ -66,6 +66,24 @@ def register_dataset_artifact(
     }
 
 
+def build_dataset_artifacts_patch(
+    current_artifacts: dict[str, Any] | None,
+    artifact: dict[str, Any] | None,
+    *,
+    make_active: bool = True,
+) -> dict[str, Any]:
+    artifacts = dict(current_artifacts or {})
+    if not artifact:
+        return artifacts
+
+    datasets = dict(artifacts.get("datasets") or {})
+    datasets[artifact["id"]] = artifact
+    artifacts["datasets"] = datasets
+    if make_active:
+        artifacts["active_dataset_id"] = artifact["id"]
+    return artifacts
+
+
 def load_dataset_artifact(artifact: dict[str, Any]) -> tuple[pd.DataFrame, dict[str, Any]]:
     df = pd.read_parquet(artifact["path"])
     schema_path = artifact.get("schema_path")

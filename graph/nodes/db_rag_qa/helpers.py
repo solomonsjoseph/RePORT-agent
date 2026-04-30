@@ -15,6 +15,15 @@ from utils.message_window import window_messages
 
 from ...state import AgentState, MetaKeys
 from ...workflow_config import DB_RAG_RECENT_TURNS, MAX_ERROR_ITERATIONS
+from ...conversation_events import (
+    append_conversation_event,
+    build_assistant_event,
+    build_clarification_event,
+    build_error_event,
+    build_review_request_event,
+    build_sql_event,
+    store_thread_artifact,
+)
 from ..state_helpers import clear_clarification_meta
 
 _SUPPORTED_PROVIDERS = {"openai", "anthropic"}
@@ -336,6 +345,11 @@ def _replace_rag_state(state: AgentState, rag_state: dict[str, Any]) -> AgentSta
     }
 
 
+def _current_user_turn_hash(state: AgentState) -> str | None:
+    meta = dict(state.get("meta") or {})
+    return str(meta.get(MetaKeys.LAST_USER_MESSAGE_HASH) or "").strip() or None
+
+
 def _append_ai_response(state: AgentState, text: str) -> AgentState:
     messages = list(state.get("messages", []))
     messages.append(AIMessage(content=text))
@@ -351,6 +365,89 @@ def _append_ai_response(state: AgentState, text: str) -> AgentState:
     }
 
 
+def _append_assistant_event(state: AgentState, text: str) -> AgentState:
+    return append_conversation_event(
+        state,
+        build_assistant_event(
+            actor="rag_db_qa",
+            user_turn_hash=_current_user_turn_hash(state),
+            text=text,
+            status="done",
+        ),
+    )
+
+
+def _append_clarification_event(state: AgentState, text: str) -> AgentState:
+    return append_conversation_event(
+        state,
+        build_clarification_event(
+            actor="rag_db_qa",
+            user_turn_hash=_current_user_turn_hash(state),
+            text=text,
+            status="active",
+        ),
+    )
+
+
+def _store_sql_artifact(state: AgentState, sql: str, summary: str) -> tuple[AgentState, str]:
+    updated_state = store_thread_artifact(
+        state,
+        {
+            "kind": "sql",
+            "producer": "rag_db_qa",
+            "mime": "text/sql",
+            "summary": summary,
+            "content": sql,
+        },
+    )
+    artifact_id = next(reversed(dict(updated_state.get("artifacts") or {}).get("files") or {}))
+    return updated_state, artifact_id
+
+
+def _append_sql_candidate_events(state: AgentState, candidate: dict[str, Any]) -> AgentState:
+    sql_text = str(candidate.get("sql") or "").strip()
+    updated_state, artifact_id = _store_sql_artifact(
+        state,
+        sql=sql_text,
+        summary="Prepared read-only SQL candidate for DB-RAG review.",
+    )
+    updated_state = append_conversation_event(
+        updated_state,
+        build_sql_event(
+            actor="rag_db_qa",
+            user_turn_hash=_current_user_turn_hash(updated_state),
+            artifact_id=artifact_id,
+            text="Prepared read-only SQL candidate.",
+            status="done",
+        ),
+    )
+    return append_conversation_event(
+        updated_state,
+        build_review_request_event(
+            actor="rag_db_qa",
+            user_turn_hash=_current_user_turn_hash(updated_state),
+            review_kind="rag_db_sql_execution",
+            text="Prepared SQL is awaiting explicit human review before execution.",
+            artifact_id=artifact_id,
+            status="active",
+        ),
+    )
+
+
+def _append_column_review_request_event(state: AgentState, text: str) -> AgentState:
+    return append_conversation_event(
+        state,
+        build_review_request_event(
+            actor="rag_db_qa",
+            user_turn_hash=_current_user_turn_hash(state),
+            review_kind="rag_db_column_selection",
+            text=text,
+            artifact_id=None,
+            status="active",
+        ),
+    )
+
+
 def _clear_output_error(state: AgentState) -> AgentState:
     output = dict(state.get("output") or {})
     output.pop("error", None)
@@ -363,7 +460,7 @@ def _clear_output_error(state: AgentState) -> AgentState:
 def _append_sql_error_response(state: AgentState, error_payload: dict[str, str]) -> AgentState:
     message = str(error_payload.get("message") or "Unknown DB-RAG SQL error.")
     response_text = (
-        "DB-RAG SQL execution failed and the workflow stopped.\n\n"
+        "DB-RAG SQL execution failed and needs revision before it can continue.\n\n"
         f"Details: {error_payload.get('type')}: {message}"
     )
     messages = list(state.get("messages", []))
@@ -373,12 +470,23 @@ def _append_sql_error_response(state: AgentState, error_payload: dict[str, str])
     output["error"] = error_payload
     observations = list(state.get("observations", []))
     observations.append("rag_db_qa: sql execution failed")
-    return {
+    updated = {
         **state,
         "messages": messages,
         "output": output,
         "observations": observations,
     }
+    updated = _append_assistant_event(updated, response_text)
+    return append_conversation_event(
+        updated,
+        build_error_event(
+            actor="rag_db_qa",
+            user_turn_hash=_current_user_turn_hash(updated),
+            text=response_text,
+            error=error_payload,
+            status="error",
+        ),
+    )
 
 
 def _store_sql_candidate_output(state: AgentState, candidate: dict[str, Any]) -> AgentState:
@@ -423,11 +531,20 @@ def _execute_prepared_sql_candidate(
         updated = _append_sql_error_response(state, error_payload)
         updated["meta"] = clear_clarification_meta(updated.get("meta") or {})
         rag_state.pop("pending_sql_candidate", None)
-        rag_state.pop("pending_column_review", None)
+        approved_review["status"] = "needs_revision"
+        feedback_history = list(approved_review.get("feedback_history") or [])
+        feedback_history.append(
+            {
+                "action": "sql_execution_error",
+                "feedback": str(exc),
+            }
+        )
+        approved_review["feedback_history"] = feedback_history
+        rag_state["pending_column_review"] = approved_review
         rag_state["error"] = error_payload
         rag_state["last_database_question"] = candidate.question
         rag_state["thread_status"] = "error"
-        return _finalize_rag_state(updated, rag_state, status="error", active_thread=False)
+        return _finalize_rag_state(updated, rag_state, status="error", active_thread=True)
 
     response_text = (
         f'{_read_value(execution_result, "answer", "Read-only SQL execution completed.")}\n\n'
@@ -443,7 +560,7 @@ def _execute_prepared_sql_candidate(
     rag_state["error"] = None
     rag_state["last_database_question"] = active_candidate.question
     rag_state["thread_status"] = "completed"
-    return _finalize_rag_state(updated, rag_state, status="done", active_thread=True)
+    return _finalize_rag_state(updated, rag_state, status="done", active_thread=False)
 
 
 def _question_from_stale_qa_followup(state: AgentState, latest_question: str) -> str | None:

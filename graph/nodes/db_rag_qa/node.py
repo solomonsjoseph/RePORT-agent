@@ -8,6 +8,9 @@ from ..tool_routing import latest_user_message
 from .helpers import (
     _SUPPORTED_PROVIDERS,
     _append_ai_response,
+    _append_assistant_event,
+    _append_clarification_event,
+    _append_column_review_request_event,
     _bootstrap_active_intent,
     _classify_opt_in_reply,
     _clear_output_error,
@@ -27,6 +30,7 @@ from .helpers import (
     _serialize_context_summary,
     _serialize_intent,
     _serialize_prepared_sql_candidate,
+    _append_sql_candidate_events,
     _store_sql_candidate_output,
 )
 
@@ -52,6 +56,7 @@ def rag_db_qa_node(
             state,
             "DB-RAG currently requires an OpenAI or Anthropic provider. Switch the model provider and try again.",
         )
+        updated = _append_assistant_event(updated, updated["output"]["qa_response"])
         updated = _clear_output_error(updated)
         updated["meta"] = clear_clarification_meta(updated.get("meta") or {})
         rag_state["error"] = None
@@ -60,6 +65,7 @@ def rag_db_qa_node(
     readiness = service.readiness() if service is not None else {"ready": False, "message": "DB-RAG service is unavailable."}
     if not readiness.get("ready"):
         updated = _append_ai_response(state, str(readiness.get("message") or "DB-RAG assets are not ready."))
+        updated = _append_assistant_event(updated, updated["output"]["qa_response"])
         updated = _clear_output_error(updated)
         updated["meta"] = clear_clarification_meta(updated.get("meta") or {})
         rag_state["error"] = None
@@ -70,6 +76,8 @@ def rag_db_qa_node(
         candidate = _deserialize_prepared_sql_candidate(pending_sql_candidate)
         updated = _append_ai_response(state, _format_sql_candidate_response(_serialize_prepared_sql_candidate(candidate)))
         updated = _store_sql_candidate_output(updated, _serialize_prepared_sql_candidate(candidate))
+        updated = _append_assistant_event(updated, updated["output"]["qa_response"])
+        updated = _append_sql_candidate_events(updated, _serialize_prepared_sql_candidate(candidate))
         updated = _clear_output_error(updated)
         updated["meta"] = clear_clarification_meta(updated.get("meta") or {})
         rag_state["error"] = None
@@ -98,6 +106,7 @@ def rag_db_qa_node(
                     state,
                     "I couldn't recover the extraction goal from this thread. Please restate the subset request.",
                 )
+                updated = _append_assistant_event(updated, updated["output"]["qa_response"])
                 updated = _clear_output_error(updated)
                 updated["meta"] = clear_clarification_meta(updated.get("meta") or {})
                 rag_state.pop("pending_extraction_opt_in", None)
@@ -121,6 +130,8 @@ def rag_db_qa_node(
             review_payload["status"] = "awaiting_review"
 
             updated = _append_ai_response(state, _format_column_review_response("", review_payload, revised=True))
+            updated = _append_assistant_event(updated, updated["output"]["qa_response"])
+            updated = _append_column_review_request_event(updated, "DB-RAG column selection is awaiting human review.")
             updated = _clear_output_error(updated)
             updated["meta"] = clear_clarification_meta(updated.get("meta") or {})
             rag_state["pending_column_review"] = review_payload
@@ -137,6 +148,7 @@ def rag_db_qa_node(
                 state,
                 "Understood. I won't prepare table/column selection for extraction. Ask a metadata question anytime.",
             )
+            updated = _append_assistant_event(updated, updated["output"]["qa_response"])
             updated = _clear_output_error(updated)
             updated["meta"] = clear_clarification_meta(updated.get("meta") or {})
             rag_state.pop("pending_extraction_opt_in", None)
@@ -158,6 +170,7 @@ def rag_db_qa_node(
                 state,
                 "Please reply with 'yes' to proceed with table/column selection for extraction, or 'no' to skip it.",
             )
+            updated = _append_clarification_event(updated, updated["output"]["qa_response"])
             updated = _clear_output_error(updated)
             updated["meta"] = set_clarification_meta(
                 updated.get("meta", {}),
@@ -189,6 +202,8 @@ def rag_db_qa_node(
         review_payload["status"] = "awaiting_review"
 
         updated = _append_ai_response(state, _format_column_review_response("", review_payload, revised=True))
+        updated = _append_assistant_event(updated, updated["output"]["qa_response"])
+        updated = _append_column_review_request_event(updated, "DB-RAG column selection is awaiting human review.")
         updated = _clear_output_error(updated)
         updated["meta"] = clear_clarification_meta(updated.get("meta") or {})
         rag_state["active_intent"] = revised_intent
@@ -218,6 +233,7 @@ def rag_db_qa_node(
                 f"Details: {error_payload['type']}: {error_payload['message']}"
             )
             updated = _append_ai_response(state, response_text)
+            updated = _append_assistant_event(updated, updated["output"]["qa_response"])
             output = dict(updated.get("output") or {})
             output["error"] = error_payload
             updated["output"] = output
@@ -231,6 +247,8 @@ def rag_db_qa_node(
 
         updated = _append_ai_response(state, _format_sql_candidate_response(candidate_payload))
         updated = _store_sql_candidate_output(updated, candidate_payload)
+        updated = _append_assistant_event(updated, updated["output"]["qa_response"])
+        updated = _append_sql_candidate_events(updated, candidate_payload)
         updated = _clear_output_error(updated)
         updated["meta"] = clear_clarification_meta(updated.get("meta") or {})
         rag_state["last_database_question"] = approved_question
@@ -263,6 +281,8 @@ def rag_db_qa_node(
         review_payload["status"] = "awaiting_review"
 
         updated = _append_ai_response(state, _format_column_review_response("", review_payload, revised=True))
+        updated = _append_assistant_event(updated, updated["output"]["qa_response"])
+        updated = _append_column_review_request_event(updated, "DB-RAG column selection is awaiting human review.")
         updated = _clear_output_error(updated)
         updated["meta"] = clear_clarification_meta(updated.get("meta") or {})
         rag_state["last_database_question"] = goal_text
@@ -312,6 +332,7 @@ def rag_db_qa_node(
 
     if not bool(_read_value(answer, "needs_sql", False)):
         updated = _append_ai_response(state, str(_read_value(answer, "answer", "") or "").strip())
+        updated = _append_assistant_event(updated, updated["output"]["qa_response"])
         updated = _clear_output_error(updated)
         updated["meta"] = clear_clarification_meta(updated.get("meta") or {})
         rag_state.pop("pending_extraction_opt_in", None)
@@ -323,6 +344,7 @@ def rag_db_qa_node(
     opt_in_prompt = "Would you like me to identify the tables and columns suitable for this extraction?"
     if opt_out_goal_text and str(intent.get("goal_text") or "").strip() == opt_out_goal_text:
         updated = _append_ai_response(state, str(_read_value(answer, "answer", "") or "").strip())
+        updated = _append_assistant_event(updated, updated["output"]["qa_response"])
         updated = _clear_output_error(updated)
         updated["meta"] = clear_clarification_meta(updated.get("meta") or {})
         rag_state.pop("pending_extraction_opt_in", None)
@@ -336,6 +358,7 @@ def rag_db_qa_node(
         f"{answer_text}\n\n{opt_in_prompt}" if answer_text else opt_in_prompt
     )
     updated = _append_ai_response(state, response_text)
+    updated = _append_clarification_event(updated, updated["output"]["qa_response"])
     updated = _clear_output_error(updated)
     updated["meta"] = set_clarification_meta(
         updated.get("meta", {}),

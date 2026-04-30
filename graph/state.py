@@ -1,6 +1,15 @@
-from typing import Annotated, List, TypedDict
-from langchain_core.messages import BaseMessage
-from langgraph.graph.message import add_messages
+from typing import Annotated, Any, List, TypedDict
+
+try:
+    from langchain_core.messages import BaseMessage
+except ModuleNotFoundError:  # pragma: no cover - exercised indirectly in tests
+    BaseMessage = Any
+
+try:
+    from langgraph.graph.message import add_messages
+except ModuleNotFoundError:  # pragma: no cover - exercised indirectly in tests
+    def add_messages(current, new):
+        return (current or []) + (new or [])
 
 class AgentState(TypedDict):
     messages: Annotated[List[BaseMessage], add_messages]
@@ -58,5 +67,7 @@ class MetaKeys:
     WORKFLOW_MILESTONE = "workflow_milestone"
     COMPLETION_STATUS = "completion_status"
     BLOCKER_SIGNATURE = "blocker_signature"
+    SEMANTIC_LAST_ACTION = "semantic_last_action"
     ANALYSIS_DATASET_ID = "analysis_dataset_id"
     THREAD_ID = "thread_id"
+    NEXT_EVENT_SEQ = "next_event_seq"

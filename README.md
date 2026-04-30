@@ -1,5 +1,5 @@
 # RePORT-agent
-A multi-agent framework for RePORT India studies.
+An AI for RePORT India studies (demo).
 
 ## Orchestrator-driven workflow
 The LangGraph workflow is orchestrator-driven: a lightweight planning node chooses
@@ -16,7 +16,7 @@ usable.
 - **Code Generator**: produces Python analysis code.
 - **Executor**: runs generated code on the dataset.
 - **Error Handler**: fixes code issues and retries execution.
-- **Q&A**: answers general questions without code.
+- **Q&A**: subagent answers general questions.
 - **Human-in-the-loop**: review checkpoints before and after execution.
 - **Tool Handler**: executes MCP tools requested by agents.
 
@@ -51,9 +51,6 @@ create `.env` file and add your API keys inside the `.env` so we do not have to 
 ```
 OPENAI_API_KEY="YOUR_OPENAI_API_KEY"
 ANTHROPIC_API_KEY="YOUR_ANTHROPIC_API_KEY"
-DB_RAG_OPENROUTER_API_KEY=...
-DB_RAG_OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
-VOYAGE_API_KEY=...
 ```
 
 ### Run the app
@@ -61,14 +58,28 @@ VOYAGE_API_KEY=...
 python -m streamlit run streamlit_app.py
 ```
 
-### Activate Langraph
-In the pop up webpage, enter the API key in the field and click submit. If `.env` was set up previously, click submit directly.
+### Activate system
+In the pop up webpage, enter the API key in the field and click submit. If `.env` was set up previously, choose API provide and click submit directly.
 
-### RAG DB
-If you want to use the DB-RAG feature, place the source files in this repo under:
+## RAG DB
 
-- `local_data/db_rag_source/reviewed_annotated_json_files/*.json`
-- `local_data/db_rag_source/filtered_excel_files/*.xlsx`
+DB-RAG uses retrieval-augmented generation (RAG) to let users query a prebuilt database in natural language. Currently, DB-RAG access depends on the OpenRouter and Voyage APIs, configured with the following environment variables in `.env`:
+
+```
+DB_RAG_OPENROUTER_API_KEY
+VOYAGE_API_KEY
+```
+
+If user needs to use local resource to acees models, additional modification is needed.
+
+### Get started
+To use the DB-RAG feature, place the source files in this repo under:
+
+- `RePORT-agent/local_data/db_rag_source/reviewed_annotated_json_files/*.json`
+- `RePORT-agent/local_data/db_rag_source/filtered_excel_files/*.xlsx`
+
+Scripts realated to RAG development is under:
+`RePORT-agent/local_data/db_rag/`
 
 Supported DB-RAG indexing models:
 
@@ -77,13 +88,14 @@ Supported DB-RAG indexing models:
 - `Qwen/Qwen3-Embedding-8B`
 - `voyage-4-large`
 
-Build the DB-RAG assets from the repo root by selecting one of the supported indexing models:
+### Build indexing
+Build the DB-RAG assets from the repo root by selecting one of the supported indexing models. This creates the shared DuckDB asset plus model-specific DB-RAG index assets in `runtime/db_rag/`.:
 
 ```bash
 python -m db_rag.build_index --indexing-model Qwen/Qwen3-Embedding-4B
 ```
 
-To rebuild that model even if the index already exists, add `--rebuild`:
+To rebuild that model if the index already exists, add `--rebuild`:
 
 ```bash
 python -m db_rag.build_index --indexing-model Qwen/Qwen3-Embedding-4B --rebuild
@@ -97,14 +109,11 @@ Build behavior:
 - If the selected model-specific Chroma index and manifest already exist, the command exits without rebuilding and prints the exact `--rebuild` command to rerun.
 - A rebuild prints step-level progress while it loads source files, builds chunks, writes DuckDB, builds Chroma, and writes the manifest.
 
-Relevant `.env` keys for DB-RAG:
+Example for relevant `.env` keys for DB-RAG:
 
 ```env
 DB_RAG_EMBEDDING_MODEL=OpenAI/text-embedding-3-small
 DB_RAG_RERANKER_MODEL=cohere/rerank-v3.5
-DB_RAG_OPENROUTER_API_KEY=...
-DB_RAG_OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
-VOYAGE_API_KEY=...
 ```
 
 Supported DB-RAG reranker models:
@@ -116,31 +125,9 @@ Supported DB-RAG reranker models:
 
 Reranking is optional and does not require rebuilding the DB-RAG index.
 When `DB_RAG_RERANKER_MODEL` is set, the LangGraph DB-RAG app path uses it for column reranking as well.
-`voyageai` is included in `requirements.txt`, so no extra package install is required for Voyage support in this repo.
 
-For OpenAI indexing:
 
-```env
-DB_RAG_EMBEDDING_MODEL=OpenAI/text-embedding-3-small
-```
-
-For Qwen indexing through OpenRouter, use one of:
-
-```env
-DB_RAG_EMBEDDING_MODEL=Qwen/Qwen3-Embedding-4B
-DB_RAG_EMBEDDING_MODEL=Qwen/Qwen3-Embedding-8B
-```
-
-For Voyage indexing and reranking:
-
-```env
-DB_RAG_EMBEDDING_MODEL=voyage-4-large
-DB_RAG_RERANKER_MODEL=voyage/rerank-2.5
-VOYAGE_API_KEY=...
-```
-
-This creates the shared DuckDB asset plus model-specific DB-RAG index assets in `runtime/db_rag/`.
-
+### Quick test on RAG
 To run a quick terminal demo against the DB-RAG assets:
 
 ```bash
@@ -150,34 +137,7 @@ python -m db_rag.quick_test "your question here"
 If you omit the question, the script drops into interactive mode. If the runtime
 assets are missing, it rebuilds them first.
 
-To use DB-RAG in the Streamlit app:
-
-1. Build the DB-RAG index with the embedding model you want to use.
-2. Set `DB_RAG_EMBEDDING_MODEL` in `.env` to the same embedding model used for the built index.
-3. Optionally set `DB_RAG_RERANKER_MODEL` to one of the supported rerankers.
-4. Launch the app with `python -m streamlit run streamlit_app.py`.
-5. In the sidebar under `DB-RAG Runtime`, confirm the app shows the expected embedding index and reranker.
-
-Example `.env` for app usage:
-
-```env
-DB_RAG_EMBEDDING_MODEL=Qwen/Qwen3-Embedding-4B
-DB_RAG_RERANKER_MODEL=cohere/rerank-v3.5
-DB_RAG_OPENROUTER_API_KEY=...
-DB_RAG_OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
-```
-
-Example `.env` for Voyage-backed app usage:
-
-```env
-DB_RAG_EMBEDDING_MODEL=voyage-4-large
-DB_RAG_RERANKER_MODEL=voyage/rerank-2.5
-VOYAGE_API_KEY=...
-```
-
-If `DB_RAG_RERANKER_MODEL` is unset, the app uses the default ChromaDB column ordering with reranking disabled.
-
-To run the sibling-style retrieval benchmark against prebuilt DB-RAG assets:
+### Benchmark RAG
 
 ```bash
 python -m db_rag.benchmark.evaluate --benchmark db_rag/benchmark/data/retrieval_benchmark_100.csv --indexing-model Qwen/Qwen3-Embedding-4B
@@ -206,6 +166,33 @@ python -m db_rag.benchmark.plot_results --run-dir db_rag/benchmark/results/<tag>
 ```
 
 This writes `figure.png` into the same run directory.
+
+### Use DB-RAG in streamlit
+To use DB-RAG in the Streamlit app:
+
+1. Build the DB-RAG index with the embedding model you want to use.
+2. Set `DB_RAG_EMBEDDING_MODEL` in `.env` to the same embedding model used for the built index.
+3. Optionally set `DB_RAG_RERANKER_MODEL` to one of the supported rerankers.
+4. Launch the app with `python -m streamlit run streamlit_app.py`.
+5. In the sidebar under `DB-RAG Runtime`, confirm the app shows the expected embedding index and reranker.
+
+Example `.env` for app usage, for OpenRouter based model:
+
+```env
+DB_RAG_EMBEDDING_MODEL=Qwen/Qwen3-Embedding-4B
+DB_RAG_RERANKER_MODEL=cohere/rerank-v3.5
+DB_RAG_OPENROUTER_API_KEY=...
+```
+
+Example `.env` for Voyage-backed app usage:
+
+```env
+DB_RAG_EMBEDDING_MODEL=voyage-4-large
+DB_RAG_RERANKER_MODEL=voyage/rerank-2.5
+VOYAGE_API_KEY=...
+```
+
+If `DB_RAG_RERANKER_MODEL` is unset, the app uses the default ChromaDB column ordering with reranking disabled.
 
 ### Notes:
 - Synthetic demo data are included under `data/` folder.
