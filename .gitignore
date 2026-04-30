@@ -4,6 +4,7 @@
 *.png
 *.pdf
 __pycache__/
+tests/
 .env
 .streamlit/secrets.toml
 .venv/

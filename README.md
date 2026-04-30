@@ -48,7 +48,7 @@ pip install -r requirements.txt
 
 ### Build .env file
 create `.env` file and add your API keys inside the `.env` so we do not have to enter API key every time. For example:
-```
+```env
 OPENAI_API_KEY="YOUR_OPENAI_API_KEY"
 ANTHROPIC_API_KEY="YOUR_ANTHROPIC_API_KEY"
 ```
@@ -74,9 +74,9 @@ rm -rf runtime/datasets/*
 
 DB-RAG uses retrieval-augmented generation (RAG) to let users query a prebuilt database in natural language. Currently, DB-RAG access depends on the OpenRouter and Voyage APIs, configured with the following environment variables in `.env`:
 
-```
-DB_RAG_OPENROUTER_API_KEY
-VOYAGE_API_KEY
+```env
+DB_RAG_OPENROUTER_API_KEY=""
+VOYAGE_API_KEY=""
 ```
 
 If user needs to use local resource to acees models, additional modification is needed.
