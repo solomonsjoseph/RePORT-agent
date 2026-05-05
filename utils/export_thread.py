@@ -3,11 +3,13 @@ from __future__ import annotations
 import io
 import json
 import zipfile
+from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 
 from langchain_core.messages import AIMessage, HumanMessage
 
+from graph.memory.task_store import ensure_memory_state
 from graph.state_views import get_artifact_files, get_conversation_events
 from utils.display_history import build_display_history
 
@@ -107,11 +109,24 @@ def _artifact_manifest_and_files(state: dict) -> tuple[list[dict], list[tuple[st
 
 def build_thread_export(thread_id, provider, model_name, state):
     state = dict(state or {})
+    if isinstance(state.get("memory"), dict):
+        state["memory"] = deepcopy(state["memory"])
     display_messages = build_display_history(state)
     runtime_messages = serialize_messages(list(state.get("messages", [])))
     display_conversation = serialize_messages(display_messages)
     conversation_events = get_conversation_events(state)
     artifacts_manifest, artifact_files = _artifact_manifest_and_files(state)
+    _state, memory = ensure_memory_state(state)
+    memory_payload = {
+        "completed_tasks": memory["completed_tasks"],
+        "failed_tasks": memory["failed_tasks"],
+        "task_order": memory["task_order"],
+        "last_task_id": memory["last_task_id"],
+        "last_task_id_by_kind": memory["last_task_id_by_kind"],
+        "last_failed_task_id_by_kind": memory["last_failed_task_id_by_kind"],
+        "last_reference_resolution": memory["last_reference_resolution"],
+        "pending_reference_clarification": memory["pending_reference_clarification"],
+    }
     output = dict(state.get("output") or {})
     export_payload = {
         "thread_id": thread_id,
@@ -139,6 +154,7 @@ def build_thread_export(thread_id, provider, model_name, state):
         archive.writestr("conversation.json", json.dumps(export_payload, indent=2, ensure_ascii=False))
         archive.writestr("conversation.md", "\n".join(transcript_lines).strip() + "\n")
         archive.writestr("artifacts.json", json.dumps(artifacts_manifest, indent=2, ensure_ascii=False))
+        archive.writestr("memory.json", json.dumps(memory_payload, indent=2, ensure_ascii=False))
         for filename, data in artifact_files:
             archive.writestr(filename, data)
 
