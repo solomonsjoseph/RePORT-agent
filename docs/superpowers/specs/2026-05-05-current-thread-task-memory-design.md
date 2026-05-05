@@ -43,6 +43,8 @@ The same issue will appear in QA and code-generation workflows:
 6. Make reference resolution current-thread-only for the first slice.
 7. Validate all resolver outputs deterministically before routing.
 8. Avoid phrase-heavy heuristic routing. Use deterministic checks only for exact IDs, cache hits, missing memory, and safety validation.
+9. Use opaque internal task IDs with human-friendly display ordinals.
+10. Keep memory out of node prompts unless a reference has been resolved for the current turn.
 
 ## State Model
 
@@ -53,8 +55,9 @@ Suggested shape:
 ```python
 {
     "completed_tasks": {
-        "task_...": {
-            "task_id": "task_...",
+        "task_3f8a9c21": {
+            "task_id": "task_3f8a9c21",
+            "display_ordinal": 3,
             "kind": "db_rag_sql_extraction",
             "label": "diabetes index-case subset",
             "source_question": "Subset index cases with diabetes.",
@@ -71,29 +74,44 @@ Suggested shape:
             },
             "parent_task_id": None,
             "relationship_to_parent": None,
+            "provenance": {
+                "producer_node": "rag_db_qa",
+                "provider": "openai",
+                "model": "gpt-...",
+                "execution_mode": None
+            },
             "status": "completed",
             "created_at": "2026-05-05T00:00:00+00:00",
-            "completed_at": "2026-05-05T00:00:00+00:00"
+            "completed_at": "2026-05-05T00:00:00+00:00",
+            "last_enriched_at": None
         }
     },
-    "task_order": ["task_..."],
-    "last_task_id": "task_...",
+    "failed_tasks": {},
+    "task_order": ["task_3f8a9c21"],
+    "last_task_id": "task_3f8a9c21",
     "last_task_id_by_kind": {
-        "db_rag_sql_extraction": "task_..."
+        "db_rag_sql_extraction": "task_3f8a9c21"
     },
+    "last_failed_task_id_by_kind": {},
     "last_reference_resolution": {
         "user_message_hash": "...",
         "result": {
             "label": "resolved",
-            "task_id": "task_...",
+            "task_id": "task_3f8a9c21",
             "relationship": "revision",
             "intended_action": "add_fields",
             "confidence": "high",
+            "needs_reference": False,
             "reason": "Short diagnostic reason."
         }
-    }
+    },
+    "pending_reference_clarification": None
 }
 ```
+
+`task_id` values are opaque and stable. User-facing displays may show `display_ordinal` and `label`, such as "Task 3: diabetes index-case subset".
+
+`failed_tasks` is reserved for failed-but-reusable error contexts such as "fix that error". The first implementation slice may define the schema and helpers while leaving population of failed task cards to a later error-recovery slice.
 
 ## Layer Boundaries
 
@@ -108,6 +126,18 @@ The memory layer is not a replacement for existing state surfaces.
 - `meta` owns routing and control flags.
 
 Completed tasks must refer to artifacts and events by ID. They must not embed full SQL, code, dataframe contents, figures, or long transcripts.
+
+Active task shells belong in `agents[...]`, not in `memory.completed_tasks`. For example, a DB-RAG revision may keep this live provenance while the review workflow is still in progress:
+
+```python
+agents["rag_db_qa"]["active_task"] = {
+    "task_id": "task_9d41f02a",
+    "parent_task_id": "task_3f8a9c21",
+    "relationship_to_parent": "revision"
+}
+```
+
+The completed card is written to `memory.completed_tasks` only after the revised workflow reaches a stable result.
 
 ## Task Definition
 
@@ -135,14 +165,37 @@ Example:
 
 ```python
 {
-    "task_id": "task_008",
+    "task_id": "task_9d41f02a",
+    "display_ordinal": 8,
     "kind": "db_rag_sql_extraction",
     "source_question": "add gender too",
-    "parent_task_id": "task_007",
+    "parent_task_id": "task_3f8a9c21",
     "relationship_to_parent": "revision",
     "status": "completed"
 }
 ```
+
+Limited task-card metadata may be enriched after creation. Editable enrichment fields are:
+
+- `label`
+- `summary`
+- `tags`
+- `last_enriched_at`
+
+Provenance fields are immutable after task creation:
+
+- `task_id`
+- `display_ordinal`
+- `kind`
+- `source_question`
+- `goal_text`
+- `artifact_refs`
+- `event_refs`
+- `parent_task_id`
+- `relationship_to_parent`
+- `created_at`
+- `completed_at`
+- `status`
 
 ## Task Lifecycle Ownership
 
@@ -156,6 +209,7 @@ Initial lifecycle rules:
   - completed when the QA node emits a final assistant answer for a user turn
 - `db_rag_metadata_answer`
   - completed when DB-RAG emits a metadata answer and extraction prompt
+  - this completed answer task may coexist with an active `pending_extraction_opt_in` gate in `agents["rag_db_qa"]`
 - `db_rag_sql_extraction`
   - started when DB-RAG enters extraction flow
   - completed when reviewed SQL execution succeeds and saves a subset dataset
@@ -164,6 +218,8 @@ Initial lifecycle rules:
   - completed when final review approves the generated result
 
 The first implementation slice should support the schema and helpers generically, then populate memory for `db_rag_sql_extraction` first. QA and generated-code task completion can be added as separate slices.
+
+Artifact-inspection answers should create linked `qa_answer` tasks when the answer is substantive and user-visible. For example, "what SQL did you use?" should answer from the SQL artifact and write a `qa_answer` task with `parent_task_id` pointing to the original `db_rag_sql_extraction` task and `relationship_to_parent="inspect_artifact"`.
 
 ## LLM Responsibilities
 
@@ -183,33 +239,53 @@ Disallowed LLM responsibilities:
 - bypassing artifact existence checks
 - routing to an action whose required artifacts are missing
 
+Task completion must write a usable deterministic fallback label and summary without waiting for a separate LLM call. LLM enrichment is optional and lazy:
+
+```python
+label = "DB-RAG SQL extraction: subset index cases with diabetes"
+summary = "Completed DB-RAG SQL extraction and saved dataset subset-a13f."
+```
+
+The resolver may batch-enrich basic cards before resolution if needed, but task completion must not fail or slow down because enrichment is unavailable.
+
 ## Reference Resolution
 
-Reference resolution runs before planner routing, after the orchestrator has handled higher-priority live pending workflows.
+Reference resolution runs before normal dataset/code/DB-RAG routing and before planner fallback, after the orchestrator has handled higher-priority live pending workflows.
+
+Priority order:
+
+1. pending human review or interrupt
+2. pending clarification or DB-RAG opt-in
+3. pending deterministic workflow continuation
+4. memory reference resolver
+5. normal deterministic routing predicates
+6. planner fallback
+
+The planner may see the validated reference result as context, but the planner is not the primary resolver.
 
 Input to the resolver should be compact:
 
 ```python
 {
     "user_message": "add gender too",
-    "latest_task_id": "task_003",
+    "latest_task_id": "task_3f8a9c21",
     "completed_tasks": [
         {
-            "task_id": "task_001",
+            "task_id": "task_a10c0b91",
             "kind": "qa_answer",
             "label": "TB outcome variable explanation",
             "source_question": "What does OUTCOME mean?",
             "summary": "Explained OUTCOME coding."
         },
         {
-            "task_id": "task_002",
+            "task_id": "task_b22e13dd",
             "kind": "code_analysis",
             "label": "Kaplan-Meier plot by treatment group",
             "source_question": "Plot survival by treatment group.",
             "summary": "Generated Python code and a survival plot."
         },
         {
-            "task_id": "task_003",
+            "task_id": "task_3f8a9c21",
             "kind": "db_rag_sql_extraction",
             "label": "diabetes index-case subset",
             "source_question": "Subset index cases with diabetes.",
@@ -219,15 +295,18 @@ Input to the resolver should be compact:
 }
 ```
 
+Initial candidate selection should pass the latest 12 task cards plus any task explicitly mentioned by task ID, display ordinal, or artifact ID. The resolver should inspect task cards only during initial resolution. It should not inspect full SQL, code, figures, schemas, or dataset contents until after a task has been selected and validated.
+
 The resolver output must be structured:
 
 ```python
 {
     "label": "resolved",
-    "task_id": "task_003",
+    "task_id": "task_3f8a9c21",
     "relationship": "revision",
     "intended_action": "add_fields",
     "confidence": "high",
+    "needs_reference": false,
     "reason": "User asks to add a field to the latest extraction task."
 }
 ```
@@ -248,6 +327,8 @@ Allowed `relationship` values:
 - `use_as_input`
 - `compare`
 
+`unknown` results should include `needs_reference`. If `needs_reference=True`, route to clarification. If `needs_reference=False`, route as a fresh request.
+
 ## Resolver Guardrails
 
 The resolver should not run for every turn.
@@ -267,6 +348,25 @@ Use an LLM resolver when:
 
 Do not use large raw payloads in the resolver prompt. Pass compact task cards first. Only load full artifacts after a task has been resolved and validated.
 
+The resolver should live in a generic memory package, not under DB-RAG service code:
+
+```text
+graph/memory/
+  schema.py
+  task_store.py
+  reference_resolver.py
+  validation.py
+```
+
+The resolver should use a separate lightweight model configuration when available:
+
+```text
+MEMORY_RESOLVER_PROVIDER
+MEMORY_RESOLVER_MODEL
+```
+
+If no resolver-specific config is available, it may fall back to the active app provider/model.
+
 ## Deterministic Validation
 
 Every resolver output must be validated before routing.
@@ -279,7 +379,10 @@ Validation rules:
 - artifact IDs must point to artifacts of the expected kind
 - `ambiguous` must ask a clarification question with candidate task labels
 - `unknown` must not silently bind to an arbitrary task
+- `unknown + needs_reference=True` must ask clarification
+- `unknown + needs_reference=False` may route as a fresh request
 - `new_task` clears the active reference and routes normally
+- if the user explicitly selected a task ID or artifact ID, the resolver cannot override that direct address with `new_task`
 
 Reference resolution should write:
 
@@ -289,6 +392,45 @@ memory["last_reference_resolution"] = {
     "result": validated_result,
 }
 ```
+
+The full resolution object belongs in `memory`. For routing convenience, the orchestrator may also write compact derived keys into `meta`, such as:
+
+```python
+meta["resolved_task_id"] = "task_3f8a9c21"
+meta["resolved_task_relationship"] = "use_as_input"
+```
+
+These `meta` values are derived caches. If they conflict with `memory["last_reference_resolution"]`, memory wins.
+
+## Reference Clarification
+
+Ambiguous reference resolution and `unknown + needs_reference=True` should use the existing clarification mechanism with a new kind:
+
+```python
+MetaKeys.CLARIFICATION_KIND = "memory_reference_resolution"
+MetaKeys.CLARIFICATION_RETURN_NODE = "orchestrator"
+```
+
+Candidate state should live under `memory`, while `meta` carries only generic clarification routing keys:
+
+```python
+memory["pending_reference_clarification"] = {
+    "status": "awaiting_reply",
+    "user_message_hash": "...",
+    "original_user_message": "rerun it",
+    "candidates": [
+        {
+            "task_id": "task_3f8a9c21",
+            "display_ordinal": 3,
+            "kind": "db_rag_sql_extraction",
+            "label": "diabetes index-case subset",
+            "hint": "Saved dataset subset-a13f"
+        }
+    ]
+}
+```
+
+The clarification prompt should include compact task-kind and artifact/result hints, not full payloads. The user's answer may reference a display ordinal, task ID, or label text.
 
 ## Routing Behavior
 
@@ -307,7 +449,8 @@ Examples:
 
 - `resolved db_rag_sql_extraction + use_as_input`
   - route to `generate_code`
-  - set the referenced dataset artifact as the analysis dataset for that turn
+  - set `meta["analysis_dataset_id"]` to the referenced dataset artifact for that turn
+  - do not overwrite `artifacts["active_dataset_id"]` globally unless the user explicitly selects it
 
 - `resolved code_analysis + revision`
   - route to `generate_code`
@@ -324,6 +467,8 @@ Examples:
 - `new_task`
   - ignore memory reference for routing
   - run normal orchestrator policy
+
+Memory should enter node prompts only after reference resolution has selected a task for the current turn. Fresh requests should not receive broad completed-task history by default.
 
 ## DB-RAG First Slice
 
@@ -346,22 +491,39 @@ For a follow-up like "add gender too":
 
 1. Resolver identifies the last DB-RAG SQL extraction as a `revision`.
 2. Orchestrator routes to `rag_db_qa`.
-3. DB-RAG loads the parent task card and artifacts.
-4. DB-RAG creates a new intent linked to the parent task.
-5. DB-RAG opens a new column review.
-6. On completion, DB-RAG writes a new completed task with `parent_task_id`.
+3. DB-RAG creates an `agents["rag_db_qa"]["active_task"]` shell linked to the parent task.
+4. DB-RAG loads the parent task card and artifacts.
+5. DB-RAG creates a new intent linked to the parent task.
+6. DB-RAG opens a new column review.
+7. On completion, DB-RAG writes a new completed task with `parent_task_id`.
 
 For "what SQL did you use?":
 
 1. Resolver identifies the SQL extraction task as `inspect_artifact`.
 2. DB-RAG loads the SQL candidate artifact.
 3. DB-RAG answers directly without reopening review.
+4. DB-RAG writes a linked `qa_answer` completed task for the artifact-inspection answer.
 
 For "analyze that subset":
 
 1. Resolver identifies the SQL extraction task as `use_as_input`.
 2. Orchestrator routes to `generate_code`.
-3. The referenced dataset artifact becomes the selected analysis dataset for the turn.
+3. The referenced dataset artifact becomes `meta["analysis_dataset_id"]` for the turn.
+
+## Export Behavior
+
+Thread export should include task memory as structured metadata.
+
+Add `memory.json` to the export ZIP:
+
+```text
+memory.json = completed task cards, failed task cards, task order, and last reference resolution
+conversation.json = transcript/event history
+artifacts/files = payload artifacts
+datasets = dataset artifact manifests and files
+```
+
+`memory.json` must not duplicate full SQL/code/dataset payloads. It should reference artifact IDs.
 
 ## Testing Requirements
 
@@ -374,6 +536,9 @@ Add unit tests for memory helpers:
 - completed task cards reject non-JSON payloads
 - task cards store artifact references without embedding artifact payloads
 - cached reference resolution is reused for the same user message hash
+- task IDs are opaque and display ordinals are assigned monotonically
+- failed task containers initialize on old states
+- editable enrichment fields can be updated while immutable provenance fields remain stable
 
 Add resolver tests:
 
@@ -382,7 +547,11 @@ Add resolver tests:
 - missing task ID is rejected
 - missing required artifact is rejected
 - `ambiguous` output routes to clarification
+- `unknown + needs_reference=True` routes to clarification
+- `unknown + needs_reference=False` routes as fresh
 - resolver is skipped when a live pending workflow exists
+- resolver sees the latest 12 task cards plus exact direct-address matches
+- resolver prompt uses task cards only and does not include artifact payloads
 
 Add DB-RAG tests:
 
@@ -391,6 +560,12 @@ Add DB-RAG tests:
 - "what SQL did you use?" resolves to the completed task and answers from SQL artifact
 - "add gender too" resolves to the completed task and opens a new column review
 - "analyze that subset" resolves to the dataset artifact and routes to code generation
+- "what SQL did you use?" creates a linked `qa_answer` task
+
+Add export tests:
+
+- thread export includes `memory.json`
+- `memory.json` contains task references but not full artifact payloads
 
 ## Non-Goals
 
@@ -401,11 +576,13 @@ Add DB-RAG tests:
 - Letting LLMs decide workflow completion
 - Keeping old pending DB-RAG pointers alive after completion
 - Replacing `conversation_events` or `artifacts`
+- Populating QA and code-analysis tasks in the first implementation slice
+- Streamlit Recent Work UI in the first implementation slice
 
 ## Open Implementation Notes
 
 - `AgentState` should add `memory: dict`, while helper code should also tolerate older checkpoints without this key.
-- The reference resolver can initially share the lightweight classifier model path used by DB-RAG classifiers.
 - The resolver prompt should use compact task cards and a strict JSON output contract.
 - The first slice should not require embeddings. Semantic resolution can be LLM-only over a small card list.
-- If completed tasks grow large, pass only the latest N task cards plus kind-specific recent task pointers.
+- If completed tasks grow large, pass only the latest 12 task cards plus exact direct-address matches.
+- Backend memory cards should include display fields from day one. Streamlit can expose a read-only Recent Work expander in a later slice.
