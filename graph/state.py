@@ -23,6 +23,7 @@ class AgentState(TypedDict):
     planner: dict
     agents: dict
     node_data: dict
+    memory: dict
 
     # extensibility
     meta: dict  # free-form (retry counts, tool info, etc.)
@@ -73,3 +74,8 @@ class MetaKeys:
     ANALYSIS_DATASET_PENDING_REQUEST = "analysis_dataset_pending_request"
     THREAD_ID = "thread_id"
     NEXT_EVENT_SEQ = "next_event_seq"
+    RESOLVED_TASK_ID = "resolved_task_id"
+    RESOLVED_TASK_KIND = "resolved_task_kind"
+    RESOLVED_TASK_RELATIONSHIP = "resolved_task_relationship"
+    RESOLVED_TASK_INTENDED_ACTION = "resolved_task_intended_action"
+    RESOLVED_TASK_USER_MESSAGE_HASH = "resolved_task_user_message_hash"
