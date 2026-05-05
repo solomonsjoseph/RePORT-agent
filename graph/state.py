@@ -69,5 +69,7 @@ class MetaKeys:
     BLOCKER_SIGNATURE = "blocker_signature"
     SEMANTIC_LAST_ACTION = "semantic_last_action"
     ANALYSIS_DATASET_ID = "analysis_dataset_id"
+    ANALYSIS_DATASET_CANDIDATE_IDS = "analysis_dataset_candidate_ids"
+    ANALYSIS_DATASET_PENDING_REQUEST = "analysis_dataset_pending_request"
     THREAD_ID = "thread_id"
     NEXT_EVENT_SEQ = "next_event_seq"

@@ -6,6 +6,7 @@ from uuid import uuid4
 import re
 
 from langchain_core.messages import AIMessage
+from db_rag.service.schema import _lookup_schema_variable_metadata
 from utils.dataset_artifacts import (
     DEFAULT_RUNTIME_ROOT,
     persist_dataset_artifact,
@@ -14,7 +15,7 @@ from utils.dataset_artifacts import (
 from utils.message_window import window_messages
 
 from ...state import AgentState, MetaKeys
-from ...workflow_config import DB_RAG_RECENT_TURNS, MAX_ERROR_ITERATIONS
+from ...workflow_config import DB_RAG_RECENT_TURNS
 from ...conversation_events import (
     append_conversation_event,
     build_assistant_event,
@@ -68,6 +69,10 @@ _NON_INFORMATIVE_FOLLOWUPS = {
     "please continue",
     "continue",
 }
+_EXTRACTION_OPT_IN_PROMPT = (
+    "Would you like me to identify the tables and columns needed for a data extraction "
+    "from this database question?"
+)
 
 
 def _looks_like_substantive_db_followup(text: str) -> bool:
@@ -156,6 +161,17 @@ def _serialize_columns(columns: Any) -> list[dict[str, str]]:
             }
         )
     return serialized
+
+
+def _artifact_content(state: AgentState, artifact_id: str | None) -> dict[str, Any]:
+    artifact_key = str(artifact_id or "").strip()
+    if not artifact_key:
+        return {}
+    artifacts = dict(state.get("artifacts") or {})
+    files = dict(artifacts.get("files") or {})
+    artifact = dict(files.get(artifact_key) or {})
+    content = artifact.get("content")
+    return dict(content) if isinstance(content, dict) else {}
 
 
 def _serialize_column_selection(selection: Any) -> dict[str, Any]:
@@ -267,29 +283,69 @@ def _bootstrap_active_intent(rag_state: dict[str, Any], question: str) -> dict[s
     }
 
 
+def _new_rag_state(*, question: str, intent: dict[str, Any], context_summary: dict[str, list[str]]) -> dict[str, Any]:
+    return {
+        "thread_status": "idle",
+        "active_thread": True,
+        "active_intent": intent,
+        "pending_extraction_opt_in": None,
+        "pending_column_review_artifact_id": None,
+        "approved_column_selection_artifact_id": None,
+        "pending_sql_candidate_artifact_id": None,
+        "last_database_question": question,
+        "last_retrieval_context": context_summary,
+        "error": None,
+    }
+
+
+def _reset_active_workflow_for_new_question(
+    rag_state: dict[str, Any],
+    *,
+    question: str,
+    intent: dict[str, Any],
+    context_summary: dict[str, list[str]],
+) -> dict[str, Any]:
+    del rag_state
+    return _new_rag_state(question=question, intent=intent, context_summary=context_summary)
+
+
+def _build_pending_extraction_opt_in(intent: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "status": "awaiting_reply",
+        "prompt": _EXTRACTION_OPT_IN_PROMPT,
+        "intent_id": intent["intent_id"],
+        "goal_text": intent["goal_text"],
+    }
+
+
 def _build_subset_dataset_id() -> str:
     return f"subset-{uuid4().hex[:8]}"
 
 
-def _build_subset_schema(dataframe: Any, selected_columns: list[dict[str, str]]) -> dict[str, dict[str, str]]:
+def _build_subset_schema(dataframe: Any, selected_columns: list[dict[str, str]]) -> dict[str, dict[str, Any]]:
     selected_by_name = {
         str(column.get("column") or "").strip(): column
         for column in list(selected_columns or [])
         if str(column.get("column") or "").strip()
     }
 
-    schema: dict[str, dict[str, str]] = {}
+    schema: dict[str, dict[str, Any]] = {}
     dtypes = getattr(dataframe, "dtypes", None)
     for column_name in list(getattr(dataframe, "columns", [])):
         column_key = str(column_name)
-        meta: dict[str, str] = {}
+        meta: dict[str, Any] = {}
         selected = selected_by_name.get(column_key, {})
-        description = str(selected.get("description") or "").strip()
+        table_name = str(selected.get("table") or "").strip()
+        reviewed_meta = _lookup_schema_variable_metadata(table_name, column_key)
+        description = str(
+            (reviewed_meta or {}).get("description") or selected.get("description") or ""
+        ).strip()
         if description:
             meta["description"] = description
-        table_name = str(selected.get("table") or "").strip()
-        if table_name:
-            meta["notes"] = f"Source table: {table_name}"
+        for field in ("values", "depends_on", "condition", "section_context"):
+            value = (reviewed_meta or {}).get(field)
+            if value is not None and value != "":
+                meta[field] = value
         if dtypes is not None:
             meta["dataType"] = str(dtypes[column_name])
         schema[column_key] = meta
@@ -299,17 +355,20 @@ def _build_subset_schema(dataframe: Any, selected_columns: list[dict[str, str]])
 def _persist_sql_subset_artifact(
     state: AgentState,
     candidate: Any,
-    approved_review: Any,
+    approved_selection: dict[str, Any],
     execution_result: Any,
+    *,
+    selection_artifact_id: str | None,
+    sql_candidate_artifact_id: str | None,
 ) -> tuple[AgentState, dict[str, Any]]:
     meta = dict(state.get("meta") or {})
     thread_id = str(meta.get(MetaKeys.THREAD_ID) or "").strip()
     if not thread_id:
         raise ValueError("DB-RAG SQL subset persistence requires a thread_id in state meta.")
 
-    selected_tables = _string_list(_read_value(approved_review, "tables", []) or _read_value(candidate, "tables", []))
+    selected_tables = _string_list(_read_value(approved_selection, "tables", []) or _read_value(candidate, "tables", []))
     selected_columns = _serialize_columns(
-        _read_value(approved_review, "columns", []) or _read_value(candidate, "columns", [])
+        _read_value(approved_selection, "columns", []) or _read_value(candidate, "columns", [])
     )
     artifact = persist_dataset_artifact(
         runtime_root=DEFAULT_RUNTIME_ROOT,
@@ -320,7 +379,8 @@ def _persist_sql_subset_artifact(
         schema=_build_subset_schema(_read_value(execution_result, "dataframe"), selected_columns),
         provenance={
             "source": "db_rag_sql",
-            "question": str(_read_value(candidate, "question", "") or "").strip(),
+            "source_question": str(_read_value(candidate, "source_question", _read_value(candidate, "question", "")) or "").strip(),
+            "goal_text": str(_read_value(candidate, "goal_text", _read_value(candidate, "question", "")) or "").strip(),
             "sql": str(_read_value(execution_result, "sql", _read_value(candidate, "sql", "")) or "").strip(),
             "source_tables": _string_list(
                 _read_value(execution_result, "source_tables", []) or _read_value(candidate, "tables", [])
@@ -328,9 +388,11 @@ def _persist_sql_subset_artifact(
             "selected_tables": selected_tables,
             "selected_columns": selected_columns,
             "selection_id": str(
-                _read_value(candidate, "selection_id", _read_value(approved_review, "selection_id", "")) or ""
+                _read_value(approved_selection, "selection_id", _read_value(candidate, "selection_id", "")) or ""
             ).strip(),
-            "feedback_history": list(_read_value(approved_review, "feedback_history", []) or []),
+            "selection_artifact_id": str(selection_artifact_id or "").strip(),
+            "sql_candidate_artifact_id": str(sql_candidate_artifact_id or "").strip(),
+            "feedback_history": list(_read_value(approved_selection, "feedback_history", []) or []),
         },
     )
     return register_dataset_artifact(state, artifact, make_active=True), artifact
@@ -404,18 +466,80 @@ def _store_sql_artifact(state: AgentState, sql: str, summary: str) -> tuple[Agen
     return updated_state, artifact_id
 
 
-def _append_sql_candidate_events(state: AgentState, candidate: dict[str, Any]) -> AgentState:
-    sql_text = str(candidate.get("sql") or "").strip()
-    updated_state, artifact_id = _store_sql_artifact(
+def _store_column_selection_artifact(
+    state: AgentState,
+    *,
+    selection: dict[str, Any],
+    source_question: str,
+    goal_text: str,
+    intent_snapshot: dict[str, Any],
+    retrieval_summary: dict[str, list[str]],
+    summary: str,
+) -> tuple[AgentState, str]:
+    updated_state = store_thread_artifact(
         state,
-        sql=sql_text,
-        summary="Prepared read-only SQL candidate for DB-RAG review.",
+        {
+            "kind": "db_rag_column_selection",
+            "producer": "rag_db_qa",
+            "mime": "application/json",
+            "summary": summary,
+            "content": {
+                "selection_id": selection["selection_id"],
+                "source_question": source_question,
+                "goal_text": goal_text,
+                "intent_snapshot": intent_snapshot,
+                "retrieval_summary": retrieval_summary,
+                "tables": list(selection["tables"]),
+                "columns": list(selection["columns"]),
+                "rationale": selection["rationale"],
+                "feedback_history": list(selection.get("feedback_history") or []),
+                "status": selection.get("status", "awaiting_review"),
+            },
+        },
     )
+    artifact_id = next(reversed(dict(updated_state.get("artifacts") or {}).get("files") or {}))
+    return updated_state, artifact_id
+
+
+def _store_sql_candidate_artifact(
+    state: AgentState,
+    *,
+    candidate: dict[str, Any],
+    selection_artifact_id: str,
+    source_question: str,
+    goal_text: str,
+    intent_snapshot: dict[str, Any],
+) -> tuple[AgentState, str]:
+    updated_state = store_thread_artifact(
+        state,
+        {
+            "kind": "db_rag_sql_candidate",
+            "producer": "rag_db_qa",
+            "mime": "application/json",
+            "summary": "Prepared read-only SQL candidate for DB-RAG review.",
+            "content": {
+                "sql_candidate_id": candidate.get("sql_candidate_id") or f"sql:{candidate['selection_id']}",
+                "selection_artifact_id": selection_artifact_id,
+                "source_question": source_question,
+                "goal_text": goal_text,
+                "intent_snapshot": intent_snapshot,
+                "tables": list(candidate["tables"]),
+                "columns": list(candidate["columns"]),
+                "sql": candidate["sql"],
+                "status": candidate.get("status", "prepared"),
+            },
+        },
+    )
+    artifact_id = next(reversed(dict(updated_state.get("artifacts") or {}).get("files") or {}))
+    return updated_state, artifact_id
+
+
+def _append_sql_candidate_events(state: AgentState, candidate: dict[str, Any], artifact_id: str) -> AgentState:
     updated_state = append_conversation_event(
-        updated_state,
+        state,
         build_sql_event(
             actor="rag_db_qa",
-            user_turn_hash=_current_user_turn_hash(updated_state),
+            user_turn_hash=_current_user_turn_hash(state),
             artifact_id=artifact_id,
             text="Prepared read-only SQL candidate.",
             status="done",
@@ -434,7 +558,7 @@ def _append_sql_candidate_events(state: AgentState, candidate: dict[str, Any]) -
     )
 
 
-def _append_column_review_request_event(state: AgentState, text: str) -> AgentState:
+def _append_column_review_request_event(state: AgentState, *, artifact_id: str, text: str) -> AgentState:
     return append_conversation_event(
         state,
         build_review_request_event(
@@ -442,7 +566,7 @@ def _append_column_review_request_event(state: AgentState, text: str) -> AgentSt
             user_turn_hash=_current_user_turn_hash(state),
             review_kind="rag_db_column_selection",
             text=text,
-            artifact_id=None,
+            artifact_id=artifact_id,
             status="active",
         ),
     )
@@ -506,22 +630,28 @@ def _execute_prepared_sql_candidate(
     service,
 ) -> AgentState:
     approved_review = dict(rag_state.get("pending_column_review") or {})
-    active_candidate = candidate
+    selection_artifact_id = str(
+        rag_state.get("approved_column_selection_artifact_id")
+        or rag_state.get("pending_column_review_artifact_id")
+        or ""
+    ).strip()
+    sql_candidate_artifact_id = str(rag_state.get("pending_sql_candidate_artifact_id") or "").strip()
+    approved_selection = _artifact_content(state, selection_artifact_id)
+    review_snapshot = dict(approved_selection or approved_review)
     try:
-        for attempt in range(MAX_ERROR_ITERATIONS + 1):
-            try:
-                execution_result = service.execute_prepared_sql(active_candidate)
-                break
-            except Exception as exc:
-                can_retry = (
-                    attempt < MAX_ERROR_ITERATIONS
-                    and hasattr(service, "repair_prepared_sql_candidate")
-                )
-                if not can_retry:
-                    raise
-                active_candidate = service.repair_prepared_sql_candidate(active_candidate, str(exc))
+        if not approved_selection:
+            raise ValueError("Approved column-selection artifact is missing during SQL execution.")
 
-        persisted_state, artifact = _persist_sql_subset_artifact(state, active_candidate, approved_review, execution_result)
+        execution_result = service.execute_prepared_sql(candidate)
+
+        persisted_state, artifact = _persist_sql_subset_artifact(
+            state,
+            candidate,
+            approved_selection,
+            execution_result,
+            selection_artifact_id=selection_artifact_id or None,
+            sql_candidate_artifact_id=sql_candidate_artifact_id or None,
+        )
     except Exception as exc:
         error_payload = {
             "category": "db_rag_sql",
@@ -531,16 +661,16 @@ def _execute_prepared_sql_candidate(
         updated = _append_sql_error_response(state, error_payload)
         updated["meta"] = clear_clarification_meta(updated.get("meta") or {})
         rag_state.pop("pending_sql_candidate", None)
-        approved_review["status"] = "needs_revision"
-        feedback_history = list(approved_review.get("feedback_history") or [])
+        review_snapshot["status"] = "needs_revision"
+        feedback_history = list(review_snapshot.get("feedback_history") or [])
         feedback_history.append(
             {
                 "action": "sql_execution_error",
                 "feedback": str(exc),
             }
         )
-        approved_review["feedback_history"] = feedback_history
-        rag_state["pending_column_review"] = approved_review
+        review_snapshot["feedback_history"] = feedback_history
+        rag_state["pending_column_review"] = review_snapshot
         rag_state["error"] = error_payload
         rag_state["last_database_question"] = candidate.question
         rag_state["thread_status"] = "error"
@@ -552,13 +682,13 @@ def _execute_prepared_sql_candidate(
         f'Saved dataset id: {artifact["id"]}'
     )
     updated = _append_ai_response(persisted_state, response_text)
-    updated = _store_sql_candidate_output(updated, _serialize_prepared_sql_candidate(active_candidate))
+    updated = _store_sql_candidate_output(updated, _serialize_prepared_sql_candidate(candidate))
     updated = _clear_output_error(updated)
     updated["meta"] = clear_clarification_meta(updated.get("meta") or {})
     rag_state.pop("pending_sql_candidate", None)
     rag_state.pop("pending_column_review", None)
     rag_state["error"] = None
-    rag_state["last_database_question"] = active_candidate.question
+    rag_state["last_database_question"] = candidate.question
     rag_state["thread_status"] = "completed"
     return _finalize_rag_state(updated, rag_state, status="done", active_thread=False)
 

@@ -5,6 +5,10 @@
 *.pdf
 __pycache__/
 tests/
+!tests/
+!tests/**/
+!tests/**/*
+tests/**/__pycache__/
 .env
 .streamlit/secrets.toml
 .venv/

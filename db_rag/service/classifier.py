@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import math
 import os
 from typing import Any
 
@@ -7,6 +9,86 @@ from utils.llm_response import coerce_text_content
 
 from db_rag.config import resolve_db_rag_reply_classifier_model
 from db_rag.generation import parse_json_object
+
+_NEW_HELPER_CONFIDENCE_THRESHOLD = 0.5
+
+
+def _unknown_result() -> dict[str, Any]:
+    return {"label": "unknown", "confidence": 0.0}
+
+
+def _normalize_classifier_result(
+    parsed: dict[str, Any],
+    *,
+    allowed_labels: set[str],
+) -> dict[str, Any]:
+    label = str(parsed.get("label") or "").strip().lower()
+    if label not in allowed_labels:
+        return _unknown_result()
+
+    try:
+        confidence = float(parsed.get("confidence", 0.0))
+    except (TypeError, ValueError):
+        confidence = 0.0
+    if not math.isfinite(confidence):
+        return _unknown_result()
+    confidence = max(0.0, min(1.0, confidence))
+    return {"label": label, "confidence": confidence}
+
+
+def _resolve_openai_client() -> Any | None:
+    try:
+        from openai import OpenAI as client_cls
+    except ModuleNotFoundError:
+        return None
+    return client_cls
+
+
+def _classify_new_helper(
+    *,
+    system_text: str,
+    user_text: str,
+    allowed_labels: set[str],
+    resolve_model=resolve_db_rag_reply_classifier_model,
+) -> dict[str, Any]:
+    model = resolve_model()
+    if not model:
+        return _unknown_result()
+
+    api_key = str(os.getenv("DB_RAG_REPLY_CLASSIFIER_API_KEY", "") or "").strip()
+    if not api_key:
+        api_key = str(os.getenv("OPENAI_API_KEY", "") or "").strip()
+    if not api_key:
+        return _unknown_result()
+
+    openai_client = _resolve_openai_client()
+    if openai_client is None:
+        return _unknown_result()
+
+    client_kwargs: dict[str, Any] = {"api_key": api_key}
+    base_url = str(os.getenv("DB_RAG_REPLY_CLASSIFIER_BASE_URL", "") or "").strip()
+    if base_url:
+        client_kwargs["base_url"] = base_url
+
+    try:
+        client = openai_client(**client_kwargs)
+        response = client.chat.completions.create(
+            model=model,
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": system_text},
+                {"role": "user", "content": user_text},
+            ],
+        )
+        content = coerce_text_content(getattr(response.choices[0].message, "content", ""))
+        parsed = parse_json_object(content) or {}
+    except Exception:
+        return _unknown_result()
+
+    result = _normalize_classifier_result(parsed, allowed_labels=allowed_labels)
+    if result["confidence"] < _NEW_HELPER_CONFIDENCE_THRESHOLD:
+        return _unknown_result()
+    return result
 
 
 def classify_pending_reply(
@@ -77,3 +159,58 @@ def classify_pending_reply(
         confidence = 0.0
     confidence = max(0.0, min(1.0, confidence))
     return {"label": label, "confidence": confidence}
+
+
+def classify_extraction_gate_message(
+    *,
+    pending_prompt: str,
+    user_message: str,
+    recent_transcript: str,
+    active_intent: dict[str, Any] | None,
+    resolve_model=resolve_db_rag_reply_classifier_model,
+) -> dict[str, Any]:
+    try:
+        active_intent_text = json.dumps(active_intent or {}, indent=2, sort_keys=True)
+    except Exception:
+        return _unknown_result()
+
+    return _classify_new_helper(
+        system_text=(
+            "You classify a free-text reply under a pending DB-RAG extraction clarification. "
+            "Return JSON only with keys label and confidence. "
+            "Allowed labels: new_question, reply_to_pending_gate, unknown."
+        ),
+        user_text=(
+            f"Pending prompt:\n{pending_prompt}\n\n"
+            f"Latest user message:\n{user_message}\n\n"
+            f"Recent transcript:\n{recent_transcript}\n\n"
+            f"Active intent:\n{active_intent_text}\n\n"
+            "Classify whether the latest message is a fresh self-contained DB-RAG question, "
+            "a reply to the pending extraction prompt, or unclear."
+        ),
+        allowed_labels={"new_question", "reply_to_pending_gate", "unknown"},
+        resolve_model=resolve_model,
+    )
+
+
+def classify_sql_review_feedback(
+    *,
+    feedback_text: str,
+    sql: str,
+    resolve_model=resolve_db_rag_reply_classifier_model,
+) -> dict[str, Any]:
+    return _classify_new_helper(
+        system_text=(
+            "You classify DB-RAG SQL review rejection feedback. "
+            "Return JSON only with keys label and confidence. "
+            "Allowed labels: sql_only_revision, selection_revision, unknown."
+        ),
+        user_text=(
+            f"SQL under review:\n{sql}\n\n"
+            f"Reviewer feedback:\n{feedback_text}\n\n"
+            "Classify whether the feedback asks to regenerate SQL from the same approved selection, "
+            "or whether it actually requires column/table selection revision."
+        ),
+        allowed_labels={"sql_only_revision", "selection_revision", "unknown"},
+        resolve_model=resolve_model,
+    )

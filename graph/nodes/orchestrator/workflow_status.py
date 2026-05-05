@@ -68,22 +68,20 @@ def derive_workflow_status(state: dict) -> dict:
             "blocker_signature": f"waiting_for_rag_db_extraction_opt_in:{intent_id}",
         }
 
-    pending_column_review = dict(rag_db_qa.get("pending_column_review") or {})
-    if pending_column_review.get("status") == "awaiting_review":
-        selection_id = pending_column_review.get("selection_id")
+    pending_column_review_artifact_id = str(rag_db_qa.get("pending_column_review_artifact_id") or "").strip()
+    if pending_column_review_artifact_id:
         return {
             "milestone": "awaiting_rag_db_column_review",
             "completion_status": "blocked_waiting",
-            "blocker_signature": f"waiting_for_rag_db_column_review:{selection_id}",
+            "blocker_signature": f"waiting_for_rag_db_column_review:{pending_column_review_artifact_id}",
         }
 
-    pending_sql_candidate = dict(rag_db_qa.get("pending_sql_candidate") or {})
-    if pending_sql_candidate.get("status") == "prepared":
-        selection_id = pending_sql_candidate.get("selection_id")
+    pending_sql_candidate_artifact_id = str(rag_db_qa.get("pending_sql_candidate_artifact_id") or "").strip()
+    if pending_sql_candidate_artifact_id:
         return {
             "milestone": "awaiting_rag_db_sql_review",
             "completion_status": "blocked_waiting",
-            "blocker_signature": f"waiting_for_rag_db_sql_review:{selection_id}",
+            "blocker_signature": f"waiting_for_rag_db_sql_review:{pending_sql_candidate_artifact_id}",
         }
 
     if error.get("category") == "db_rag_sql" and effective_last_action in {
@@ -96,9 +94,18 @@ def derive_workflow_status(state: dict) -> dict:
             "blocker_signature": f"db_rag_sql_error:{error.get('type')}:{_error_signature(error)}",
         }
 
+    if error.get("category") == "db_rag_review" and effective_last_action in {
+        "human_review_rag_db_column_selection",
+        "human_review_rag_db_sql_execution",
+    }:
+        return {
+            "milestone": "db_rag_review_error",
+            "completion_status": "blocked_waiting",
+            "blocker_signature": f"db_rag_review_error:{error.get('type')}:{_error_signature(error)}",
+        }
+
     if (
-        output.get("qa_response")
-        and rag_db_qa.get("thread_status") == "completed"
+        rag_db_qa.get("thread_status") == "completed"
         and effective_last_action == "human_review_rag_db_sql_execution"
         and not _has_unanswered_human_message(state)
     ):

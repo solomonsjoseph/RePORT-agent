@@ -27,7 +27,12 @@ from .state_helpers import (
 from .tool_routing import format_tool_results
 from ..state import MetaKeys
 from ..workflow_config import CODEGEN_RECENT_TURNS
-from utils.dataset_artifacts import build_dataset_context, choose_analysis_dataset
+from utils.dataset_artifacts import (
+    build_dataset_context,
+    choose_analysis_dataset,
+    get_analysis_dataset_candidates,
+    get_registered_datasets,
+)
 
 NODE_NAME = "generate_code"
 NODE_CAPABILITY = (
@@ -116,6 +121,9 @@ def _clarification_state(
     messages,
     *,
     pending_question: str | None,
+    kind: str = "generate_code",
+    meta_updates: dict | None = None,
+    base_meta: dict | None = None,
 ) -> dict:
     msgs = list(state.get("messages", []))
     msgs.append(AIMessage(content=question))
@@ -125,11 +133,13 @@ def _clarification_state(
     output["code_summary"] = ""
     output["code_assumptions"] = ""
     meta = set_clarification_meta(
-        state.get("meta", {}),
+        base_meta if base_meta is not None else state.get("meta", {}),
         return_node="generate_code",
-        kind="generate_code",
+        kind=kind,
         pending_question=pending_question,
     )
+    if meta_updates:
+        meta.update(meta_updates)
     updated_state = {
         **state,
         "messages": msgs,
@@ -156,6 +166,89 @@ def _clarification_state(
     )
 
 
+def _dataset_choice_lines(state: dict) -> tuple[list[str], list[dict]]:
+    candidates = get_analysis_dataset_candidates(state)
+    lines: list[str] = []
+    for artifact in candidates:
+        provenance = dict(artifact.get("provenance") or {})
+        summary_bits = [
+            f"id={artifact.get('id', 'unknown')}",
+            f"kind={artifact.get('kind', 'unknown')}",
+            f"rows={artifact.get('row_count', 'unknown')}",
+            f"columns={artifact.get('column_count', 'unknown')}",
+        ]
+        source = str(provenance.get("source") or "").strip()
+        if source:
+            summary_bits.append(f"source={source}")
+        lines.append(f"- {', '.join(summary_bits)}")
+    return lines, candidates
+
+
+def _dataset_choice_question(state: dict) -> tuple[str, list[str]]:
+    lines, candidates = _dataset_choice_lines(state)
+    candidate_ids = [str(artifact.get("id") or "").strip() for artifact in candidates if str(artifact.get("id") or "").strip()]
+    question = (
+        "Multiple datasets are available for analysis. Reply with exactly one dataset ID from this list:\n"
+        + "\n".join(lines)
+    )
+    return question, candidate_ids
+
+
+def _dataset_selection_clarification_state(
+    state: dict,
+    messages,
+    *,
+    pending_question: str,
+) -> dict:
+    question, candidate_ids = _dataset_choice_question(state)
+    return _clarification_state(
+        state,
+        question,
+        messages,
+        pending_question=pending_question,
+        kind="generate_code_dataset_selection",
+        meta_updates={
+            MetaKeys.ANALYSIS_DATASET_CANDIDATE_IDS: candidate_ids,
+            MetaKeys.ANALYSIS_DATASET_PENDING_REQUEST: pending_question,
+        },
+        base_meta=state.get("meta", {}),
+    )
+
+
+def _clear_analysis_dataset_meta(meta: dict) -> dict:
+    updated = dict(meta or {})
+    updated.pop(MetaKeys.ANALYSIS_DATASET_CANDIDATE_IDS, None)
+    updated.pop(MetaKeys.ANALYSIS_DATASET_PENDING_REQUEST, None)
+    return updated
+
+
+def _resolve_dataset_selection_reply(
+    state: dict,
+    reply: str,
+) -> tuple[dict | None, str]:
+    meta = dict(state.get("meta") or {})
+    candidate_ids = [
+        str(item).strip()
+        for item in list(meta.get(MetaKeys.ANALYSIS_DATASET_CANDIDATE_IDS) or [])
+        if str(item).strip()
+    ]
+    if not candidate_ids:
+        return None, "inactive"
+
+    selected_id = str(reply or "").strip()
+    if not selected_id:
+        return None, "invalid"
+
+    if selected_id not in candidate_ids:
+        return None, "invalid"
+
+    datasets = get_registered_datasets(state)
+    artifact = datasets.get(selected_id)
+    if artifact is None:
+        return None, "invalid"
+    return artifact, "selected"
+
+
 def generate_code_node(state, llm, context, question_override=None):
     generate_state = get_agent_state(state, "generate_code")
     messages = state.get("messages", [])
@@ -172,22 +265,37 @@ def generate_code_node(state, llm, context, question_override=None):
     latest_human = str(question_override or _latest_human_content(messages) or "").strip()
     meta = dict(state.get("meta", {}))
     if isinstance(resolved_context, dict) and resolved_context.get("runtime_datasets"):
-        selected_artifact, selection_reason = choose_analysis_dataset(
-            state,
-            latest_user_message=latest_human,
-        )
-        if selection_reason == "ambiguous":
-            return _clarification_state(
+        selected_artifact, reply_status = _resolve_dataset_selection_reply(state, latest_human)
+        if reply_status == "invalid":
+            pending_request = str(meta.get(MetaKeys.ANALYSIS_DATASET_PENDING_REQUEST) or meta.get(MetaKeys.PENDING_QUESTION) or "").strip()
+            return _dataset_selection_clarification_state(
                 state,
-                "Which dataset should I analyze: the uploaded dataset or the latest extracted subset?",
                 messages,
-                pending_question=latest_human,
+                pending_question=pending_request or latest_human,
             )
         if selected_artifact is not None:
             resolved_context = build_dataset_context(selected_artifact)
             meta[MetaKeys.ANALYSIS_DATASET_ID] = selected_artifact["id"]
+            meta = _clear_analysis_dataset_meta(meta)
         else:
-            resolved_context = "No dataset or schema provided."
+            selected_artifact, selection_reason = choose_analysis_dataset(
+                state,
+                latest_user_message=latest_human,
+            )
+            if selection_reason == "ambiguous":
+                pending_request = str(meta.get(MetaKeys.ANALYSIS_DATASET_PENDING_REQUEST) or latest_human).strip()
+                return _dataset_selection_clarification_state(
+                    state,
+                    messages,
+                    pending_question=pending_request,
+                )
+            if selected_artifact is not None:
+                resolved_context = build_dataset_context(selected_artifact)
+                meta[MetaKeys.ANALYSIS_DATASET_ID] = selected_artifact["id"]
+                meta = _clear_analysis_dataset_meta(meta)
+            else:
+                meta = _clear_analysis_dataset_meta(meta)
+                resolved_context = "No dataset or schema provided."
     windowed = window_messages(messages, max_turns=CODEGEN_RECENT_TURNS)
     prompt = make_generate_code_prompt().invoke(
         {
@@ -212,6 +320,7 @@ def generate_code_node(state, llm, context, question_override=None):
             _FALLBACK_CLARIFICATION_QUESTION,
             messages,
             pending_question=latest_human,
+            base_meta=meta,
         )
 
     if payload["response_type"] == "clarification":
@@ -220,6 +329,7 @@ def generate_code_node(state, llm, context, question_override=None):
             payload["question"],
             messages,
             pending_question=latest_human,
+            base_meta=meta,
         )
 
     code = payload["code"]
@@ -246,7 +356,7 @@ def generate_code_node(state, llm, context, question_override=None):
         executor_state.pop("error", None)
         agents["executor"] = executor_state
 
-    meta = clear_clarification_meta(meta)
+    meta = _clear_analysis_dataset_meta(clear_clarification_meta(meta))
     meta[MetaKeys.ERROR_ITERATIONS] = 0
     meta[MetaKeys.CURRENT_CODE_HASH] = code_fingerprint(code)
     meta.pop(MetaKeys.FINAL_APPROVED_CODE_HASH, None)

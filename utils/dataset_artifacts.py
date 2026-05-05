@@ -136,38 +136,43 @@ def get_active_dataset_artifact(state: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
+def get_analysis_dataset_candidates(state: dict[str, Any]) -> list[dict[str, Any]]:
+    return list(get_registered_datasets(state).values())
+
+
+def build_active_dataset_artifacts_patch(
+    current_artifacts: dict[str, Any] | None,
+    dataset_id: str,
+) -> dict[str, Any]:
+    artifacts = dict(current_artifacts or {})
+    datasets = dict(artifacts.get("datasets") or {})
+    if dataset_id not in datasets:
+        raise KeyError(f"Unknown dataset id: {dataset_id}")
+    artifacts["datasets"] = datasets
+    artifacts["active_dataset_id"] = dataset_id
+    return artifacts
+
+
 def choose_analysis_dataset(
     state: dict[str, Any],
     *,
     latest_user_message: str,
 ) -> tuple[dict[str, Any] | None, str]:
-    datasets = get_registered_datasets(state)
-    if not datasets:
+    del latest_user_message
+    candidates = get_analysis_dataset_candidates(state)
+    if not candidates:
         return None, "missing"
 
     meta = dict(state.get("meta") or {})
     explicit_id = meta.get("analysis_dataset_id")
-    if explicit_id and explicit_id in datasets:
-        return datasets[explicit_id], "explicit"
+    if explicit_id:
+        for artifact in candidates:
+            if artifact.get("id") == explicit_id:
+                return artifact, "explicit"
 
-    uploaded = [artifact for artifact in datasets.values() if artifact.get("kind") == "uploaded"]
-    subsets = [artifact for artifact in datasets.values() if artifact.get("kind") == "subset"]
-    normalized = " ".join((latest_user_message or "").strip().lower().split())
+    if len(candidates) == 1:
+        return candidates[0], "single"
 
-    if "uploaded dataset" in normalized or "uploaded csv" in normalized:
-        if uploaded:
-            return uploaded[0], "message"
-    if "extracted subset" in normalized or "latest subset" in normalized or "extracted cohort" in normalized:
-        active = get_active_dataset_artifact(state)
-        if active:
-            return active, "message"
-
-    if uploaded and subsets:
+    if len(candidates) > 1:
         return None, "ambiguous"
-    if uploaded:
-        return uploaded[0], "uploaded_only"
-
-    active = get_active_dataset_artifact(state)
-    if active:
-        return active, "active"
     return None, "missing"

@@ -67,7 +67,17 @@ from utils.streamlit_interrupts import (
     should_block_chat_submission,
     should_render_review_interrupt,
 )
-from utils.dataset_artifacts import build_dataset_artifacts_patch, persist_dataset_artifact, load_dataset_artifact
+from utils.streamlit_rendering import (
+    conversation_history_with_pending_user,
+    normalize_submitted_question,
+    should_render_conversation_controls,
+)
+from utils.dataset_artifacts import (
+    build_active_dataset_artifacts_patch,
+    build_dataset_artifacts_patch,
+    load_dataset_artifact,
+    persist_dataset_artifact,
+)
 from utils.message_attachments import build_user_message_attachments
 
 WELCOME_MESSAGE = "Hello! Ask me anything ..."
@@ -436,13 +446,19 @@ def queue_interrupt_resume(interrupt_id, payload):
         "payload": payload,
     }
 
-st.subheader("💬 Conversation")
-# for msg in st.session_state.chat_history:
-#     with st.chat_message(
-#         "user" if isinstance(msg, HumanMessage) else "assistant"
-#     ):
-#         st.markdown(msg.content)
 
+def queue_question_submission():
+    text = normalize_submitted_question(
+        st.session_state.get("question_input", ""),
+        blocked=bool(st.session_state.get("chat_submission_blocked", False)),
+    )
+    if text:
+        st.session_state["pending_question_text"] = text
+
+
+def set_active_dataset_selection(app, config, state: dict, dataset_id: str) -> None:
+    artifacts = build_active_dataset_artifacts_patch(state.get("artifacts"), dataset_id)
+    app.update_state(config, {"artifacts": artifacts})
 
 # --------------------------------------------------
 # Run LangGraph (one step)
@@ -458,6 +474,49 @@ if pending_resume:
     )
     snapshot = app.get_state(config)
     state = snapshot.values if snapshot else {}
+
+pending_question_text = st.session_state.pop("pending_question_text", None)
+pending_user_message = None
+if pending_question_text:
+    uploaded_artifact = None
+    if uploaded_csv and uploaded_schema:
+        uploaded_artifact = persist_dataset_artifact(
+            runtime_root=None,
+            thread_id=st.session_state.thread_id,
+            dataset_id=f"uploaded-{dataset_signature[:8]}",
+            kind="uploaded",
+            dataframe=df,
+            schema=schema,
+            provenance={"source": "upload", "dataset_signature": dataset_signature},
+        )
+    user_message = HumanMessage(
+        content=pending_question_text,
+        additional_kwargs={"attachments": build_user_message_attachments(uploaded_artifact)},
+    )
+
+    if has_graph_state:
+        initial_payload = next_turn_payload(user_message, uploaded_artifact, snapshot.values)
+    else:
+        initial_payload = initial_graph_state(user_message, uploaded_artifact)
+
+    submitted = run_manager.submit(
+        thread_id=st.session_state.thread_id,
+        app=app,
+        config=config,
+        max_steps=max_auto_steps,
+        initial_payload=initial_payload,
+    )
+    if not submitted:
+        st.session_state["pending_submission_warning"] = "A run is already in progress. Please wait..."
+    else:
+        pending_user_message = user_message
+
+st.subheader("💬 Conversation")
+# for msg in st.session_state.chat_history:
+#     with st.chat_message(
+#         "user" if isinstance(msg, HumanMessage) else "assistant"
+#     ):
+#         st.markdown(msg.content)
 
 # For check workflow state, DEBUG ONLY
 # with st.expander("🧭 Current workflow state", expanded=False):
@@ -482,6 +541,11 @@ if pending_resume:
 
 if state:
     st.session_state.chat_history = build_display_history(state)
+st.session_state.chat_history = conversation_history_with_pending_user(
+    st.session_state.chat_history,
+    pending_user_message,
+    welcome_message=WELCOME_MESSAGE,
+)
 
 latest_chat_is_human = bool(st.session_state.chat_history) and isinstance(
     st.session_state.chat_history[-1], HumanMessage
@@ -582,14 +646,6 @@ if should_render_interrupt:
         ui_final_review(app, config, payload, interrupt_id, queue_interrupt_resume)
 
 run_status = run_manager.status(st.session_state.thread_id)
-if run_status.get("state") == "running":
-    st.info("⏳ Working in background...")
-    time.sleep(0.25)
-    st.rerun()
-elif run_status.get("state") == "error":
-    st.error(f"Background workflow failed: {run_status.get('error') or 'unknown error'}")
-    st.stop()
-
 if snapshot and snapshot.next and not snapshot.interrupts and not run_manager.is_running(st.session_state.thread_id):
     run_manager.submit(
         thread_id=st.session_state.thread_id,
@@ -598,8 +654,13 @@ if snapshot and snapshot.next and not snapshot.interrupts and not run_manager.is
         max_steps=max_auto_steps,
         initial_payload=None,
     )
-    time.sleep(0.1)
-    st.rerun()
+    run_status = run_manager.status(st.session_state.thread_id)
+
+render_conversation_controls = should_render_conversation_controls(run_status)
+if run_status.get("state") == "running":
+    st.info("⏳ Working in background...")
+elif run_status.get("state") == "error":
+    st.error(f"Background workflow failed: {run_status.get('error') or 'unknown error'}")
 
 if qa_ready and not analysis_ready:
     st.success("Response ready")
@@ -617,11 +678,14 @@ if state:
         default_index = dataset_ids.index(active_dataset_id) if active_dataset_id in dataset_ids else 0
         with st.expander("💾 Saved Datasets", expanded=False):
             selected_dataset_id = st.selectbox(
-                "Choose a dataset artifact",
+                "Active dataset artifact",
                 options=dataset_ids,
                 index=default_index,
                 key="selected_dataset_artifact_id",
             )
+            if selected_dataset_id != active_dataset_id:
+                set_active_dataset_selection(app, config, state, selected_dataset_id)
+                st.rerun()
             selected_artifact = datasets.get(selected_dataset_id)
             if selected_artifact:
                 st.caption(f"Dataset ID: {selected_artifact.get('id', 'unknown')}")
@@ -644,77 +708,63 @@ if state:
                 except Exception as exc:
                     st.error(f"Unable to load selected dataset artifact: {exc}")
 
-with st.container():
-    chat_submission_blocked = should_block_chat_submission(
-        interrupt_event,
-        dismissed_interrupt_id=dismissed_interrupt_id,
-        review_state=review_state,
-    )
-    review_notice = blocking_review_notice(
-        interrupt_event,
-        dismissed_interrupt_id=dismissed_interrupt_id,
-        review_state=review_state,
-    )
-    if review_notice:
-        st.info(review_notice)
-    with st.form("question_form", clear_on_submit=True):
-        user_text = st.text_input(
-            "Ask a question about your dataset!",
-            placeholder="Ask a question about your dataset!",
-            label_visibility="collapsed",
-            disabled=chat_submission_blocked,
+if render_conversation_controls:
+    with st.container():
+        chat_submission_blocked = should_block_chat_submission(
+            interrupt_event,
+            dismissed_interrupt_id=dismissed_interrupt_id,
+            review_state=review_state,
         )
-        submitted_question = st.form_submit_button("Send", disabled=chat_submission_blocked)
-
-    action_col, save_col = st.columns([1, 1])
-    with action_col:
-        if st.button("🔄 Reset Conversation"):
-            st.session_state.chat_history = [AIMessage(content=WELCOME_MESSAGE)]
-            st.session_state.thread_id = uuid.uuid4().hex
-            st.rerun()
-    with save_col:
-        st.download_button(
-            label="💾 Save Current Thread",
-            data=export_bytes,
-            file_name=f"thread_{st.session_state.thread_id}.zip",
-            mime="application/zip",
-            key="save_current_thread_bottom",
-            help="Download this thread's conversation, generated code, output text, and figure as a ZIP archive.",
+        st.session_state["chat_submission_blocked"] = chat_submission_blocked
+        pending_submission_warning = st.session_state.pop("pending_submission_warning", None)
+        if pending_submission_warning:
+            st.warning(pending_submission_warning)
+        review_notice = blocking_review_notice(
+            interrupt_event,
+            dismissed_interrupt_id=dismissed_interrupt_id,
+            review_state=review_state,
         )
+        if review_notice:
+            st.info(review_notice)
+        with st.form("question_form", clear_on_submit=True):
+            user_text = st.text_input(
+                "Ask a question about your dataset!",
+                placeholder="Ask a question about your dataset!",
+                label_visibility="collapsed",
+                disabled=chat_submission_blocked,
+                key="question_input",
+            )
+            st.form_submit_button(
+                "Send",
+                disabled=chat_submission_blocked,
+                on_click=queue_question_submission,
+            )
 
-if submitted_question and user_text and not chat_submission_blocked:
-    uploaded_artifact = None
-    if uploaded_csv and uploaded_schema:
-        uploaded_artifact = persist_dataset_artifact(
-            runtime_root=None,
-            thread_id=st.session_state.thread_id,
-            dataset_id=f"uploaded-{dataset_signature[:8]}",
-            kind="uploaded",
-            dataframe=df,
-            schema=schema,
-            provenance={"source": "upload", "dataset_signature": dataset_signature},
-        )
-    user_message = HumanMessage(
-        content=user_text,
-        additional_kwargs={"attachments": build_user_message_attachments(uploaded_artifact)},
-    )
+        action_col, save_col = st.columns([1, 1])
+        with action_col:
+            if st.button("🔄 Reset Conversation"):
+                st.session_state.chat_history = [AIMessage(content=WELCOME_MESSAGE)]
+                st.session_state.thread_id = uuid.uuid4().hex
+                st.rerun()
+        with save_col:
+            st.download_button(
+                label="💾 Save Current Thread",
+                data=export_bytes,
+                file_name=f"thread_{st.session_state.thread_id}.zip",
+                mime="application/zip",
+                key="save_current_thread_bottom",
+                help="Download this thread's conversation, generated code, output text, and figure as a ZIP archive.",
+            )
+else:
+    chat_submission_blocked = True
+    st.session_state["chat_submission_blocked"] = True
 
-    if has_graph_state:
-        initial_payload = next_turn_payload(user_message, uploaded_artifact, snapshot.values)
-    else:
-        initial_payload = initial_graph_state(user_message, uploaded_artifact)
-
-    submitted = run_manager.submit(
-        thread_id=st.session_state.thread_id,
-        app=app,
-        config=config,
-        max_steps=max_auto_steps,
-        initial_payload=initial_payload,
-    )
-    if not submitted:
-        st.warning("A run is already in progress. Please wait...")
-
+if run_status.get("state") == "running":
+    time.sleep(0.25)
     st.rerun()
+    st.stop()
+elif run_status.get("state") == "error":
+    st.stop()
 
 if should_render_interrupt:
     st.stop()
