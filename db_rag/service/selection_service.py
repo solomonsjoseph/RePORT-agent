@@ -1,20 +1,135 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Any
 
 from utils.llm_response import coerce_text_content
 
 from .constraints import (
-    _build_invalid_column_selection_candidate,
     _constraint_set_from_payload,
     _enforce_selection_constraints,
     _merge_constraint_sets,
     _normalize_previous_selection,
 )
 from .models import ColumnSelectionCandidate, DbRagContext, DbRagIntent, FeedbackConstraintSet
+from ..config import resolve_db_rag_selection_model
 from .schema import _lookup_schema_column, _resolve_explicit_schema_mentions
 from ..generation import default_selection_id, parse_json_object
+
+_DETERMINISTIC_CONSTRAINED_RATIONALE = "Using constrained retrieved candidates directly for human review."
+_OPENAI_RANKED_DEFAULT_RATIONALE = "Ranked from constrained retrieved candidates."
+_RETRIEVAL_FALLBACK_RATIONALE = (
+    "Structured ranking output was unavailable. Showing retrieved candidate tables and columns directly for human review."
+)
+
+
+class _OpenAIStructuredColumnSelector:
+    def __init__(self, *, resolve_model=resolve_db_rag_selection_model) -> None:
+        self._resolve_model = resolve_model
+
+    @staticmethod
+    def _resolve_client():
+        try:
+            from openai import OpenAI
+        except ModuleNotFoundError:
+            return None
+        return OpenAI
+
+    def rank_columns(
+        self,
+        *,
+        question: str,
+        candidate_columns: list[dict[str, str]],
+        feedback_history: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        model = self._resolve_model()
+        if not model:
+            return None
+
+        api_key = str(os.getenv("DB_RAG_SELECTION_API_KEY", "") or "").strip()
+        if not api_key:
+            api_key = str(os.getenv("OPENAI_API_KEY", "") or "").strip()
+        if not api_key:
+            return None
+
+        client_cls = self._resolve_client()
+        if client_cls is None:
+            return None
+
+        client_kwargs: dict[str, Any] = {"api_key": api_key}
+        base_url = str(os.getenv("DB_RAG_SELECTION_BASE_URL", "") or "").strip()
+        if base_url:
+            client_kwargs["base_url"] = base_url
+
+        candidate_lines = []
+        for entry in candidate_columns:
+            identifier = f'{entry["table"]}||{entry["column"]}'
+            description = str(entry.get("description") or "").strip()
+            if description:
+                candidate_lines.append(f"- {identifier}: {description}")
+            else:
+                candidate_lines.append(f"- {identifier}")
+
+        try:
+            client = client_cls(**client_kwargs)
+            response = client.chat.completions.create(
+                model=model,
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "db_rag_column_ranking",
+                        "strict": True,
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "columns": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                },
+                                "rationale": {"type": "string"},
+                            },
+                            "required": ["columns", "rationale"],
+                            "additionalProperties": False,
+                        },
+                    },
+                },
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "Rank the provided RePORT database columns from most to least relevant for the question. "
+                            "Use only the exact identifiers from the candidate list. Return every ranked identifier once. "
+                            "Do not invent identifiers."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Question:\n{question}\n\n"
+                            f"Candidate columns:\n{chr(10).join(candidate_lines) or 'none'}\n\n"
+                            f"Feedback history:\n{json.dumps(list(feedback_history or []), indent=2, sort_keys=True)}"
+                        ),
+                    },
+                ],
+            )
+            content = coerce_text_content(getattr(response.choices[0].message, "content", ""))
+            parsed = parse_json_object(content) or {}
+        except Exception:
+            return None
+
+        columns = parsed.get("columns")
+        if not isinstance(columns, list):
+            return {
+                "columns": [],
+                "rationale": "",
+                "raw_model_output": content,
+            }
+        return {
+            "columns": [str(value or "").strip() for value in columns if str(value or "").strip()],
+            "rationale": str(parsed.get("rationale") or "").strip(),
+            "raw_model_output": content,
+        }
 
 
 class DbRagSelectionMixin:
@@ -60,6 +175,20 @@ class DbRagSelectionMixin:
         parsed = parse_json_object(coerce_text_content(getattr(response, "content", ""))) or {}
         return _constraint_set_from_payload(parsed)
 
+    def _rank_columns_with_openai(
+        self,
+        *,
+        question: str,
+        candidate_columns: list[dict[str, str]],
+        feedback_history: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        selector = _OpenAIStructuredColumnSelector()
+        return selector.rank_columns(
+            question=question,
+            candidate_columns=candidate_columns,
+            feedback_history=feedback_history,
+        )
+
     def validate_selection_against_intent(
         self,
         candidate: ColumnSelectionCandidate,
@@ -89,8 +218,6 @@ class DbRagSelectionMixin:
         previous_selection: Any = None,
         intent_snapshot: dict[str, Any] | None = None,
     ) -> ColumnSelectionCandidate:
-        from langchain_core.messages import HumanMessage, SystemMessage
-
         normalized_feedback_history = list(feedback_history or [])
         normalized_previous_selection = _normalize_previous_selection(previous_selection)
         base_constraints = _constraint_set_from_payload(intent_snapshot)
@@ -110,122 +237,145 @@ class DbRagSelectionMixin:
             for column in explicit_schema_columns
             if _lookup_schema_column(column["table"], column["column"]) is not None
         ]
-        constrained_columns = [
+        constrained_previous_columns = [
             column
             for column in normalized_previous_selection.get("columns", [])
             if _lookup_schema_column(column["table"], column["column"]) is not None
         ]
-        response = self.llm.invoke(
-            [
-                SystemMessage(
-                    content=(
-                        "You are preparing a column selection candidate for a RePORT database question. "
-                        "Use the retrieved table and column context plus any reviewer feedback to select only "
-                        "exact tables and exact table.column pairs relevant to the question. "
-                        "If the prompt includes a previous reviewed selection or explicit schema constraints, "
-                        "preserve those exact table.column pairs unless the reviewer feedback explicitly replaces them. "
-                        "Do not drop required exact columns just because they were not top-ranked in retrieval. "
-                        "Return only a JSON object with exactly these keys: "
-                        '{"selection_id": string, "rationale": string, "tables": [string], '
-                        '"columns": [{"table": string, "column": string, "description": string}]}.'
-                    )
-                ),
-                HumanMessage(
-                    content=(
-                        f"Question:\n{question}\n\n"
-                        f"Table context:\n{context.table_context or 'none'}\n\n"
-                        f"Column context:\n{context.column_context or 'none'}\n\n"
-                        f"Intent snapshot:\n{json.dumps(intent_snapshot or {}, indent=2, sort_keys=True)}\n\n"
-                        f"Grounded constraints:\n{json.dumps(constraints.__dict__, indent=2, sort_keys=True)}\n\n"
-                        f"Feedback history:\n{json.dumps(normalized_feedback_history, indent=2, sort_keys=True)}\n\n"
-                        f"Previous selection candidate:\n{json.dumps(normalized_previous_selection, indent=2, sort_keys=True)}\n\n"
-                        f"Explicit schema constraints:\n{json.dumps(explicit_valid_columns, indent=2, sort_keys=True)}"
-                    )
-                ),
-            ]
-        )
-        parsed = parse_json_object(coerce_text_content(getattr(response, "content", "")))
-        if not parsed:
-            return _build_invalid_column_selection_candidate(question, context, normalized_feedback_history)
-
-        raw_tables = parsed.get("tables")
-        tables: list[str] = []
-        if isinstance(raw_tables, list):
-            for value in raw_tables:
-                table = str(value or "").strip()
-                if table and table in valid_tables and table not in tables and table not in constraints.excluded_tables:
-                    tables.append(table)
-
-        raw_columns = parsed.get("columns")
-        columns: list[dict[str, str]] = []
-        if isinstance(raw_columns, list):
-            for item in raw_columns:
-                if not isinstance(item, dict):
-                    continue
-                table = str(item.get("table", "") or "").strip()
-                column = str(item.get("column", "") or "").strip()
-                if not table or not column:
-                    continue
-                if table in constraints.excluded_tables:
-                    continue
-                if f"{table}.{column}" in constraints.excluded_columns:
-                    continue
-                schema_entry = _lookup_schema_column(table, column)
-                if (table, column) not in valid_columns and schema_entry is None:
-                    continue
-                description = str(item.get("description", "") or "").strip()
-                if not description and schema_entry is not None:
-                    description = schema_entry["description"]
-                columns.append({"table": table, "column": column, "description": description})
-
-        constrained_pairs = {
-            (column["table"], column["column"]): column
-            for column in [*explicit_valid_columns, *constrained_columns]
-            if column["table"] not in constraints.excluded_tables
-            and f'{column["table"]}.{column["column"]}' not in constraints.excluded_columns
-        }
-        current_pairs = {(column["table"], column["column"]) for column in columns}
-        for pair, column in constrained_pairs.items():
-            if pair in current_pairs:
+        constrained_pool: list[dict[str, str]] = []
+        seen_pairs: set[tuple[str, str]] = set()
+        for entry in list(context.columns or []):
+            table = str(entry.table or "").strip()
+            column = str(entry.column or "").strip()
+            if not table or not column:
                 continue
-            columns.append(dict(column))
-            current_pairs.add(pair)
+            if table in constraints.excluded_tables:
+                continue
+            qualified = f"{table}.{column}"
+            if qualified in constraints.excluded_columns:
+                continue
+            schema_entry = _lookup_schema_column(table, column)
+            description = str((schema_entry or {}).get("description") or str(entry.text or "") or "").strip()
+            pair = (table, column)
+            if pair in seen_pairs:
+                continue
+            constrained_pool.append({"table": table, "column": column, "description": description})
+            seen_pairs.add(pair)
 
-        columns = [
+        forced_columns = [
             column
-            for column in columns
+            for column in [*explicit_valid_columns, *constrained_previous_columns]
             if column["table"] not in constraints.excluded_tables
             and f'{column["table"]}.{column["column"]}' not in constraints.excluded_columns
         ]
+        for column in forced_columns:
+            pair = (column["table"], column["column"])
+            if pair in seen_pairs:
+                continue
+            constrained_pool.append(
+                {
+                    "table": column["table"],
+                    "column": column["column"],
+                    "description": str(column.get("description") or "").strip(),
+                }
+            )
+            seen_pairs.add(pair)
 
-        if not tables and columns:
-            for column in columns:
-                table = column["table"]
-                if table not in tables:
-                    tables.append(table)
-
-        for column in columns:
-            table = column["table"]
-            if table not in tables:
-                tables.append(table)
-
-        selection_id = str(parsed.get("selection_id", "") or "").strip() or default_selection_id(
+        selection_id = default_selection_id(
             question,
             context.table_names,
             [{"table": entry.table, "column": entry.column} for entry in context.columns],
             normalized_feedback_history,
         )
-        rationale = str(parsed.get("rationale", "") or "").strip()
+        retrieval_tables = [
+            table_name
+            for table_name in context.table_names
+            if table_name in valid_tables and table_name not in constraints.excluded_tables
+        ]
 
-        if not columns:
-            return _build_invalid_column_selection_candidate(question, context, normalized_feedback_history)
+        if not constrained_pool:
+            candidate = ColumnSelectionCandidate(
+                selection_id=selection_id,
+                question=question,
+                tables=[],
+                columns=[],
+                rationale=_RETRIEVAL_FALLBACK_RATIONALE,
+                feedback_history=normalized_feedback_history,
+                selection_source="retrieval_fallback",
+                fallback_reason=_RETRIEVAL_FALLBACK_RATIONALE,
+            )
+            return _enforce_selection_constraints(candidate, context, constraints)
+
+        if len(constrained_pool) <= 2:
+            candidate = ColumnSelectionCandidate(
+                selection_id=selection_id,
+                question=question,
+                tables=retrieval_tables,
+                columns=list(constrained_pool),
+                rationale=_DETERMINISTIC_CONSTRAINED_RATIONALE,
+                feedback_history=normalized_feedback_history,
+                selection_source="deterministic_constrained",
+            )
+            return _enforce_selection_constraints(candidate, context, constraints)
+
+        ranked = self._rank_columns_with_openai(
+            question=question,
+            candidate_columns=constrained_pool,
+            feedback_history=normalized_feedback_history,
+        )
+
+        ranked_ids = list((ranked or {}).get("columns") or [])
+        raw_model_output = str((ranked or {}).get("raw_model_output") or "").strip()
+        ranked_lookup = {
+            f'{entry["table"]}||{entry["column"]}': dict(entry)
+            for entry in constrained_pool
+        }
+        validated_columns: list[dict[str, str]] = []
+        seen_ranked: set[tuple[str, str]] = set()
+        dropped_any = False
+        for identifier in ranked_ids:
+            if identifier not in ranked_lookup:
+                dropped_any = True
+                continue
+            entry = ranked_lookup[identifier]
+            pair = (entry["table"], entry["column"])
+            if pair in seen_ranked:
+                dropped_any = True
+                continue
+            validated_columns.append(entry)
+            seen_ranked.add(pair)
+
+        if not validated_columns:
+            candidate = ColumnSelectionCandidate(
+                selection_id=selection_id,
+                question=question,
+                tables=retrieval_tables,
+                columns=list(constrained_pool),
+                rationale=_RETRIEVAL_FALLBACK_RATIONALE,
+                feedback_history=normalized_feedback_history,
+                selection_source="retrieval_fallback",
+                fallback_reason=_RETRIEVAL_FALLBACK_RATIONALE,
+                raw_model_output=raw_model_output,
+            )
+            return _enforce_selection_constraints(candidate, context, constraints)
+
+        tables: list[str] = []
+        for entry in validated_columns:
+            table = entry["table"]
+            if table not in tables:
+                tables.append(table)
+        for table in retrieval_tables:
+            if table not in tables:
+                tables.append(table)
 
         candidate = ColumnSelectionCandidate(
             selection_id=selection_id,
             question=question,
             tables=tables,
-            columns=columns,
-            rationale=rationale,
+            columns=validated_columns,
+            rationale=str((ranked or {}).get("rationale") or "").strip() or _OPENAI_RANKED_DEFAULT_RATIONALE,
             feedback_history=normalized_feedback_history,
+            selection_source="openai_ranked_partial" if dropped_any else "openai_ranked",
+            raw_model_output=raw_model_output,
         )
         return _enforce_selection_constraints(candidate, context, constraints)

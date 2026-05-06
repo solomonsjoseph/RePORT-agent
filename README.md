@@ -123,6 +123,7 @@ Example for relevant `.env` keys for DB-RAG:
 ```env
 DB_RAG_EMBEDDING_MODEL=OpenAI/text-embedding-3-small
 DB_RAG_RERANKER_MODEL=cohere/rerank-v3.5
+DB_RAG_SELECTION_MODEL=gpt-4o-mini
 ```
 
 Supported DB-RAG reranker models:
@@ -134,6 +135,11 @@ Supported DB-RAG reranker models:
 
 Reranking is optional and does not require rebuilding the DB-RAG index.
 When `DB_RAG_RERANKER_MODEL` is set, the LangGraph DB-RAG app path uses it for column reranking as well.
+
+`DB_RAG_SELECTION_MODEL` controls the lightweight OpenAI model used for structured
+DB-RAG column ranking before human review. The current default is `gpt-4o-mini`.
+This selector reuses `OPENAI_API_KEY` by default. If OpenAI is unavailable, the
+app falls back to deterministic retrieval-backed column review.
 
 
 ### Quick test on RAG
@@ -182,15 +188,18 @@ To use DB-RAG in the Streamlit app:
 1. Build the DB-RAG index with the embedding model you want to use.
 2. Set `DB_RAG_EMBEDDING_MODEL` in `.env` to the same embedding model used for the built index.
 3. Optionally set `DB_RAG_RERANKER_MODEL` to one of the supported rerankers.
-4. Launch the app with `python -m streamlit run streamlit_app.py`.
-5. In the sidebar under `DB-RAG Runtime`, confirm the app shows the expected embedding index and reranker.
+4. Optionally set `DB_RAG_SELECTION_MODEL` if you want to override the default `gpt-4o-mini` structured selector.
+5. Launch the app with `python -m streamlit run streamlit_app.py`.
+6. In the sidebar under `DB-RAG Runtime`, confirm the app shows the expected embedding index and reranker.
 
 Example `.env` for app usage, for OpenRouter based model:
 
 ```env
 DB_RAG_EMBEDDING_MODEL=Qwen/Qwen3-Embedding-4B
 DB_RAG_RERANKER_MODEL=cohere/rerank-v3.5
+DB_RAG_SELECTION_MODEL=gpt-4o-mini
 DB_RAG_OPENROUTER_API_KEY=...
+OPENAI_API_KEY=...
 ```
 
 Example `.env` for Voyage-backed app usage:
@@ -198,10 +207,13 @@ Example `.env` for Voyage-backed app usage:
 ```env
 DB_RAG_EMBEDDING_MODEL=voyage-4-large
 DB_RAG_RERANKER_MODEL=voyage/rerank-2.5
+DB_RAG_SELECTION_MODEL=gpt-4o-mini
 VOYAGE_API_KEY=...
+OPENAI_API_KEY=...
 ```
 
 If `DB_RAG_RERANKER_MODEL` is unset, the app uses the default ChromaDB column ordering with reranking disabled.
+If `DB_RAG_SELECTION_MODEL` is unset, the app defaults to `gpt-4o-mini` for structured DB-RAG column ranking.
 
 ### Notes:
 - Synthetic demo data are included under `data/` folder.

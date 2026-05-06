@@ -116,6 +116,8 @@ def human_review_rag_db_column_selection_node(state):
             "tables": list(review.get("tables") or []),
             "columns": list(review.get("columns") or []),
             "rationale": review.get("rationale", ""),
+            "selection_source": review.get("selection_source", ""),
+            "fallback_reason": review.get("fallback_reason", ""),
             "feedback_history": list(review.get("feedback_history") or []),
         }
     )

@@ -15,6 +15,7 @@ class DbRagColumnHit:
     table: str
     column: str
     text: str
+    score: float | None = None
 
     def as_prompt_line(self) -> str:
         return f"{self.table}.{self.column}"
@@ -80,6 +81,9 @@ class ColumnSelectionCandidate:
     rationale: str
     feedback_history: list[dict[str, Any]] = field(default_factory=list)
     status: str = "awaiting_review"
+    selection_source: str = "legacy"
+    fallback_reason: str = ""
+    raw_model_output: str = ""
 
 
 @dataclass
@@ -98,4 +102,3 @@ class SqlExecutionResult:
     sql: str
     dataframe: Any
     source_tables: list[str]
-

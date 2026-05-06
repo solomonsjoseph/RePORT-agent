@@ -1,8 +1,11 @@
 from utils.streamlit_rendering import (
+    build_autoscroll_key,
     canonicalize_conversation_history,
+    conversation_render_state,
     conversation_controls_state,
     conversation_history_with_pending_user,
     normalize_submitted_question,
+    should_render_compact_running_view,
 )
 
 
@@ -12,18 +15,18 @@ class Message:
         self.type = msg_type
 
 
-def test_conversation_controls_stay_rendered_while_background_run_is_active() -> None:
+def test_conversation_controls_hide_while_background_run_is_active() -> None:
     controls = conversation_controls_state({"state": "running"}, review_blocked=False)
 
-    assert controls.render is True
+    assert controls.render is False
     assert controls.submission_blocked is True
     assert controls.run_in_progress is True
 
 
-def test_conversation_controls_stay_rendered_when_background_run_has_error() -> None:
+def test_conversation_controls_hide_when_background_run_has_error() -> None:
     controls = conversation_controls_state({"state": "error"}, review_blocked=False)
 
-    assert controls.render is True
+    assert controls.render is False
     assert controls.submission_blocked is True
     assert controls.run_in_progress is False
 
@@ -42,6 +45,12 @@ def test_conversation_controls_block_idle_submission_during_review() -> None:
     assert controls.render is True
     assert controls.submission_blocked is True
     assert controls.run_in_progress is False
+
+
+def test_compact_running_view_enabled_only_for_background_polling() -> None:
+    assert should_render_compact_running_view({"state": "running"}, has_review_interrupt=False) is True
+    assert should_render_compact_running_view({"state": "running"}, has_review_interrupt=True) is False
+    assert should_render_compact_running_view({"state": "idle"}, has_review_interrupt=False) is False
 
 
 def test_normalize_submitted_question_trims_text() -> None:
@@ -100,3 +109,81 @@ def test_canonicalize_conversation_history_keeps_welcome_without_human_turn() ->
     )
 
     assert [msg.content for msg in history] == ["Hello! Ask me anything ..."]
+
+
+def test_build_autoscroll_key_changes_when_interrupt_state_changes() -> None:
+    history = [Message("question", "human"), Message("answer", "ai")]
+
+    base = build_autoscroll_key(history, ui_type=None, should_render_interrupt=False)
+    changed = build_autoscroll_key(
+        history,
+        ui_type="human_review_rag_db_sql_execution",
+        should_render_interrupt=True,
+    )
+
+    assert base != changed
+
+
+def test_conversation_render_state_preserves_full_history_while_running() -> None:
+    history = [
+        Message("older question", "human"),
+        Message("older answer", "ai"),
+        Message("latest follow up", "human"),
+    ]
+
+    render_state = conversation_render_state(
+        history,
+        run_status={"state": "running"},
+        qa_ready=False,
+        analysis_ready=False,
+        has_review_interrupt=False,
+    )
+
+    assert [msg.content for msg in render_state.messages] == [
+        "older question",
+        "older answer",
+        "latest follow up",
+    ]
+    assert render_state.status_level == "info"
+    assert render_state.status_text == "⏳ Working in background..."
+    assert render_state.hide_secondary_sections is True
+
+
+def test_conversation_render_state_places_success_status_after_latest_message() -> None:
+    history = [
+        Message("question", "human"),
+        Message("answer", "ai"),
+    ]
+
+    render_state = conversation_render_state(
+        history,
+        run_status={"state": "idle"},
+        qa_ready=True,
+        analysis_ready=False,
+        has_review_interrupt=False,
+    )
+
+    assert [msg.content for msg in render_state.messages][-1] == "answer"
+    assert render_state.status_level == "success"
+    assert render_state.status_text == "Response ready"
+    assert render_state.hide_secondary_sections is False
+
+
+def test_conversation_render_state_keeps_background_status_with_latest_message() -> None:
+    history = [
+        Message("older question", "human"),
+        Message("older answer", "ai"),
+        Message("latest follow up", "human"),
+    ]
+
+    render_state = conversation_render_state(
+        history,
+        run_status={"state": "running"},
+        qa_ready=False,
+        analysis_ready=False,
+        has_review_interrupt=False,
+    )
+
+    assert [msg.content for msg in render_state.messages][-1] == "latest follow up"
+    assert render_state.status_level == "info"
+    assert render_state.status_text == "⏳ Working in background..."

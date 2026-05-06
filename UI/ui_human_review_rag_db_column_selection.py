@@ -38,6 +38,8 @@ def ui_human_review_rag_db_column_selection(app, config, payload, interrupt_id, 
     question = str(payload.get("question") or "").strip()
     rationale = str(payload.get("rationale") or "").strip()
     selection_id = str(payload.get("selection_id") or "").strip()
+    selection_source = str(payload.get("selection_source") or "").strip()
+    fallback_reason = str(payload.get("fallback_reason") or "").strip()
     tables = list(payload.get("tables") or [])
     columns = list(payload.get("columns") or [])
     feedback_history = list(payload.get("feedback_history") or [])
@@ -53,6 +55,11 @@ def ui_human_review_rag_db_column_selection(app, config, payload, interrupt_id, 
     if rationale:
         st.markdown("**Rationale**")
         st.write(rationale)
+    if selection_source == "retrieval_fallback":
+        st.info(
+            fallback_reason
+            or "Structured ranking was unavailable. Showing retrieved candidate tables and columns directly for review."
+        )
 
     if tables:
         st.markdown("**Selected tables**")

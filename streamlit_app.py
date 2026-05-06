@@ -10,6 +10,7 @@ from pathlib import Path
 # from pathlib import Path
 import uuid
 import time
+import streamlit.components.v1 as components
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, AIMessage
 from langgraph.types import Command
@@ -68,7 +69,9 @@ from utils.streamlit_interrupts import (
     should_render_review_interrupt,
 )
 from utils.streamlit_rendering import (
+    build_autoscroll_key,
     canonicalize_conversation_history,
+    conversation_render_state,
     conversation_controls_state,
     conversation_history_with_pending_user,
     normalize_submitted_question,
@@ -439,7 +442,6 @@ def next_turn_payload(
     return payload
 
 snapshot = app.get_state(config)
-has_graph_state = bool(snapshot and snapshot.values)
 
 def queue_interrupt_resume(interrupt_id, payload):
     st.session_state["pending_interrupt_resume"] = {
@@ -461,195 +463,194 @@ def set_active_dataset_selection(app, config, state: dict, dataset_id: str) -> N
     artifacts = build_active_dataset_artifacts_patch(state.get("artifacts"), dataset_id)
     app.update_state(config, {"artifacts": artifacts})
 
-# --------------------------------------------------
-# Run LangGraph (one step)
-# --------------------------------------------------
-snapshot = app.get_state(config)
-state = snapshot.values if snapshot else {}
-
-pending_resume = st.session_state.pop("pending_interrupt_resume", None)
-if pending_resume:
-    app.invoke(
-        Command(resume={pending_resume["interrupt_id"]: pending_resume["payload"]}),
-        config=config,
+def _autoscroll_to_bottom() -> None:
+    components.html(
+        """
+        <script>
+        const scrollToAnchor = () => {
+          const doc = window.parent.document;
+          const anchor = doc.getElementById("chat-bottom-anchor");
+          if (!anchor) {
+            return;
+          }
+          anchor.scrollIntoView({behavior: "auto", block: "end"});
+          const root = doc.scrollingElement || doc.documentElement || doc.body;
+          if (root) {
+            root.scrollTop = root.scrollHeight;
+          }
+        };
+        requestAnimationFrame(() => {
+          scrollToAnchor();
+          setTimeout(scrollToAnchor, 60);
+        });
+        </script>
+        """,
+        height=0,
     )
+
+
+def _rerun_interactive_area() -> None:
+    try:
+        st.rerun(scope="fragment")
+    except st.errors.StreamlitAPIException:
+        st.rerun()
+
+
+@st.fragment
+def render_interactive_area() -> None:
     snapshot = app.get_state(config)
     state = snapshot.values if snapshot else {}
+    has_graph_state = bool(state)
 
-pending_question_text = st.session_state.pop("pending_question_text", None)
-optimistic_pending_user_text = str(st.session_state.get("optimistic_pending_user_text") or "").strip()
-pending_user_message = HumanMessage(content=optimistic_pending_user_text) if optimistic_pending_user_text else None
-if pending_question_text:
-    uploaded_artifact = None
-    if uploaded_csv and uploaded_schema:
-        uploaded_artifact = persist_dataset_artifact(
-            runtime_root=None,
-            thread_id=st.session_state.thread_id,
-            dataset_id=f"uploaded-{dataset_signature[:8]}",
-            kind="uploaded",
-            dataframe=df,
-            schema=schema,
-            provenance={"source": "upload", "dataset_signature": dataset_signature},
+    pending_resume = st.session_state.pop("pending_interrupt_resume", None)
+    if pending_resume:
+        app.invoke(
+            Command(resume={pending_resume["interrupt_id"]: pending_resume["payload"]}),
+            config=config,
         )
-    user_message = HumanMessage(
-        content=pending_question_text,
-        additional_kwargs={"attachments": build_user_message_attachments(uploaded_artifact)},
-    )
+        snapshot = app.get_state(config)
+        state = snapshot.values if snapshot else {}
 
-    if has_graph_state:
-        initial_payload = next_turn_payload(user_message, uploaded_artifact, snapshot.values)
-    else:
-        initial_payload = initial_graph_state(user_message, uploaded_artifact)
+    pending_question_text = st.session_state.pop("pending_question_text", None)
+    optimistic_pending_user_text = str(st.session_state.get("optimistic_pending_user_text") or "").strip()
+    pending_user_message = HumanMessage(content=optimistic_pending_user_text) if optimistic_pending_user_text else None
+    if pending_question_text:
+        uploaded_artifact = None
+        if uploaded_csv and uploaded_schema:
+            uploaded_artifact = persist_dataset_artifact(
+                runtime_root=None,
+                thread_id=st.session_state.thread_id,
+                dataset_id=f"uploaded-{dataset_signature[:8]}",
+                kind="uploaded",
+                dataframe=df,
+                schema=schema,
+                provenance={"source": "upload", "dataset_signature": dataset_signature},
+            )
+        user_message = HumanMessage(
+            content=pending_question_text,
+            additional_kwargs={"attachments": build_user_message_attachments(uploaded_artifact)},
+        )
 
-    submitted = run_manager.submit(
-        thread_id=st.session_state.thread_id,
-        app=app,
-        config=config,
-        max_steps=max_auto_steps,
-        initial_payload=initial_payload,
-    )
-    if not submitted:
-        st.session_state["pending_submission_warning"] = "A run is already in progress. Please wait..."
-    else:
-        st.session_state["optimistic_pending_user_text"] = pending_question_text
-        st.rerun()
-        st.stop()
+        if has_graph_state:
+            initial_payload = next_turn_payload(user_message, uploaded_artifact, snapshot.values)
+        else:
+            initial_payload = initial_graph_state(user_message, uploaded_artifact)
 
-main_ui_placeholder = st.empty()
-# for msg in st.session_state.chat_history:
-#     with st.chat_message(
-#         "user" if isinstance(msg, HumanMessage) else "assistant"
-#     ):
-#         st.markdown(msg.content)
+        submitted = run_manager.submit(
+            thread_id=st.session_state.thread_id,
+            app=app,
+            config=config,
+            max_steps=max_auto_steps,
+            initial_payload=initial_payload,
+        )
+        if not submitted:
+            st.session_state["pending_submission_warning"] = "A run is already in progress. Please wait..."
+        else:
+            st.session_state["optimistic_pending_user_text"] = pending_question_text
+            _rerun_interactive_area()
+            st.stop()
 
-# For check workflow state, DEBUG ONLY
-# with st.expander("🧭 Current workflow state", expanded=False):
-#     run_status = run_manager.status(st.session_state.thread_id)
-#     executor_state = state.get("agents", {}).get("executor", {})
-#     review_state = state.get("agents", {}).get("human_review", {})
-#     st.write(
-#         {
-#             "background_run_state": run_status.get("state"),
-#             "background_run_steps": run_status.get("steps"),
-#             "background_run_error": run_status.get("error"),
-#             "last_action": state.get("last_action"),
-#             "next_action": state.get("next_action"),
-#             "next_nodes": list(snapshot.next or []) if snapshot else [],
-#             "executor_run_status": executor_state.get("run_status"),
-#             "before_run_decision": review_state.get("before_run_decision"),
-#             "after_error_decision": review_state.get("after_error_decision"),
-#             "final_decision": review_state.get("final_decision"),
-#             "workflow_trace_tail": list(state.get("meta", {}).get("workflow_trace", []))[-12:],
-#         }
-#     )
-
-if state:
-    st.session_state.chat_history = build_display_history(state)
-    if any(isinstance(msg, HumanMessage) for msg in st.session_state.chat_history):
-        st.session_state.pop("optimistic_pending_user_text", None)
-st.session_state.chat_history = conversation_history_with_pending_user(
-    st.session_state.chat_history,
-    pending_user_message,
-    welcome_message=WELCOME_MESSAGE,
-)
-st.session_state.chat_history = canonicalize_conversation_history(
-    st.session_state.chat_history,
-    welcome_message=WELCOME_MESSAGE,
-)
-
-latest_chat_is_human = bool(st.session_state.chat_history) and isinstance(
-    st.session_state.chat_history[-1], HumanMessage
-)
-output = {} if latest_chat_is_human else (state.get("output", {}) if state else {})
-export_bytes = build_thread_export(
-    thread_id=st.session_state.thread_id,
-    provider=provider,
-    model_name=model_name,
-    state={**state, "output": output} if state else {"output": output, "messages": st.session_state.chat_history},
-)
-executor_ok = state.get("agents", {}).get("executor", {}).get("run_status") == "ok" if state else False
-meta = state.get("meta", {}) if state else {}
-current_code_hash = meta.get("current_code_hash")
-final_approved_code_hash = meta.get("final_approved_code_hash")
-final_approved = bool(
-    current_code_hash
-    and final_approved_code_hash
-    and current_code_hash == final_approved_code_hash
-) if state else False
-qa_ready = bool(output.get("qa_response"))
-analysis_ready = executor_ok and final_approved
-
-# Render all previous chat history
-display_history = list(st.session_state.chat_history)
-
-interrupt_event = snapshot.interrupts[0] if snapshot and snapshot.interrupts else None
-dismissed_interrupt_id = str(st.session_state.get("dismissed_interrupt_id", "") or "")
-review_state = state.get("agents", {}).get("human_review", {}) if state else {}
-
-# Clear stale dismissal marker once there is no active interrupt.
-if not interrupt_event and dismissed_interrupt_id:
-    st.session_state.pop("dismissed_interrupt_id", None)
-    dismissed_interrupt_id = ""
-
-if show_debug_state:
-    st.write("current state values from langraph are:", state)
     if state:
-        with st.expander("Rendered conversation history", expanded=False):
-            st.write(serialize_display_history(build_display_history(state)))
-        with st.expander("Semantic conversation events", expanded=False):
-            st.write(get_conversation_events(state))
-    st.write("Next nodes:", snapshot.next)
-    st.write("interrupts:", snapshot.interrupts)
-    if interrupt_event:
-        st.write("Interrupt event is:", interrupt_event)
-
-should_render_interrupt = should_render_review_interrupt(
-    interrupt_event,
-    dismissed_interrupt_id=dismissed_interrupt_id,
-    review_state=review_state,
-)
-interrupt_id = None
-payload = None
-ui_type = None
-if should_render_interrupt:
-    interrupt_id = interrupt_event.id
-    payload = interrupt_event.value
-    ui_type = payload["type"]
-
-    # --------------------------------------------------------
-    # Review BEFORE execution
-    # --------------------------------------------------------
-run_status = run_manager.status(st.session_state.thread_id)
-if snapshot and snapshot.next and not snapshot.interrupts and not run_manager.is_running(st.session_state.thread_id):
-    run_manager.submit(
-        thread_id=st.session_state.thread_id,
-        app=app,
-        config=config,
-        max_steps=max_auto_steps,
-        initial_payload=None,
+        st.session_state.chat_history = build_display_history(state)
+        if any(isinstance(msg, HumanMessage) for msg in st.session_state.chat_history):
+            st.session_state.pop("optimistic_pending_user_text", None)
+    st.session_state.chat_history = conversation_history_with_pending_user(
+        st.session_state.chat_history,
+        pending_user_message,
+        welcome_message=WELCOME_MESSAGE,
     )
+    st.session_state.chat_history = canonicalize_conversation_history(
+        st.session_state.chat_history,
+        welcome_message=WELCOME_MESSAGE,
+    )
+
+    latest_chat_is_human = bool(st.session_state.chat_history) and isinstance(
+        st.session_state.chat_history[-1], HumanMessage
+    )
+    output = {} if latest_chat_is_human else (state.get("output", {}) if state else {})
+    export_bytes = build_thread_export(
+        thread_id=st.session_state.thread_id,
+        provider=provider,
+        model_name=model_name,
+        state={**state, "output": output} if state else {"output": output, "messages": st.session_state.chat_history},
+    )
+    executor_ok = state.get("agents", {}).get("executor", {}).get("run_status") == "ok" if state else False
+    meta = state.get("meta", {}) if state else {}
+    current_code_hash = meta.get("current_code_hash")
+    final_approved_code_hash = meta.get("final_approved_code_hash")
+    final_approved = bool(
+        current_code_hash
+        and final_approved_code_hash
+        and current_code_hash == final_approved_code_hash
+    ) if state else False
+    qa_ready = bool(output.get("qa_response"))
+    analysis_ready = executor_ok and final_approved
+    display_history = list(st.session_state.chat_history)
+
+    interrupt_event = snapshot.interrupts[0] if snapshot and snapshot.interrupts else None
+    dismissed_interrupt_id = str(st.session_state.get("dismissed_interrupt_id", "") or "")
+    review_state = state.get("agents", {}).get("human_review", {}) if state else {}
+
+    if not interrupt_event and dismissed_interrupt_id:
+        st.session_state.pop("dismissed_interrupt_id", None)
+        dismissed_interrupt_id = ""
+
+    if show_debug_state:
+        st.write("current state values from langraph are:", state)
+        if state:
+            with st.expander("Rendered conversation history", expanded=False):
+                st.write(serialize_display_history(build_display_history(state)))
+            with st.expander("Semantic conversation events", expanded=False):
+                st.write(get_conversation_events(state))
+        st.write("Next nodes:", snapshot.next)
+        st.write("interrupts:", snapshot.interrupts)
+        if interrupt_event:
+            st.write("Interrupt event is:", interrupt_event)
+
+    should_render_interrupt = should_render_review_interrupt(
+        interrupt_event,
+        dismissed_interrupt_id=dismissed_interrupt_id,
+        review_state=review_state,
+    )
+    interrupt_id = None
+    payload = None
+    ui_type = None
+    if should_render_interrupt:
+        interrupt_id = interrupt_event.id
+        payload = interrupt_event.value
+        ui_type = payload["type"]
+
     run_status = run_manager.status(st.session_state.thread_id)
+    if snapshot and snapshot.next and not snapshot.interrupts and not run_manager.is_running(st.session_state.thread_id):
+        run_manager.submit(
+            thread_id=st.session_state.thread_id,
+            app=app,
+            config=config,
+            max_steps=max_auto_steps,
+            initial_payload=None,
+        )
+        run_status = run_manager.status(st.session_state.thread_id)
 
-review_blocks_submission = should_block_chat_submission(
-    interrupt_event,
-    dismissed_interrupt_id=dismissed_interrupt_id,
-    review_state=review_state,
-)
-controls_state = conversation_controls_state(
-    run_status,
-    review_blocked=review_blocks_submission,
-)
-run_in_progress = controls_state.run_in_progress
+    review_blocks_submission = should_block_chat_submission(
+        interrupt_event,
+        dismissed_interrupt_id=dismissed_interrupt_id,
+        review_state=review_state,
+    )
+    controls_state = conversation_controls_state(
+        run_status,
+        review_blocked=review_blocks_submission,
+    )
+    render_state = conversation_render_state(
+        display_history,
+        run_status=run_status,
+        qa_ready=qa_ready,
+        analysis_ready=analysis_ready,
+        has_review_interrupt=should_render_interrupt,
+    )
+    render_compact_running_view = render_state.hide_secondary_sections
 
-if qa_ready and not analysis_ready:
-    st.success("Response ready")
-
-if analysis_ready:
-    st.success("Analysis completed")
-
-with main_ui_placeholder.container():
     st.subheader("💬 Conversation", anchor=False)
-    for msg in display_history:
+    for msg in render_state.messages:
         with st.chat_message("user" if isinstance(msg, HumanMessage) else "assistant"):
             st.markdown(msg.content)
 
@@ -665,10 +666,12 @@ with main_ui_placeholder.container():
                         key=f"dl_{id(msg)}",
                     )
 
-    if run_status.get("state") == "running":
-        st.info("⏳ Working in background...")
-    elif run_status.get("state") == "error":
-        st.error(f"Background workflow failed: {run_status.get('error') or 'unknown error'}")
+    if render_state.status_level == "info":
+        st.info(render_state.status_text)
+    elif render_state.status_level == "success":
+        st.success(render_state.status_text)
+    elif render_state.status_level == "error":
+        st.error(render_state.status_text)
 
     if should_render_interrupt:
         if ui_type == "before_run_review":
@@ -682,7 +685,7 @@ with main_ui_placeholder.container():
         elif ui_type == "final_review":
             ui_final_review(app, config, payload, interrupt_id, queue_interrupt_resume)
 
-    if state:
+    if state and not render_compact_running_view:
         artifacts = state.get("artifacts", {}) or {}
         datasets = artifacts.get("datasets", {}) or {}
         active_dataset_id = artifacts.get("active_dataset_id")
@@ -724,52 +727,63 @@ with main_ui_placeholder.container():
 
     chat_submission_blocked = controls_state.submission_blocked
     st.session_state["chat_submission_blocked"] = chat_submission_blocked
-    pending_submission_warning = st.session_state.pop("pending_submission_warning", None)
-    if pending_submission_warning:
-        st.warning(pending_submission_warning)
-    review_notice = blocking_review_notice(
-        interrupt_event,
-        dismissed_interrupt_id=dismissed_interrupt_id,
-        review_state=review_state,
+    if controls_state.render and not render_compact_running_view:
+        pending_submission_warning = st.session_state.pop("pending_submission_warning", None)
+        if pending_submission_warning:
+            st.warning(pending_submission_warning)
+        review_notice = blocking_review_notice(
+            interrupt_event,
+            dismissed_interrupt_id=dismissed_interrupt_id,
+            review_state=review_state,
+        )
+        if review_notice:
+            st.info(review_notice)
+        with st.form("question_form", clear_on_submit=True):
+            st.text_input(
+                "Ask a question about your dataset!",
+                placeholder="Ask a question about your dataset!",
+                label_visibility="collapsed",
+                disabled=chat_submission_blocked,
+                key="question_input",
+            )
+            st.form_submit_button(
+                "Send",
+                disabled=chat_submission_blocked,
+                on_click=queue_question_submission,
+            )
+
+        action_col, save_col = st.columns([1, 1])
+        with action_col:
+            if st.button("🔄 Reset Conversation"):
+                st.session_state.chat_history = [AIMessage(content=WELCOME_MESSAGE)]
+                st.session_state.thread_id = uuid.uuid4().hex
+                st.rerun()
+        with save_col:
+            st.download_button(
+                label="💾 Save Current Thread",
+                data=export_bytes,
+                file_name=f"thread_{st.session_state.thread_id}.zip",
+                mime="application/zip",
+                key="save_current_thread_bottom",
+                help="Download this thread's conversation, generated code, output text, and figure as a ZIP archive.",
+            )
+
+    st.markdown("<div id='chat-bottom-anchor'></div>", unsafe_allow_html=True)
+    autoscroll_key = build_autoscroll_key(
+        display_history,
+        ui_type=ui_type,
+        should_render_interrupt=should_render_interrupt,
     )
-    if review_notice:
-        st.info(review_notice)
-    with st.form("question_form", clear_on_submit=True):
-        st.text_input(
-            "Ask a question about your dataset!",
-            placeholder="Ask a question about your dataset!",
-            label_visibility="collapsed",
-            disabled=chat_submission_blocked,
-            key="question_input",
-        )
-        st.form_submit_button(
-            "Send",
-            disabled=chat_submission_blocked,
-            on_click=queue_question_submission,
-        )
+    if autoscroll_key != str(st.session_state.get("last_autoscroll_key") or ""):
+        st.session_state["last_autoscroll_key"] = autoscroll_key
+        _autoscroll_to_bottom()
 
-    action_col, save_col = st.columns([1, 1])
-    with action_col:
-        if st.button("🔄 Reset Conversation"):
-            st.session_state.chat_history = [AIMessage(content=WELCOME_MESSAGE)]
-            st.session_state.thread_id = uuid.uuid4().hex
-            st.rerun()
-    with save_col:
-        st.download_button(
-            label="💾 Save Current Thread",
-            data=export_bytes,
-            file_name=f"thread_{st.session_state.thread_id}.zip",
-            mime="application/zip",
-            key="save_current_thread_bottom",
-            help="Download this thread's conversation, generated code, output text, and figure as a ZIP archive.",
-        )
+    if run_status.get("state") == "running":
+        time.sleep(0.25)
+        _rerun_interactive_area()
+        st.stop()
+    elif run_status.get("state") == "error":
+        st.stop()
 
-if run_status.get("state") == "running":
-    time.sleep(0.25)
-    st.rerun()
-    st.stop()
-elif run_status.get("state") == "error":
-    st.stop()
 
-if should_render_interrupt:
-    st.stop()
+render_interactive_area()

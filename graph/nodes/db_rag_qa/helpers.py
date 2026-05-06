@@ -203,6 +203,9 @@ def _serialize_column_selection(selection: Any) -> dict[str, Any]:
         "rationale": str(_read_value(selection, "rationale", "") or "").strip(),
         "feedback_history": list(_read_value(selection, "feedback_history", []) or []),
         "status": str(_read_value(selection, "status", "awaiting_review") or "awaiting_review").strip(),
+        "selection_source": str(_read_value(selection, "selection_source", "legacy") or "legacy").strip(),
+        "fallback_reason": str(_read_value(selection, "fallback_reason", "") or "").strip(),
+        "raw_model_output": str(_read_value(selection, "raw_model_output", "") or "").strip(),
     }
 
 
@@ -215,6 +218,9 @@ def _deserialize_column_selection(payload: dict[str, Any]) -> SimpleNamespace:
         rationale=str(payload.get("rationale") or "").strip(),
         feedback_history=list(payload.get("feedback_history") or []),
         status=str(payload.get("status") or "awaiting_review").strip(),
+        selection_source=str(payload.get("selection_source") or "legacy").strip(),
+        fallback_reason=str(payload.get("fallback_reason") or "").strip(),
+        raw_model_output=str(payload.get("raw_model_output") or "").strip(),
     )
 
 
@@ -245,6 +251,29 @@ def _serialize_context_summary(context: Any) -> dict[str, list[str]]:
         "tables": _table_names_from_context(context),
         "columns": _column_names_from_context(context),
     }
+
+
+def _serialize_context_pool(context: Any) -> dict[str, list[dict[str, Any]]]:
+    tables = []
+    for entry in list(_read_value(context, "tables", []) or []):
+        table_name = str(_read_value(entry, "table", "") or "").strip()
+        text = str(_read_value(entry, "text", "") or "").strip()
+        if table_name:
+            tables.append({"table": table_name, "text": text})
+
+    columns = []
+    for entry in list(_read_value(context, "columns", []) or []):
+        table_name = str(_read_value(entry, "table", "") or "").strip()
+        column_name = str(_read_value(entry, "column", "") or "").strip()
+        text = str(_read_value(entry, "text", "") or "").strip()
+        score = _read_value(entry, "score", None)
+        if table_name and column_name:
+            payload = {"table": table_name, "column": column_name, "text": text}
+            if isinstance(score, (int, float)):
+                payload["score"] = float(score)
+            columns.append(payload)
+
+    return {"tables": tables, "columns": columns}
 
 
 def _serialize_intent(intent: Any) -> dict[str, Any]:
@@ -616,6 +645,7 @@ def _store_column_selection_artifact(
     goal_text: str,
     intent_snapshot: dict[str, Any],
     retrieval_summary: dict[str, list[str]],
+    retrieval_pool: dict[str, list[dict[str, Any]]],
     summary: str,
 ) -> tuple[AgentState, str]:
     updated_state = store_thread_artifact(
@@ -631,11 +661,15 @@ def _store_column_selection_artifact(
                 "goal_text": goal_text,
                 "intent_snapshot": intent_snapshot,
                 "retrieval_summary": retrieval_summary,
+                "retrieval_pool": retrieval_pool,
                 "tables": list(selection["tables"]),
                 "columns": list(selection["columns"]),
                 "rationale": selection["rationale"],
                 "feedback_history": list(selection.get("feedback_history") or []),
                 "status": selection.get("status", "awaiting_review"),
+                "selection_source": selection.get("selection_source", "legacy"),
+                "fallback_reason": selection.get("fallback_reason", ""),
+                "raw_model_output": selection.get("raw_model_output", ""),
             },
         },
     )
@@ -824,12 +858,21 @@ def _execute_prepared_sql_candidate(
         rag_state.pop("sql_review_approved_artifact_id", None)
         return _finalize_rag_state(updated, rag_state, status="error", active_thread=True)
 
+    reviewed_tables = _format_tables(
+        _string_list(_read_value(approved_selection, "tables", []) or _read_value(candidate, "tables", []))
+    )
+    reviewed_columns = _format_columns(
+        _serialize_columns(_read_value(approved_selection, "columns", []) or _read_value(candidate, "columns", []))
+    )
     response_text = (
         f'{_read_value(execution_result, "answer", "Read-only SQL execution completed.")}\n\n'
+        f"Reviewed tables:\n{reviewed_tables}\n\n"
+        f"Reviewed columns:\n{reviewed_columns}\n\n"
         f'SQL used:\n{_format_sql_block(str(_read_value(execution_result, "sql", "") or ""))}\n\n'
         f'Saved dataset id: {artifact["id"]}'
     )
     updated = _append_ai_response(persisted_state, response_text)
+    updated = _append_assistant_event(updated, response_text)
     updated = _store_sql_candidate_output(updated, _serialize_prepared_sql_candidate(candidate))
     updated = _clear_output_error(updated)
     updated["meta"] = clear_clarification_meta(updated.get("meta") or {})

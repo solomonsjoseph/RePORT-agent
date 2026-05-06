@@ -138,6 +138,9 @@ def _enforce_selection_constraints(
         rationale=candidate.rationale,
         feedback_history=list(candidate.feedback_history),
         status=candidate.status,
+        selection_source=getattr(candidate, "selection_source", "legacy"),
+        fallback_reason=str(getattr(candidate, "fallback_reason", "") or ""),
+        raw_model_output=str(getattr(candidate, "raw_model_output", "") or ""),
     )
 
 
@@ -236,4 +239,3 @@ def _build_invalid_column_selection_candidate(
 def _default_selection_id(question: str, context: DbRagContext, feedback_history: list[dict[str, Any]]) -> str:
     columns = [{"table": entry.table, "column": entry.column} for entry in context.columns]
     return default_selection_id(question, context.table_names, columns, feedback_history)
-

@@ -29,9 +29,9 @@ def _ensure_langchain_core_stubs() -> None:
         class BaseMessage:
             type = "base"
 
-            def __init__(self, content: str) -> None:
+            def __init__(self, content: str, additional_kwargs: dict | None = None) -> None:
                 self.content = content
-                self.additional_kwargs = {}
+                self.additional_kwargs = dict(additional_kwargs or {})
 
         messages.BaseMessage = BaseMessage
 
@@ -40,6 +40,18 @@ def _ensure_langchain_core_stubs() -> None:
             type = "ai"
 
         messages.AIMessage = AIMessage
+
+    if not hasattr(messages, "HumanMessage"):
+        class HumanMessage(messages.BaseMessage):
+            type = "human"
+
+        messages.HumanMessage = HumanMessage
+
+    if not hasattr(messages, "SystemMessage"):
+        class SystemMessage(messages.BaseMessage):
+            type = "system"
+
+        messages.SystemMessage = SystemMessage
 
     if not hasattr(prompts, "ChatPromptTemplate"):
         prompts.ChatPromptTemplate = type(
@@ -1399,6 +1411,27 @@ def test_sql_execution_completion_writes_db_rag_sql_task(monkeypatch) -> None:
     assert "column_count" not in memory_text
     assert "columns" not in memory_text
     assert "tables" not in memory_text
+
+
+def test_successful_sql_execution_keeps_reviewed_sql_and_selection_in_display_history(monkeypatch) -> None:
+    from utils.display_history import build_display_history
+
+    state, rag_state, candidate = _successful_sql_execution_state()
+
+    updated = _execute_successful_sql(monkeypatch, state, rag_state, candidate)
+
+    response = updated["output"]["qa_response"]
+    assert "Reviewed tables:" in response
+    assert "- Form 2A" in response
+    assert "Reviewed columns:" in response
+    assert "- Form 2A.IC_AGE: Age in years" in response
+    assert "SQL used:" in response
+    assert 'select IC_AGE from "Form 2A"' in response
+
+    history_text = "\n\n".join(str(message.content) for message in build_display_history(updated))
+    assert "Reviewed tables:" in history_text
+    assert "- Form 2A.IC_AGE: Age in years" in history_text
+    assert 'select IC_AGE from "Form 2A"' in history_text
 
 
 def test_sql_execution_completion_uses_artifact_question_text_when_candidate_question_empty(monkeypatch) -> None:

@@ -27,6 +27,7 @@ from .helpers import (
     _render_db_rag_recent_turns,
     _reset_active_workflow_for_new_question,
     _serialize_column_selection,
+    _serialize_context_pool,
     _serialize_context_summary,
     _serialize_intent,
     _serialize_prepared_sql_candidate,
@@ -194,6 +195,7 @@ def _start_column_review(
         goal_text=selection_goal_text,
         intent_snapshot=_intent_snapshot(intent),
         retrieval_summary=_serialize_context_summary(context),
+        retrieval_pool=_serialize_context_pool(context),
         summary="Proposed DB-RAG column selection awaiting human review.",
     )
     updated = _append_ai_response(updated, _format_column_review_response("", selection_payload, revised=revised))

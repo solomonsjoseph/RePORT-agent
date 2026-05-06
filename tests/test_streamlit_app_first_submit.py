@@ -116,6 +116,7 @@ def test_first_submit_does_not_duplicate_conversation_blocks(monkeypatch) -> Non
     assert [item.value for item in app.subheader] == ["💬 Conversation"]
     assert [button.label for button in app.button].count("🔄 Reset Conversation") == 1
 
+
     app.text_input(key="question_input").set_value("Query my database, help me subset age")
     for button in app.button:
         if button.label == "Send":

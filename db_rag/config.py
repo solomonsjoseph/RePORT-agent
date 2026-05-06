@@ -84,3 +84,9 @@ def resolve_db_rag_reply_classifier_model() -> str | None:
     load_dotenv()
     model = str(os.getenv("DB_RAG_REPLY_CLASSIFIER_MODEL", "") or "").strip()
     return model or "gpt-4o-mini"
+
+
+def resolve_db_rag_selection_model() -> str | None:
+    load_dotenv()
+    model = str(os.getenv("DB_RAG_SELECTION_MODEL", "") or "").strip()
+    return model or "gpt-4o-mini"

@@ -12,6 +12,14 @@ class ConversationControlsState:
     run_in_progress: bool
 
 
+@dataclass(frozen=True)
+class ConversationRenderState:
+    messages: tuple[Any, ...]
+    status_level: str | None
+    status_text: str | None
+    hide_secondary_sections: bool
+
+
 def conversation_controls_state(
     run_status: Mapping[str, Any] | None,
     *,
@@ -21,9 +29,68 @@ def conversation_controls_state(
     run_in_progress = state == "running"
     run_blocks_submission = state in {"running", "error"}
     return ConversationControlsState(
-        render=True,
+        render=not run_blocks_submission,
         submission_blocked=bool(review_blocked or run_blocks_submission),
         run_in_progress=run_in_progress,
+    )
+
+
+def should_render_compact_running_view(
+    run_status: Mapping[str, Any] | None,
+    *,
+    has_review_interrupt: bool,
+) -> bool:
+    state = (run_status or {}).get("state")
+    return state == "running" and not has_review_interrupt
+
+
+def conversation_render_state(
+    history: list[Any],
+    *,
+    run_status: Mapping[str, Any] | None,
+    qa_ready: bool,
+    analysis_ready: bool,
+    has_review_interrupt: bool,
+) -> ConversationRenderState:
+    compact_running = should_render_compact_running_view(
+        run_status,
+        has_review_interrupt=has_review_interrupt,
+    )
+    state = (run_status or {}).get("state")
+    status_level = None
+    status_text = None
+    if state == "error":
+        status_level = "error"
+        status_text = f"Background workflow failed: {(run_status or {}).get('error') or 'unknown error'}"
+    elif state == "running":
+        status_level = "info"
+        status_text = "⏳ Working in background..."
+    elif analysis_ready:
+        status_level = "success"
+        status_text = "Analysis completed"
+    elif qa_ready:
+        status_level = "success"
+        status_text = "Response ready"
+    return ConversationRenderState(
+        messages=tuple(history),
+        status_level=status_level,
+        status_text=status_text,
+        hide_secondary_sections=compact_running,
+    )
+
+
+def build_autoscroll_key(
+    history: list[Any],
+    *,
+    ui_type: str | None,
+    should_render_interrupt: bool,
+) -> str:
+    latest_content = str(getattr(history[-1], "content", "") if history else "")[:120]
+    return (
+        f"{len(history)}:"
+        f"{latest_content}:"
+        f"{ui_type or ''}:"
+        f"{int(should_render_interrupt)}"
     )
 
 
