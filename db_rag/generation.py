@@ -75,6 +75,8 @@ def build_sql_policy_text() -> str:
         "- Use ILIKE for case-insensitive string comparisons.\n"
         "- Prefer the stored/sample-value representation over coded allowed values when they differ.\n"
         "- Values of 99, 999, or 9999 are often missing data codes and should be excluded unless the question is explicitly about missingness.\n"
+        "- Do not compare VARCHAR/text columns to numeric missing-code literals; use quoted string literals "
+        "if those codes are actually stored as text, or TRY_CAST(column AS INTEGER) before numeric missing-code comparisons.\n"
         "- If a column profile shows a high NULL rate, add IS NOT NULL where appropriate."
     )
 

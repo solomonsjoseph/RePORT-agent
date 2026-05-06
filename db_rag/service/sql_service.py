@@ -15,6 +15,60 @@ from ..generation import (
     is_unanswerable_response,
     validate_sql,
 )
+from .schema import _lookup_schema_variable_metadata
+
+
+def _quote_duckdb_identifier(identifier: str) -> str:
+    return '"' + str(identifier).replace('"', '""') + '"'
+
+
+def _duckdb_column_profile(table: str, column: str) -> dict[str, object]:
+    import duckdb
+
+    if not DUCKDB_PATH.exists():
+        return {}
+
+    quoted_table = _quote_duckdb_identifier(table)
+    quoted_column = _quote_duckdb_identifier(column)
+    db = duckdb.connect(str(DUCKDB_PATH), read_only=True)
+    try:
+        described = db.execute(f"DESCRIBE SELECT {quoted_column} FROM {quoted_table} LIMIT 0").fetchall()
+        samples = db.execute(
+            f"SELECT DISTINCT {quoted_column} FROM {quoted_table} "
+            f"WHERE {quoted_column} IS NOT NULL LIMIT 8"
+        ).fetchall()
+    finally:
+        db.close()
+
+    profile: dict[str, object] = {}
+    if described:
+        profile["stored_dtype"] = str(described[0][1])
+    if samples:
+        profile["stored_samples"] = [row[0] for row in samples]
+    return profile
+
+
+def _approved_columns_for_sql_prompt(columns: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    approved_columns: list[dict[str, Any]] = []
+    for column in columns:
+        table = str(column["table"])
+        column_name = str(column["column"])
+        entry: dict[str, Any] = {
+            "table": table,
+            "column": column_name,
+            "description": str(column.get("description", "") or ""),
+        }
+        schema_meta = _lookup_schema_variable_metadata(table, column_name) or {}
+        for field in ("values", "depends_on", "condition", "section_context"):
+            value = schema_meta.get(field)
+            if value is not None and value != "":
+                entry[field] = value
+        try:
+            entry.update(_duckdb_column_profile(table, column_name))
+        except Exception:
+            pass
+        approved_columns.append(entry)
+    return approved_columns
 
 
 class DbRagSqlMixin:
@@ -31,7 +85,7 @@ class DbRagSqlMixin:
             raise ValueError("prepare_sql_candidate requires an approved column selection.")
 
         approved_tables = list(approved_selection.tables)
-        approved_columns = [
+        candidate_columns = [
             {
                 "table": str(column["table"]),
                 "column": str(column["column"]),
@@ -39,6 +93,7 @@ class DbRagSqlMixin:
             }
             for column in approved_selection.columns
         ]
+        prompt_columns = _approved_columns_for_sql_prompt(candidate_columns)
         response = self.llm.invoke(
             [
                 SystemMessage(
@@ -57,7 +112,7 @@ class DbRagSqlMixin:
                     content=(
                         f"Question:\n{question}\n\n"
                         f"Approved tables:\n{json.dumps(approved_tables, indent=2)}\n\n"
-                        f"Approved columns:\n{json.dumps(approved_columns, indent=2, sort_keys=True)}"
+                        f"Approved columns:\n{json.dumps(prompt_columns, indent=2, sort_keys=True)}"
                     )
                 ),
             ]
@@ -71,7 +126,7 @@ class DbRagSqlMixin:
                 question=question,
                 sql=sql,
                 tables=approved_tables,
-                columns=approved_columns,
+                columns=candidate_columns,
                 selection_id=approved_selection.selection_id,
             )
             return self.repair_prepared_sql_candidate(repair_seed, error or "SQL validation failed.")
@@ -79,7 +134,7 @@ class DbRagSqlMixin:
             question=question,
             sql=sql,
             tables=approved_tables,
-            columns=approved_columns,
+            columns=candidate_columns,
             selection_id=approved_selection.selection_id,
         )
 
@@ -106,6 +161,7 @@ class DbRagSqlMixin:
     def repair_prepared_sql_candidate(self, candidate: PreparedSqlCandidate, error_message: str) -> PreparedSqlCandidate:
         from langchain_core.messages import HumanMessage, SystemMessage
 
+        prompt_columns = _approved_columns_for_sql_prompt([dict(column) for column in candidate.columns])
         response = self.llm.invoke(
             [
                 SystemMessage(
@@ -121,7 +177,7 @@ class DbRagSqlMixin:
                     content=(
                         f"Original question:\n{candidate.question}\n\n"
                         f"Approved tables:\n{json.dumps(list(candidate.tables), indent=2)}\n\n"
-                        f"Approved columns:\n{json.dumps(list(candidate.columns), indent=2, sort_keys=True)}\n\n"
+                        f"Approved columns:\n{json.dumps(prompt_columns, indent=2, sort_keys=True)}\n\n"
                         f"SQL that failed:\n{candidate.sql}\n\n"
                         f"Execution/validation error:\n{error_message}\n\n"
                         "Fix the SQL and return only the corrected SQL."

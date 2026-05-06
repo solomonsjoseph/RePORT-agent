@@ -477,7 +477,8 @@ if pending_resume:
     state = snapshot.values if snapshot else {}
 
 pending_question_text = st.session_state.pop("pending_question_text", None)
-pending_user_message = None
+optimistic_pending_user_text = str(st.session_state.get("optimistic_pending_user_text") or "").strip()
+pending_user_message = HumanMessage(content=optimistic_pending_user_text) if optimistic_pending_user_text else None
 if pending_question_text:
     uploaded_artifact = None
     if uploaded_csv and uploaded_schema:
@@ -510,13 +511,11 @@ if pending_question_text:
     if not submitted:
         st.session_state["pending_submission_warning"] = "A run is already in progress. Please wait..."
     else:
-        pending_user_message = user_message
+        st.session_state["optimistic_pending_user_text"] = pending_question_text
+        st.rerun()
+        st.stop()
 
-conversation_placeholder = st.empty()
-human_review_placeholder = st.empty()
-saved_datasets_placeholder = st.empty()
-conversation_controls_placeholder = st.empty()
-conversation_actions_placeholder = st.empty()
+main_ui_placeholder = st.empty()
 # for msg in st.session_state.chat_history:
 #     with st.chat_message(
 #         "user" if isinstance(msg, HumanMessage) else "assistant"
@@ -546,6 +545,8 @@ conversation_actions_placeholder = st.empty()
 
 if state:
     st.session_state.chat_history = build_display_history(state)
+    if any(isinstance(msg, HumanMessage) for msg in st.session_state.chat_history):
+        st.session_state.pop("optimistic_pending_user_text", None)
 st.session_state.chat_history = conversation_history_with_pending_user(
     st.session_state.chat_history,
     pending_user_message,
@@ -629,9 +630,24 @@ if snapshot and snapshot.next and not snapshot.interrupts and not run_manager.is
     )
     run_status = run_manager.status(st.session_state.thread_id)
 
-# Render the conversation in a single replaceable block to prevent stale duplicate
-# headers/messages across rapid reruns while background work is active.
-with conversation_placeholder.container():
+review_blocks_submission = should_block_chat_submission(
+    interrupt_event,
+    dismissed_interrupt_id=dismissed_interrupt_id,
+    review_state=review_state,
+)
+controls_state = conversation_controls_state(
+    run_status,
+    review_blocked=review_blocks_submission,
+)
+run_in_progress = controls_state.run_in_progress
+
+if qa_ready and not analysis_ready:
+    st.success("Response ready")
+
+if analysis_ready:
+    st.success("Analysis completed")
+
+with main_ui_placeholder.container():
     st.subheader("💬 Conversation", anchor=False)
     for msg in display_history:
         with st.chat_message("user" if isinstance(msg, HumanMessage) else "assistant"):
@@ -654,8 +670,6 @@ with conversation_placeholder.container():
     elif run_status.get("state") == "error":
         st.error(f"Background workflow failed: {run_status.get('error') or 'unknown error'}")
 
-# Keep human review directly under conversation history.
-with human_review_placeholder.container():
     if should_render_interrupt:
         if ui_type == "before_run_review":
             ui_before_run_review(app, config, payload, interrupt_id, queue_interrupt_resume)
@@ -668,25 +682,6 @@ with human_review_placeholder.container():
         elif ui_type == "final_review":
             ui_final_review(app, config, payload, interrupt_id, queue_interrupt_resume)
 
-review_blocks_submission = should_block_chat_submission(
-    interrupt_event,
-    dismissed_interrupt_id=dismissed_interrupt_id,
-    review_state=review_state,
-)
-controls_state = conversation_controls_state(
-    run_status,
-    review_blocked=review_blocks_submission,
-)
-run_in_progress = controls_state.run_in_progress
-
-if qa_ready and not analysis_ready:
-    st.success("Response ready")
-
-if analysis_ready:
-    st.success("Analysis completed")
-
-# Keep saved datasets above the chat input area.
-with saved_datasets_placeholder.container():
     if state:
         artifacts = state.get("artifacts", {}) or {}
         datasets = artifacts.get("datasets", {}) or {}
@@ -727,7 +722,6 @@ with saved_datasets_placeholder.container():
                     except Exception as exc:
                         st.error(f"Unable to load selected dataset artifact: {exc}")
 
-with conversation_controls_placeholder.container():
     chat_submission_blocked = controls_state.submission_blocked
     st.session_state["chat_submission_blocked"] = chat_submission_blocked
     pending_submission_warning = st.session_state.pop("pending_submission_warning", None)
@@ -754,8 +748,6 @@ with conversation_controls_placeholder.container():
             on_click=queue_question_submission,
         )
 
-# Keep reset/save actions below the chatbox.
-with conversation_actions_placeholder.container():
     action_col, save_col = st.columns([1, 1])
     with action_col:
         if st.button("🔄 Reset Conversation"):
