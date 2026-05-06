@@ -779,12 +779,15 @@ def _execute_prepared_sql_candidate(
         or ""
     ).strip()
     sql_candidate_artifact_id = str(rag_state.get("pending_sql_candidate_artifact_id") or "").strip()
+    approved_sql_review_artifact_id = str(rag_state.get("sql_review_approved_artifact_id") or "").strip()
     approved_selection = _artifact_content(state, selection_artifact_id)
     sql_candidate_artifact = _artifact_content(state, sql_candidate_artifact_id)
     review_snapshot = dict(approved_selection or approved_review)
     try:
         if not approved_selection:
             raise ValueError("Approved column-selection artifact is missing during SQL execution.")
+        if not sql_candidate_artifact_id or approved_sql_review_artifact_id != sql_candidate_artifact_id:
+            raise PermissionError("SQL execution requires explicit human approval of the current SQL candidate.")
 
         execution_result = service.execute_prepared_sql(candidate)
 
@@ -799,7 +802,7 @@ def _execute_prepared_sql_candidate(
     except Exception as exc:
         error_payload = {
             "category": "db_rag_sql",
-            "type": type(exc).__name__,
+            "type": "MissingSqlReviewApproval" if isinstance(exc, PermissionError) else type(exc).__name__,
             "message": str(exc),
         }
         updated = _append_sql_error_response(state, error_payload)
@@ -818,6 +821,7 @@ def _execute_prepared_sql_candidate(
         rag_state["error"] = error_payload
         rag_state["last_database_question"] = candidate.question
         rag_state["thread_status"] = "error"
+        rag_state.pop("sql_review_approved_artifact_id", None)
         return _finalize_rag_state(updated, rag_state, status="error", active_thread=True)
 
     response_text = (
@@ -856,6 +860,7 @@ def _execute_prepared_sql_candidate(
     rag_state.pop("pending_sql_candidate", None)
     rag_state.pop("pending_column_review", None)
     rag_state.pop("active_task", None)
+    rag_state.pop("sql_review_approved_artifact_id", None)
     rag_state["pending_sql_candidate_artifact_id"] = None
     rag_state["pending_column_review_artifact_id"] = None
     rag_state["approved_column_selection_artifact_id"] = None
@@ -905,37 +910,17 @@ def _format_sql_block(sql: str) -> str:
 
 
 def _format_column_review_response(answer_text: str, selection: dict[str, Any], *, revised: bool = False) -> str:
-    details = (
-        f"Selected tables:\n{_format_tables(_string_list(selection.get('tables', [])))}\n\n"
-        f"Selected columns:\n{_format_columns(_serialize_columns(selection.get('columns', [])))}"
-    )
-    rationale = str(selection.get("rationale") or "").strip()
-    if rationale:
-        details = f"{details}\n\nRationale:\n{rationale}"
-
     if revised:
-        return (
-            "I refreshed the DB-RAG column selection based on your feedback.\n\n"
-            f"Please review the updated selection in the panel below.\n\n{details}"
-        )
+        return "I refreshed the DB-RAG column selection based on your feedback.\n\nPlease review the updated selection in the panel below."
     if answer_text:
-        return (
-            f"{answer_text}\n\n"
-            f"Please review the proposed column selection in the panel below.\n\n{details}"
-        )
-    return f"Please review the proposed DB-RAG column selection in the panel below.\n\n{details}"
+        return f"{answer_text}\n\nPlease review the proposed column selection in the panel below."
+    return "Please review the proposed DB-RAG column selection in the panel below."
 
 
 def _format_sql_candidate_response(candidate: dict[str, Any]) -> str:
-    tables = _format_tables(_string_list(candidate.get("tables", [])))
-    columns = _format_columns(_serialize_columns(candidate.get("columns", [])))
-    sql_block = _format_sql_block(str(candidate.get("sql") or ""))
     return (
         "I prepared a read-only SQL candidate from the approved DB-RAG selection.\n\n"
-        "Please review the SQL details in the panel below before execution.\n\n"
-        f"Selected tables:\n{tables}\n\n"
-        f"Selected columns:\n{columns}\n\n"
-        f"Proposed SQL:\n{sql_block}"
+        "Please review the SQL details in the panel below before execution."
     )
 
 

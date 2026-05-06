@@ -167,9 +167,11 @@ def human_review_rag_db_sql_execution_node(state, service):
             "pending_column_review_artifact_id": selection_artifact_id or None,
             "approved_column_selection_artifact_id": selection_artifact_id or None,
             "pending_column_review": review,
+            "sql_review_approved_artifact_id": candidate_artifact_id or None,
         }
         executed_state = _execute_prepared_sql_candidate(updated_state, execution_rag_state, candidate, service)
         executed_rag_state = dict((executed_state.get("agents") or {}).get("rag_db_qa") or {})
+        executed_rag_state.pop("sql_review_approved_artifact_id", None)
         thread_status = str(executed_rag_state.get("thread_status") or "").strip()
         if thread_status in {"completed", "executed"}:
             executed_rag_state["thread_status"] = "completed"

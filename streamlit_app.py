@@ -513,6 +513,10 @@ if pending_question_text:
         pending_user_message = user_message
 
 conversation_placeholder = st.empty()
+human_review_placeholder = st.empty()
+saved_datasets_placeholder = st.empty()
+conversation_controls_placeholder = st.empty()
+conversation_actions_placeholder = st.empty()
 # for msg in st.session_state.chat_history:
 #     with st.chat_message(
 #         "user" if isinstance(msg, HumanMessage) else "assistant"
@@ -614,18 +618,6 @@ if should_render_interrupt:
     # --------------------------------------------------------
     # Review BEFORE execution
     # --------------------------------------------------------
-if should_render_interrupt:
-    if ui_type == "before_run_review":
-        ui_before_run_review(app, config, payload, interrupt_id, queue_interrupt_resume)
-    elif ui_type == "after_error_review":
-        ui_after_error_review(app, config, payload, interrupt_id, queue_interrupt_resume)
-    elif ui_type == "human_review_rag_db_column_selection":
-        ui_human_review_rag_db_column_selection(app, config, payload, interrupt_id, queue_interrupt_resume)
-    elif ui_type == "human_review_rag_db_sql_execution":
-        ui_human_review_rag_db_sql_execution(app, config, payload, interrupt_id, queue_interrupt_resume)
-    elif ui_type == "final_review":
-        ui_final_review(app, config, payload, interrupt_id, queue_interrupt_resume)
-
 run_status = run_manager.status(st.session_state.thread_id)
 if snapshot and snapshot.next and not snapshot.interrupts and not run_manager.is_running(st.session_state.thread_id):
     run_manager.submit(
@@ -662,6 +654,20 @@ with conversation_placeholder.container():
     elif run_status.get("state") == "error":
         st.error(f"Background workflow failed: {run_status.get('error') or 'unknown error'}")
 
+# Keep human review directly under conversation history.
+with human_review_placeholder.container():
+    if should_render_interrupt:
+        if ui_type == "before_run_review":
+            ui_before_run_review(app, config, payload, interrupt_id, queue_interrupt_resume)
+        elif ui_type == "after_error_review":
+            ui_after_error_review(app, config, payload, interrupt_id, queue_interrupt_resume)
+        elif ui_type == "human_review_rag_db_column_selection":
+            ui_human_review_rag_db_column_selection(app, config, payload, interrupt_id, queue_interrupt_resume)
+        elif ui_type == "human_review_rag_db_sql_execution":
+            ui_human_review_rag_db_sql_execution(app, config, payload, interrupt_id, queue_interrupt_resume)
+        elif ui_type == "final_review":
+            ui_final_review(app, config, payload, interrupt_id, queue_interrupt_resume)
+
 review_blocks_submission = should_block_chat_submission(
     interrupt_event,
     dismissed_interrupt_id=dismissed_interrupt_id,
@@ -679,47 +685,49 @@ if qa_ready and not analysis_ready:
 if analysis_ready:
     st.success("Analysis completed")
 
-if state:
-    artifacts = state.get("artifacts", {}) or {}
-    datasets = artifacts.get("datasets", {}) or {}
-    active_dataset_id = artifacts.get("active_dataset_id")
-    dataset_ids = list(datasets.keys())
+# Keep saved datasets above the chat input area.
+with saved_datasets_placeholder.container():
+    if state:
+        artifacts = state.get("artifacts", {}) or {}
+        datasets = artifacts.get("datasets", {}) or {}
+        active_dataset_id = artifacts.get("active_dataset_id")
+        dataset_ids = list(datasets.keys())
 
-    if dataset_ids:
-        default_index = dataset_ids.index(active_dataset_id) if active_dataset_id in dataset_ids else 0
-        with st.expander("💾 Saved Datasets", expanded=False):
-            selected_dataset_id = st.selectbox(
-                "Active dataset artifact",
-                options=dataset_ids,
-                index=default_index,
-                key="selected_dataset_artifact_id",
-            )
-            if selected_dataset_id != active_dataset_id:
-                set_active_dataset_selection(app, config, state, selected_dataset_id)
-                st.rerun()
-            selected_artifact = datasets.get(selected_dataset_id)
-            if selected_artifact:
-                st.caption(f"Dataset ID: {selected_artifact.get('id', 'unknown')}")
-                st.caption(f"Kind: {selected_artifact.get('kind', 'unknown')}")
-                if selected_dataset_id == active_dataset_id:
-                    st.caption("Status: active")
-                try:
-                    selected_df, selected_schema = load_dataset_artifact(selected_artifact)
-                    st.dataframe(selected_df.head(100))
-                    csv_bytes = selected_df.to_csv(index=False).encode("utf-8")
-                    st.download_button(
-                        label="⬇️ Download selected dataset (CSV)",
-                        data=csv_bytes,
-                        file_name=f"{selected_artifact.get('id', 'dataset')}.csv",
-                        mime="text/csv",
-                        key=f"download_dataset_csv_{selected_artifact.get('id', 'unknown')}",
-                    )
-                    with st.expander("Schema (selected dataset)", expanded=False):
-                        st.json(selected_schema)
-                except Exception as exc:
-                    st.error(f"Unable to load selected dataset artifact: {exc}")
+        if dataset_ids:
+            default_index = dataset_ids.index(active_dataset_id) if active_dataset_id in dataset_ids else 0
+            with st.expander("💾 Saved Datasets", expanded=False):
+                selected_dataset_id = st.selectbox(
+                    "Active dataset artifact",
+                    options=dataset_ids,
+                    index=default_index,
+                    key="selected_dataset_artifact_id",
+                )
+                if selected_dataset_id != active_dataset_id:
+                    set_active_dataset_selection(app, config, state, selected_dataset_id)
+                    st.rerun()
+                selected_artifact = datasets.get(selected_dataset_id)
+                if selected_artifact:
+                    st.caption(f"Dataset ID: {selected_artifact.get('id', 'unknown')}")
+                    st.caption(f"Kind: {selected_artifact.get('kind', 'unknown')}")
+                    if selected_dataset_id == active_dataset_id:
+                        st.caption("Status: active")
+                    try:
+                        selected_df, selected_schema = load_dataset_artifact(selected_artifact)
+                        st.dataframe(selected_df.head(100))
+                        csv_bytes = selected_df.to_csv(index=False).encode("utf-8")
+                        st.download_button(
+                            label="⬇️ Download selected dataset (CSV)",
+                            data=csv_bytes,
+                            file_name=f"{selected_artifact.get('id', 'dataset')}.csv",
+                            mime="text/csv",
+                            key=f"download_dataset_csv_{selected_artifact.get('id', 'unknown')}",
+                        )
+                        with st.expander("Schema (selected dataset)", expanded=False):
+                            st.json(selected_schema)
+                    except Exception as exc:
+                        st.error(f"Unable to load selected dataset artifact: {exc}")
 
-with st.container():
+with conversation_controls_placeholder.container():
     chat_submission_blocked = controls_state.submission_blocked
     st.session_state["chat_submission_blocked"] = chat_submission_blocked
     pending_submission_warning = st.session_state.pop("pending_submission_warning", None)
@@ -746,6 +754,8 @@ with st.container():
             on_click=queue_question_submission,
         )
 
+# Keep reset/save actions below the chatbox.
+with conversation_actions_placeholder.container():
     action_col, save_col = st.columns([1, 1])
     with action_col:
         if st.button("🔄 Reset Conversation"):

@@ -274,6 +274,7 @@ def _successful_sql_execution_state() -> tuple[dict, dict, SimpleNamespace]:
         "approved_column_selection_artifact_id": "sel-art-1",
         "pending_sql_candidate_artifact_id": "sql-art-2",
         "pending_sql_candidate": {"status": "prepared"},
+        "sql_review_approved_artifact_id": "sql-art-2",
     }
     candidate = SimpleNamespace(
         question="Generate the SQL to subset index cases with diabetes.",
@@ -931,10 +932,11 @@ def test_approved_selection_pointer_resumes_sql_preparation_without_pending_revi
     assert rag_state["approved_column_selection_artifact_id"] == "selection-artifact"
     assert rag_state["pending_sql_candidate_artifact_id"]
     assert "read-only SQL candidate" in updated["output"]["qa_response"]
-    assert "Selected tables:" in updated["output"]["qa_response"]
-    assert "Selected columns:" in updated["output"]["qa_response"]
-    assert "Proposed SQL:" in updated["output"]["qa_response"]
-    assert "select IC_AGE from \"Form 2A\"" in updated["output"]["qa_response"]
+    assert "review the SQL details in the panel below before execution" in updated["output"]["qa_response"]
+    assert "Selected tables:" not in updated["output"]["qa_response"]
+    assert "Selected columns:" not in updated["output"]["qa_response"]
+    assert "Proposed SQL:" not in updated["output"]["qa_response"]
+    assert "select IC_AGE from \"Form 2A\"" not in updated["output"]["qa_response"]
     events = updated["artifacts"]["conversation_events"]
     assert events[-2]["type"] == "sql"
     assert events[-2]["artifact_id"] == rag_state["pending_sql_candidate_artifact_id"]
@@ -984,9 +986,9 @@ def test_pending_column_review_artifact_reprompts_instead_of_erroring() -> None:
     assert rag_state["thread_status"] == "awaiting_column_review"
     assert rag_state["pending_column_review_artifact_id"] == "selection-artifact"
     assert "Please review the proposed DB-RAG column selection in the panel below." in updated["output"]["qa_response"]
-    assert "Selected tables:" in updated["output"]["qa_response"]
-    assert "Selected columns:" in updated["output"]["qa_response"]
-    assert "Form 2A.IC_AGE: Age in years" in updated["output"]["qa_response"]
+    assert "Selected tables:" not in updated["output"]["qa_response"]
+    assert "Selected columns:" not in updated["output"]["qa_response"]
+    assert "Form 2A.IC_AGE: Age in years" not in updated["output"]["qa_response"]
     assert updated["output"].get("error") is None
 
 
@@ -1328,6 +1330,7 @@ def test_execution_artifact_records_selection_and_sql_artifact_ids(monkeypatch) 
         "pending_column_review_artifact_id": "sel-art-1",
         "approved_column_selection_artifact_id": "sel-art-1",
         "pending_sql_candidate_artifact_id": "sql-art-2",
+        "sql_review_approved_artifact_id": "sql-art-2",
     }
     candidate = SimpleNamespace(
         question="Generate the SQL to subset index cases with diabetes.",
@@ -1643,10 +1646,12 @@ def test_execution_does_not_auto_repair_unreviewed_sql(monkeypatch) -> None:
         status="prepared",
     )
 
+    execution_calls: list[object] = []
     repair_calls: list[tuple[object, str]] = []
 
     class _ExecutionService:
         def execute_prepared_sql(self, prepared_candidate):
+            execution_calls.append(prepared_candidate)
             raise RuntimeError(f"bad sql: {prepared_candidate.sql}")
 
         def repair_prepared_sql_candidate(self, prepared_candidate, error_text):
@@ -1655,9 +1660,11 @@ def test_execution_does_not_auto_repair_unreviewed_sql(monkeypatch) -> None:
 
     updated = rag_helpers._execute_prepared_sql_candidate(state, rag_state, candidate, _ExecutionService())
 
+    assert execution_calls == []
     assert repair_calls == []
     assert updated["agents"]["rag_db_qa"]["thread_status"] == "error"
     assert updated["output"]["error"]["category"] == "db_rag_sql"
+    assert updated["output"]["error"]["type"] == "MissingSqlReviewApproval"
 
 
 def test_execution_error_reopens_column_review_from_canonical_selection_artifact() -> None:
@@ -1690,6 +1697,7 @@ def test_execution_error_reopens_column_review_from_canonical_selection_artifact
         "pending_column_review_artifact_id": "sel-art-1",
         "approved_column_selection_artifact_id": "sel-art-1",
         "pending_sql_candidate_artifact_id": "sql-art-2",
+        "sql_review_approved_artifact_id": "sql-art-2",
     }
     candidate = SimpleNamespace(
         question="Generate the SQL to subset index cases with diabetes.",
