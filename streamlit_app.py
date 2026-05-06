@@ -68,9 +68,10 @@ from utils.streamlit_interrupts import (
     should_render_review_interrupt,
 )
 from utils.streamlit_rendering import (
+    canonicalize_conversation_history,
+    conversation_controls_state,
     conversation_history_with_pending_user,
     normalize_submitted_question,
-    should_render_conversation_controls,
 )
 from utils.dataset_artifacts import (
     build_active_dataset_artifacts_patch,
@@ -84,7 +85,7 @@ WELCOME_MESSAGE = "Hello! Ask me anything ..."
 # --------------------------
 # Streamlit Config
 # --------------------------
-title = "Multi-Agent for RePORT"
+title = "AI Agent for RePORT"
 st.set_page_config(
     page_title=title,
     layout="wide",
@@ -511,7 +512,7 @@ if pending_question_text:
     else:
         pending_user_message = user_message
 
-st.subheader("💬 Conversation")
+conversation_placeholder = st.empty()
 # for msg in st.session_state.chat_history:
 #     with st.chat_message(
 #         "user" if isinstance(msg, HumanMessage) else "assistant"
@@ -546,6 +547,10 @@ st.session_state.chat_history = conversation_history_with_pending_user(
     pending_user_message,
     welcome_message=WELCOME_MESSAGE,
 )
+st.session_state.chat_history = canonicalize_conversation_history(
+    st.session_state.chat_history,
+    welcome_message=WELCOME_MESSAGE,
+)
 
 latest_chat_is_human = bool(st.session_state.chat_history) and isinstance(
     st.session_state.chat_history[-1], HumanMessage
@@ -571,30 +576,6 @@ analysis_ready = executor_ok and final_approved
 
 # Render all previous chat history
 display_history = list(st.session_state.chat_history)
-has_human_turn = any(isinstance(msg, HumanMessage) for msg in display_history)
-if has_human_turn:
-    # Welcome text is only for empty threads and should disappear after first user turn.
-    display_history = [
-        msg
-        for msg in display_history
-        if not (isinstance(msg, AIMessage) and str(getattr(msg, "content", "") or "").strip() == WELCOME_MESSAGE)
-    ]
-
-for msg in display_history:
-    with st.chat_message("user" if isinstance(msg, HumanMessage) else "assistant"):
-        st.markdown(msg.content)
-
-        if isinstance(msg, AIMessage):
-            fig_path = (msg.additional_kwargs or {}).get("figure_path")
-            if fig_path:
-                st.image(fig_path)
-                st.download_button(
-                    label="⬇️ Download plot (PNG)",
-                    data=Path(fig_path).read_bytes(),
-                    file_name="plot.png",
-                    mime="image/png",
-                    key=f"dl_{id(msg)}",
-                )
 
 interrupt_event = snapshot.interrupts[0] if snapshot and snapshot.interrupts else None
 dismissed_interrupt_id = str(st.session_state.get("dismissed_interrupt_id", "") or "")
@@ -656,11 +637,41 @@ if snapshot and snapshot.next and not snapshot.interrupts and not run_manager.is
     )
     run_status = run_manager.status(st.session_state.thread_id)
 
-render_conversation_controls = should_render_conversation_controls(run_status)
-if run_status.get("state") == "running":
-    st.info("⏳ Working in background...")
-elif run_status.get("state") == "error":
-    st.error(f"Background workflow failed: {run_status.get('error') or 'unknown error'}")
+# Render the conversation in a single replaceable block to prevent stale duplicate
+# headers/messages across rapid reruns while background work is active.
+with conversation_placeholder.container():
+    st.subheader("💬 Conversation", anchor=False)
+    for msg in display_history:
+        with st.chat_message("user" if isinstance(msg, HumanMessage) else "assistant"):
+            st.markdown(msg.content)
+
+            if isinstance(msg, AIMessage):
+                fig_path = (msg.additional_kwargs or {}).get("figure_path")
+                if fig_path:
+                    st.image(fig_path)
+                    st.download_button(
+                        label="⬇️ Download plot (PNG)",
+                        data=Path(fig_path).read_bytes(),
+                        file_name="plot.png",
+                        mime="image/png",
+                        key=f"dl_{id(msg)}",
+                    )
+
+    if run_status.get("state") == "running":
+        st.info("⏳ Working in background...")
+    elif run_status.get("state") == "error":
+        st.error(f"Background workflow failed: {run_status.get('error') or 'unknown error'}")
+
+review_blocks_submission = should_block_chat_submission(
+    interrupt_event,
+    dismissed_interrupt_id=dismissed_interrupt_id,
+    review_state=review_state,
+)
+controls_state = conversation_controls_state(
+    run_status,
+    review_blocked=review_blocks_submission,
+)
+run_in_progress = controls_state.run_in_progress
 
 if qa_ready and not analysis_ready:
     st.success("Response ready")
@@ -708,56 +719,48 @@ if state:
                 except Exception as exc:
                     st.error(f"Unable to load selected dataset artifact: {exc}")
 
-if render_conversation_controls:
-    with st.container():
-        chat_submission_blocked = should_block_chat_submission(
-            interrupt_event,
-            dismissed_interrupt_id=dismissed_interrupt_id,
-            review_state=review_state,
+with st.container():
+    chat_submission_blocked = controls_state.submission_blocked
+    st.session_state["chat_submission_blocked"] = chat_submission_blocked
+    pending_submission_warning = st.session_state.pop("pending_submission_warning", None)
+    if pending_submission_warning:
+        st.warning(pending_submission_warning)
+    review_notice = blocking_review_notice(
+        interrupt_event,
+        dismissed_interrupt_id=dismissed_interrupt_id,
+        review_state=review_state,
+    )
+    if review_notice:
+        st.info(review_notice)
+    with st.form("question_form", clear_on_submit=True):
+        st.text_input(
+            "Ask a question about your dataset!",
+            placeholder="Ask a question about your dataset!",
+            label_visibility="collapsed",
+            disabled=chat_submission_blocked,
+            key="question_input",
         )
-        st.session_state["chat_submission_blocked"] = chat_submission_blocked
-        pending_submission_warning = st.session_state.pop("pending_submission_warning", None)
-        if pending_submission_warning:
-            st.warning(pending_submission_warning)
-        review_notice = blocking_review_notice(
-            interrupt_event,
-            dismissed_interrupt_id=dismissed_interrupt_id,
-            review_state=review_state,
+        st.form_submit_button(
+            "Send",
+            disabled=chat_submission_blocked,
+            on_click=queue_question_submission,
         )
-        if review_notice:
-            st.info(review_notice)
-        with st.form("question_form", clear_on_submit=True):
-            user_text = st.text_input(
-                "Ask a question about your dataset!",
-                placeholder="Ask a question about your dataset!",
-                label_visibility="collapsed",
-                disabled=chat_submission_blocked,
-                key="question_input",
-            )
-            st.form_submit_button(
-                "Send",
-                disabled=chat_submission_blocked,
-                on_click=queue_question_submission,
-            )
 
-        action_col, save_col = st.columns([1, 1])
-        with action_col:
-            if st.button("🔄 Reset Conversation"):
-                st.session_state.chat_history = [AIMessage(content=WELCOME_MESSAGE)]
-                st.session_state.thread_id = uuid.uuid4().hex
-                st.rerun()
-        with save_col:
-            st.download_button(
-                label="💾 Save Current Thread",
-                data=export_bytes,
-                file_name=f"thread_{st.session_state.thread_id}.zip",
-                mime="application/zip",
-                key="save_current_thread_bottom",
-                help="Download this thread's conversation, generated code, output text, and figure as a ZIP archive.",
-            )
-else:
-    chat_submission_blocked = True
-    st.session_state["chat_submission_blocked"] = True
+    action_col, save_col = st.columns([1, 1])
+    with action_col:
+        if st.button("🔄 Reset Conversation"):
+            st.session_state.chat_history = [AIMessage(content=WELCOME_MESSAGE)]
+            st.session_state.thread_id = uuid.uuid4().hex
+            st.rerun()
+    with save_col:
+        st.download_button(
+            label="💾 Save Current Thread",
+            data=export_bytes,
+            file_name=f"thread_{st.session_state.thread_id}.zip",
+            mime="application/zip",
+            key="save_current_thread_bottom",
+            help="Download this thread's conversation, generated code, output text, and figure as a ZIP archive.",
+        )
 
 if run_status.get("state") == "running":
     time.sleep(0.25)

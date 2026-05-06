@@ -88,6 +88,7 @@ def test_build_active_dataset_artifacts_patch_rejects_unknown_id() -> None:
 _STUBBED_GENERATE_CODE_MODULES = (
     "langchain_core",
     "langchain_core.messages",
+    "langchain_core.prompts",
     "prompts.generate_prompt",
     "utils.llm_response",
     "utils.message_window",
@@ -119,8 +120,24 @@ def generate_code_module():
         messages.HumanMessage = HumanMessage
         messages.AIMessage = AIMessage
         langchain_core.messages = messages
+
+        prompts = ModuleType("langchain_core.prompts")
+
+        class ChatPromptTemplate:
+            @classmethod
+            def from_messages(cls, messages):
+                return SimpleNamespace(invoke=lambda payload: payload)
+
+        class MessagesPlaceholder:
+            def __init__(self, variable_name: str):
+                self.variable_name = variable_name
+
+        prompts.ChatPromptTemplate = ChatPromptTemplate
+        prompts.MessagesPlaceholder = MessagesPlaceholder
+        langchain_core.prompts = prompts
         sys.modules["langchain_core"] = langchain_core
         sys.modules["langchain_core.messages"] = messages
+        sys.modules["langchain_core.prompts"] = prompts
 
         prompt_module = ModuleType("prompts.generate_prompt")
         prompt_module.make_generate_code_prompt = lambda: SimpleNamespace(invoke=lambda payload: payload)

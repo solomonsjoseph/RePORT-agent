@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 import sys
@@ -215,6 +216,173 @@ def _expected_extraction_opt_in(*, intent_id: str, goal_text: str) -> dict[str, 
     }
 
 
+def _patch_successful_subset_persistence(monkeypatch, *, dataset_id: str = "dataset-art-1") -> None:
+    from graph.nodes.db_rag_qa import helpers as rag_helpers
+
+    def _fake_persist_dataset_artifact(
+        *,
+        runtime_root,
+        thread_id,
+        dataset_id,
+        kind,
+        dataframe,
+        schema,
+        provenance,
+    ):
+        del runtime_root, thread_id, dataframe, schema
+        return {
+            "id": dataset_id,
+            "kind": kind,
+            "created_at": "2026-05-01T00:00:00+00:00",
+            "row_count": 2,
+            "column_count": 1,
+            "columns": ["IC_AGE"],
+            "provenance": dict(provenance or {}),
+        }
+
+    monkeypatch.setattr(rag_helpers, "_build_subset_dataset_id", lambda: dataset_id)
+    monkeypatch.setattr(rag_helpers, "persist_dataset_artifact", _fake_persist_dataset_artifact)
+
+
+def _successful_sql_execution_state() -> tuple[dict, dict, SimpleNamespace]:
+    from graph.state import MetaKeys
+
+    state = _state("continue")
+    state["meta"][MetaKeys.THREAD_ID] = "thread-1"
+    state["artifacts"]["files"]["sel-art-1"] = {
+        "artifact_id": "sel-art-1",
+        "created_at": "2026-05-01T00:00:00+00:00",
+        "kind": "db_rag_column_selection",
+        "producer": "rag_db_qa",
+        "mime": "application/json",
+        "summary": "Approved selection",
+        "content": {
+            "selection_id": "sel-1",
+            "tables": ["Form 2A"],
+            "columns": [{"table": "Form 2A", "column": "IC_AGE", "description": "Age in years"}],
+            "feedback_history": [{"action": "approve", "feedback": "looks right"}],
+        },
+    }
+    rag_state = {
+        "pending_column_review": {
+            "selection_id": "sel-1",
+            "tables": ["Form 2A"],
+            "columns": [{"table": "Form 2A", "column": "IC_AGE", "description": "Age in years"}],
+            "feedback_history": [{"action": "approve", "feedback": "looks right"}],
+        },
+        "pending_column_review_artifact_id": "sel-art-1",
+        "approved_column_selection_artifact_id": "sel-art-1",
+        "pending_sql_candidate_artifact_id": "sql-art-2",
+        "pending_sql_candidate": {"status": "prepared"},
+    }
+    candidate = SimpleNamespace(
+        question="Generate the SQL to subset index cases with diabetes.",
+        source_question="Generate the SQL to subset index cases with diabetes.",
+        goal_text="Generate the SQL to subset index cases with diabetes.",
+        sql='select IC_AGE from "Form 2A"',
+        tables=["Form 2A"],
+        columns=[{"table": "Form 2A", "column": "IC_AGE", "description": "Age in years"}],
+        selection_id="sel-1",
+        status="prepared",
+    )
+    return state, rag_state, candidate
+
+
+def _execute_successful_sql(monkeypatch, state: dict, rag_state: dict, candidate: SimpleNamespace) -> dict:
+    import pandas as pd
+
+    from graph.nodes.db_rag_qa import helpers as rag_helpers
+
+    _patch_successful_subset_persistence(monkeypatch)
+
+    class _ExecutionService:
+        def execute_prepared_sql(self, prepared_candidate):
+            return SimpleNamespace(
+                answer="Read-only SQL execution completed.",
+                sql=prepared_candidate.sql,
+                source_tables=list(prepared_candidate.tables),
+                dataframe=pd.DataFrame({"IC_AGE": [34, 35]}),
+            )
+
+    return rag_helpers._execute_prepared_sql_candidate(state, rag_state, candidate, _ExecutionService())
+
+
+def _state_with_completed_sql_task(message: str) -> tuple[dict, str]:
+    from graph.memory import complete_task
+
+    state = _state(message)
+    state["artifacts"]["files"]["sel-art-1"] = {
+        "artifact_id": "sel-art-1",
+        "created_at": "2026-05-01T00:00:00+00:00",
+        "kind": "db_rag_column_selection",
+        "producer": "rag_db_qa",
+        "mime": "application/json",
+        "summary": "Approved DB-RAG column selection.",
+        "content": {
+            "selection_id": "sel-1",
+            "source_question": "Subset index cases with diabetes.",
+            "goal_text": "Subset index cases with diabetes.",
+            "intent_snapshot": {"intent_id": "intent:original"},
+            "retrieval_summary": {"tables": ["Form 2A"], "columns": ["IC_AGE"]},
+            "tables": ["Form 2A"],
+            "columns": [{"table": "Form 2A", "column": "IC_AGE", "description": "Age in years"}],
+            "rationale": "Needed for extraction",
+            "feedback_history": [],
+            "status": "approved",
+        },
+    }
+    state["artifacts"]["files"]["sql-art-1"] = {
+        "artifact_id": "sql-art-1",
+        "created_at": "2026-05-01T00:00:01+00:00",
+        "kind": "db_rag_sql_candidate",
+        "producer": "rag_db_qa",
+        "mime": "application/json",
+        "summary": "Prepared read-only SQL candidate for DB-RAG review.",
+        "content": {
+            "sql_candidate_id": "sql:sel-1",
+            "selection_artifact_id": "sel-art-1",
+            "source_question": "Subset index cases with diabetes.",
+            "goal_text": "Subset index cases with diabetes.",
+            "intent_snapshot": {"intent_id": "intent:original"},
+            "tables": ["Form 2A"],
+            "columns": [{"table": "Form 2A", "column": "IC_AGE", "description": "Age in years"}],
+            "sql": 'select IC_AGE from "Form 2A"',
+            "status": "prepared",
+        },
+    }
+    state = complete_task(
+        state,
+        kind="db_rag_sql_extraction",
+        source_question="Subset index cases with diabetes.",
+        goal_text="Subset index cases with diabetes.",
+        label="DB-RAG SQL extraction: diabetes index-case subset",
+        summary="Reviewed SQL executed and saved dataset dataset-art-1.",
+        artifact_refs={
+            "selection_artifact_id": "sel-art-1",
+            "sql_candidate_artifact_id": "sql-art-1",
+            "dataset_artifact_id": "dataset-art-1",
+        },
+        provenance={"producer_node": "rag_db_qa", "selection_id": "sel-1"},
+    )
+    return state, state["memory"]["last_task_id"]
+
+
+def _set_resolved_sql_meta(
+    state: dict,
+    task_id: str,
+    *,
+    relationship: str,
+    intended_action: str,
+) -> None:
+    from graph.state import MetaKeys
+
+    state["meta"][MetaKeys.RESOLVED_TASK_ID] = task_id
+    state["meta"][MetaKeys.RESOLVED_TASK_KIND] = "db_rag_sql_extraction"
+    state["meta"][MetaKeys.RESOLVED_TASK_RELATIONSHIP] = relationship
+    state["meta"][MetaKeys.RESOLVED_TASK_INTENDED_ACTION] = intended_action
+    state["meta"][MetaKeys.RESOLVED_TASK_USER_MESSAGE_HASH] = "u1"
+
+
 def test_langchain_core_stub_bootstrap_reuses_existing_messages_module(monkeypatch) -> None:
     langchain_core = ModuleType("langchain_core")
     messages = ModuleType("langchain_core.messages")
@@ -251,6 +419,310 @@ def test_langchain_core_stub_bootstrap_reuses_existing_prompts_module(monkeypatc
     assert hasattr(prompts, "MessagesPlaceholder")
     assert "langchain_core.messages" in sys.modules
     assert langchain_core.messages is sys.modules["langchain_core.messages"]
+
+
+def test_resolved_sql_inspection_answers_from_sql_artifact() -> None:
+    from graph.state import MetaKeys
+
+    service = _Service()
+    state, task_id = _state_with_completed_sql_task("What SQL did you use?")
+    state["meta"][MetaKeys.ANALYSIS_DATASET_ID] = "dataset-art-1"
+    _set_resolved_sql_meta(
+        state,
+        task_id,
+        relationship="inspect_artifact",
+        intended_action="show_sql",
+    )
+
+    updated = rag_db_qa_node(state, llm=None, provider="openai", service=service)
+
+    assert 'select IC_AGE from "Form 2A"' in updated["output"]["qa_response"]
+    assert "Subset index cases with diabetes." in updated["output"]["qa_response"]
+    assert "Form 2A" in updated["output"]["qa_response"]
+    assert "IC_AGE" in updated["output"]["qa_response"]
+    assert not any(call[0] == "prepare_column_selection" for call in service.calls)
+    assert updated["agents"]["rag_db_qa"]["pending_column_review_artifact_id"] is None
+    assert MetaKeys.RESOLVED_TASK_ID not in updated["meta"]
+    assert updated["meta"][MetaKeys.ANALYSIS_DATASET_ID] == "dataset-art-1"
+
+
+def test_resolved_sql_inspection_creates_linked_qa_answer_task() -> None:
+    service = _Service()
+    state, parent_task_id = _state_with_completed_sql_task("What SQL did you use?")
+    _set_resolved_sql_meta(
+        state,
+        parent_task_id,
+        relationship="inspect_artifact",
+        intended_action="show_sql",
+    )
+
+    updated = rag_db_qa_node(state, llm=None, provider="openai", service=service)
+
+    memory = updated["memory"]
+    child_task_id = memory["last_task_id"]
+    assert child_task_id != parent_task_id
+    child_task = memory["completed_tasks"][child_task_id]
+    assert child_task["kind"] == "qa_answer"
+    assert child_task["parent_task_id"] == parent_task_id
+    assert child_task["relationship_to_parent"] == "inspect_artifact"
+    assert child_task["source_question"] == "What SQL did you use?"
+    assert child_task["artifact_refs"] == {"sql_candidate_artifact_id": "sql-art-1"}
+    assert memory["task_order"] == [parent_task_id, child_task_id]
+
+
+def test_resolved_sql_revision_opens_new_column_review() -> None:
+    service = _Service()
+    state, task_id = _state_with_completed_sql_task("Add gender too.")
+    _set_resolved_sql_meta(
+        state,
+        task_id,
+        relationship="revision",
+        intended_action="add_fields",
+    )
+
+    updated = rag_db_qa_node(state, llm=None, provider="openai", service=service)
+
+    rag_state = updated["agents"]["rag_db_qa"]
+    assert rag_state["pending_column_review_artifact_id"]
+    assert rag_state["thread_status"] == "awaiting_column_review"
+    assert any(call[0] == "retrieve_context" and "Add gender too." in call[1] for call in service.calls)
+    assert ("prepare_column_selection", "Add gender too.") in service.calls
+    assert not any(call[0] == "answer_from_context" for call in service.calls)
+
+
+def test_resolved_sql_revision_sets_active_task_parent() -> None:
+    service = _Service()
+    state, parent_task_id = _state_with_completed_sql_task("Add gender too.")
+    _set_resolved_sql_meta(
+        state,
+        parent_task_id,
+        relationship="revision",
+        intended_action="add_fields",
+    )
+
+    updated = rag_db_qa_node(state, llm=None, provider="openai", service=service)
+
+    assert updated["agents"]["rag_db_qa"]["active_task"] == {
+        "parent_task_id": parent_task_id,
+        "relationship_to_parent": "revision",
+    }
+
+
+def test_resolved_sql_revision_column_selection_artifact_uses_clean_source_and_goal() -> None:
+    service = _Service()
+    state, task_id = _state_with_completed_sql_task("Add gender too.")
+    _set_resolved_sql_meta(
+        state,
+        task_id,
+        relationship="revision",
+        intended_action="add_fields",
+    )
+
+    updated = rag_db_qa_node(state, llm=None, provider="openai", service=service)
+
+    artifact_id = updated["agents"]["rag_db_qa"]["pending_column_review_artifact_id"]
+    artifact_content = updated["artifacts"]["files"][artifact_id]["content"]
+    assert artifact_content["source_question"] == "Add gender too."
+    assert artifact_content["goal_text"] == "Add gender too."
+    artifact_text = json.dumps(artifact_content, sort_keys=True)
+    assert "Prior SQL" not in artifact_text
+    assert "Parent task summary" not in artifact_text
+    assert "select IC_AGE" not in artifact_text
+
+
+def test_resolved_sql_revision_consumes_resolved_task_meta() -> None:
+    from graph.state import MetaKeys
+
+    service = _Service()
+    state, task_id = _state_with_completed_sql_task("Add gender too.")
+    state["meta"][MetaKeys.ANALYSIS_DATASET_ID] = "dataset-art-1"
+    _set_resolved_sql_meta(
+        state,
+        task_id,
+        relationship="revision",
+        intended_action="add_fields",
+    )
+
+    updated = rag_db_qa_node(state, llm=None, provider="openai", service=service)
+
+    assert MetaKeys.RESOLVED_TASK_ID not in updated["meta"]
+    assert MetaKeys.RESOLVED_TASK_KIND not in updated["meta"]
+    assert MetaKeys.RESOLVED_TASK_RELATIONSHIP not in updated["meta"]
+    assert MetaKeys.RESOLVED_TASK_INTENDED_ACTION not in updated["meta"]
+    assert MetaKeys.RESOLVED_TASK_USER_MESSAGE_HASH not in updated["meta"]
+    assert updated["meta"][MetaKeys.ANALYSIS_DATASET_ID] == "dataset-art-1"
+
+
+def test_resolved_sql_inspection_and_revision_clear_private_consumed_marker() -> None:
+    service = _Service()
+    inspection_state, inspection_task_id = _state_with_completed_sql_task("What SQL did you use?")
+    inspection_state["meta"]["resolved_task_meta_consumed"] = "u1"
+    _set_resolved_sql_meta(
+        inspection_state,
+        inspection_task_id,
+        relationship="inspect_artifact",
+        intended_action="show_sql",
+    )
+
+    inspected = rag_db_qa_node(inspection_state, llm=None, provider="openai", service=service)
+
+    revision_service = _Service()
+    revision_state, revision_task_id = _state_with_completed_sql_task("Add gender too.")
+    revision_state["meta"]["resolved_task_meta_consumed"] = "u1"
+    _set_resolved_sql_meta(
+        revision_state,
+        revision_task_id,
+        relationship="revision",
+        intended_action="add_fields",
+    )
+
+    revised = rag_db_qa_node(revision_state, llm=None, provider="openai", service=revision_service)
+
+    assert "resolved_task_meta_consumed" not in inspected["meta"]
+    assert "resolved_task_meta_consumed" not in revised["meta"]
+
+
+def test_resolved_sql_revision_preserves_unrelated_clarification_meta() -> None:
+    from graph.state import MetaKeys
+
+    service = _Service()
+    state, task_id = _state_with_completed_sql_task("Add gender too.")
+    state["meta"][MetaKeys.ANALYSIS_DATASET_ID] = "dataset-art-1"
+    state["meta"][MetaKeys.AWAITING_USER_CLARIFICATION] = True
+    state["meta"][MetaKeys.CLARIFICATION_KIND] = "dummy_kind"
+    state["meta"][MetaKeys.CLARIFICATION_RETURN_NODE] = "qa"
+    state["meta"][MetaKeys.PENDING_QUESTION] = "dummy pending"
+    _set_resolved_sql_meta(
+        state,
+        task_id,
+        relationship="revision",
+        intended_action="add_fields",
+    )
+
+    updated = rag_db_qa_node(state, llm=None, provider="openai", service=service)
+
+    assert updated["meta"][MetaKeys.ANALYSIS_DATASET_ID] == "dataset-art-1"
+    assert updated["meta"][MetaKeys.AWAITING_USER_CLARIFICATION] is True
+    assert updated["meta"][MetaKeys.CLARIFICATION_KIND] == "dummy_kind"
+    assert updated["meta"][MetaKeys.CLARIFICATION_RETURN_NODE] == "qa"
+    assert updated["meta"][MetaKeys.PENDING_QUESTION] == "dummy pending"
+    assert MetaKeys.RESOLVED_TASK_ID not in updated["meta"]
+    assert MetaKeys.RESOLVED_TASK_KIND not in updated["meta"]
+    assert MetaKeys.RESOLVED_TASK_RELATIONSHIP not in updated["meta"]
+    assert MetaKeys.RESOLVED_TASK_INTENDED_ACTION not in updated["meta"]
+    assert MetaKeys.RESOLVED_TASK_USER_MESSAGE_HASH not in updated["meta"]
+
+
+def test_resolved_sql_use_as_input_received_by_db_rag_is_terminal_not_fresh() -> None:
+    service = _Service()
+    state, task_id = _state_with_completed_sql_task("Analyze that subset.")
+    _set_resolved_sql_meta(
+        state,
+        task_id,
+        relationship="use_as_input",
+        intended_action="analyze_dataset",
+    )
+
+    updated = rag_db_qa_node(state, llm=None, provider="openai", service=service)
+
+    assert "resolved dataset handoff should be routed to code generation" in updated["output"]["qa_response"]
+    assert updated["agents"]["rag_db_qa"]["thread_status"] == "error"
+    assert not any(call[0] in {"retrieve_context", "answer_from_context"} for call in service.calls)
+
+
+def test_resolved_sql_unsupported_relationship_is_terminal_not_fresh() -> None:
+    service = _Service()
+    state, task_id = _state_with_completed_sql_task("Compare that.")
+    _set_resolved_sql_meta(
+        state,
+        task_id,
+        relationship="compare",
+        intended_action="compare",
+    )
+
+    updated = rag_db_qa_node(state, llm=None, provider="openai", service=service)
+
+    assert "cannot handle the resolved DB-RAG SQL relationship" in updated["output"]["qa_response"]
+    assert updated["agents"]["rag_db_qa"]["thread_status"] == "error"
+    assert not any(call[0] in {"retrieve_context", "answer_from_context"} for call in service.calls)
+
+
+def test_resolved_sql_missing_task_is_terminal_not_fresh() -> None:
+    service = _Service()
+    state = _state("What SQL did you use?")
+    _set_resolved_sql_meta(
+        state,
+        "task_missing",
+        relationship="inspect_artifact",
+        intended_action="show_sql",
+    )
+
+    updated = rag_db_qa_node(state, llm=None, provider="openai", service=service)
+
+    assert "could not find the referenced completed DB-RAG SQL extraction task" in updated["output"]["qa_response"]
+    assert updated["agents"]["rag_db_qa"]["thread_status"] == "error"
+    assert not any(call[0] in {"retrieve_context", "answer_from_context"} for call in service.calls)
+
+
+def test_resolved_sql_inspection_missing_sql_artifact_is_terminal_not_fresh() -> None:
+    service = _Service()
+    state, task_id = _state_with_completed_sql_task("What SQL did you use?")
+    del state["artifacts"]["files"]["sql-art-1"]
+    _set_resolved_sql_meta(
+        state,
+        task_id,
+        relationship="inspect_artifact",
+        intended_action="show_sql",
+    )
+
+    updated = rag_db_qa_node(state, llm=None, provider="openai", service=service)
+
+    assert "SQL candidate artifact is missing" in updated["output"]["qa_response"]
+    assert updated["agents"]["rag_db_qa"]["thread_status"] == "error"
+    assert not any(call[0] in {"retrieve_context", "answer_from_context"} for call in service.calls)
+
+
+def test_resolved_sql_revision_missing_artifact_is_terminal_not_fresh() -> None:
+    service = _Service()
+    state, task_id = _state_with_completed_sql_task("Add gender too.")
+    del state["artifacts"]["files"]["sel-art-1"]
+    _set_resolved_sql_meta(
+        state,
+        task_id,
+        relationship="revision",
+        intended_action="add_fields",
+    )
+
+    updated = rag_db_qa_node(state, llm=None, provider="openai", service=service)
+
+    assert "selection or SQL artifact is missing" in updated["output"]["qa_response"]
+    assert updated["agents"]["rag_db_qa"]["thread_status"] == "error"
+    assert not any(call[0] in {"retrieve_context", "answer_from_context"} for call in service.calls)
+
+
+def test_resolved_sql_inspection_preserves_unrelated_meta_and_clarification_keys() -> None:
+    from graph.state import MetaKeys
+
+    service = _Service()
+    state, task_id = _state_with_completed_sql_task("What SQL did you use?")
+    state["meta"][MetaKeys.ANALYSIS_DATASET_ID] = "dataset-art-1"
+    state["meta"][MetaKeys.CLARIFICATION_RETURN_NODE] = "qa"
+    state["meta"][MetaKeys.CLARIFICATION_KIND] = "dummy_kind"
+    state["meta"][MetaKeys.PENDING_QUESTION] = "dummy pending"
+    _set_resolved_sql_meta(
+        state,
+        task_id,
+        relationship="inspect_artifact",
+        intended_action="show_sql",
+    )
+
+    updated = rag_db_qa_node(state, llm=None, provider="openai", service=service)
+
+    assert updated["meta"][MetaKeys.ANALYSIS_DATASET_ID] == "dataset-art-1"
+    assert updated["meta"][MetaKeys.CLARIFICATION_RETURN_NODE] == "qa"
+    assert updated["meta"][MetaKeys.CLARIFICATION_KIND] == "dummy_kind"
+    assert updated["meta"][MetaKeys.PENDING_QUESTION] == "dummy pending"
+    assert MetaKeys.RESOLVED_TASK_ID not in updated["meta"]
 
 
 def test_metadata_question_always_opens_extraction_prompt_after_answer() -> None:
@@ -296,6 +768,30 @@ def test_metadata_question_emits_clarification_event_and_no_selection_artifact()
         artifact["kind"] == "db_rag_column_selection"
         for artifact in updated["artifacts"]["files"].values()
     )
+
+
+def test_query_word_only_does_not_force_extraction_flow() -> None:
+    service = _Service()
+
+    updated = rag_db_qa_node(
+        _state("Query my database: what variables are related to TB outcome, HIV status, and diabetes status?"),
+        llm=None,
+        provider="openai",
+        service=service,
+    )
+
+    rag_state = updated["agents"]["rag_db_qa"]
+    assert rag_state["pending_extraction_opt_in"] == _expected_extraction_opt_in(
+        intent_id=(
+            "intent:Query my database: what variables are related to TB outcome, HIV status, and diabetes status?"
+        ),
+        goal_text=(
+            "Query my database: what variables are related to TB outcome, HIV status, and diabetes status?"
+        ),
+    )
+    assert rag_state["pending_column_review_artifact_id"] is None
+    assert not any(call[0] == "prepare_column_selection" for call in service.calls)
+    assert any(call[0] == "answer_from_context" for call in service.calls)
 
 
 def test_explicit_extraction_question_opens_column_review_without_opt_in() -> None:
@@ -435,6 +931,10 @@ def test_approved_selection_pointer_resumes_sql_preparation_without_pending_revi
     assert rag_state["approved_column_selection_artifact_id"] == "selection-artifact"
     assert rag_state["pending_sql_candidate_artifact_id"]
     assert "read-only SQL candidate" in updated["output"]["qa_response"]
+    assert "Selected tables:" in updated["output"]["qa_response"]
+    assert "Selected columns:" in updated["output"]["qa_response"]
+    assert "Proposed SQL:" in updated["output"]["qa_response"]
+    assert "select IC_AGE from \"Form 2A\"" in updated["output"]["qa_response"]
     events = updated["artifacts"]["conversation_events"]
     assert events[-2]["type"] == "sql"
     assert events[-2]["artifact_id"] == rag_state["pending_sql_candidate_artifact_id"]
@@ -483,7 +983,10 @@ def test_pending_column_review_artifact_reprompts_instead_of_erroring() -> None:
     rag_state = updated["agents"]["rag_db_qa"]
     assert rag_state["thread_status"] == "awaiting_column_review"
     assert rag_state["pending_column_review_artifact_id"] == "selection-artifact"
-    assert updated["output"]["qa_response"] == "Please review the proposed DB-RAG column selection in the panel below."
+    assert "Please review the proposed DB-RAG column selection in the panel below." in updated["output"]["qa_response"]
+    assert "Selected tables:" in updated["output"]["qa_response"]
+    assert "Selected columns:" in updated["output"]["qa_response"]
+    assert "Form 2A.IC_AGE: Age in years" in updated["output"]["qa_response"]
     assert updated["output"].get("error") is None
 
 
@@ -861,6 +1364,122 @@ def test_execution_artifact_records_selection_and_sql_artifact_ids(monkeypatch) 
     assert dataset["provenance"]["feedback_history"] == [{"action": "approve", "feedback": "looks right"}]
 
 
+def test_sql_execution_completion_writes_db_rag_sql_task(monkeypatch) -> None:
+    state, rag_state, candidate = _successful_sql_execution_state()
+
+    updated = _execute_successful_sql(monkeypatch, state, rag_state, candidate)
+
+    memory = updated["memory"]
+    task_id = memory["task_order"][0]
+    task = memory["completed_tasks"][task_id]
+    assert task["kind"] == "db_rag_sql_extraction"
+    assert task["source_question"] == "Generate the SQL to subset index cases with diabetes."
+    assert task["goal_text"] == "Generate the SQL to subset index cases with diabetes."
+    assert task["artifact_refs"] == {
+        "selection_artifact_id": "sel-art-1",
+        "sql_candidate_artifact_id": "sql-art-2",
+        "dataset_artifact_id": "dataset-art-1",
+    }
+    assert task["summary"] == "Reviewed SQL executed and saved dataset dataset-art-1."
+    assert task["provenance"] == {
+        "producer_node": "rag_db_qa",
+        "selection_id": "sel-1",
+    }
+    assert memory["last_task_id"] == task_id
+    assert memory["last_task_id_by_kind"]["db_rag_sql_extraction"] == task_id
+
+    memory_text = json.dumps(task, sort_keys=True)
+    assert 'select IC_AGE from "Form 2A"' not in memory_text
+    assert "feedback_history" not in memory_text
+    assert "dataframe" not in memory_text
+    assert "row_count" not in memory_text
+    assert "column_count" not in memory_text
+    assert "columns" not in memory_text
+    assert "tables" not in memory_text
+
+
+def test_sql_execution_completion_uses_artifact_question_text_when_candidate_question_empty(monkeypatch) -> None:
+    state, rag_state, candidate = _successful_sql_execution_state()
+    state["artifacts"]["files"]["sel-art-1"]["content"]["source_question"] = "Original user extraction request"
+    state["artifacts"]["files"]["sel-art-1"]["content"]["goal_text"] = "Reviewed extraction goal"
+    state["artifacts"]["files"]["sql-art-2"] = {
+        "artifact_id": "sql-art-2",
+        "created_at": "2026-05-01T00:00:01+00:00",
+        "kind": "db_rag_sql_candidate",
+        "producer": "rag_db_qa",
+        "mime": "application/json",
+        "summary": "SQL candidate",
+        "content": {
+            "sql_candidate_id": "sql-2",
+            "selection_artifact_id": "sel-art-1",
+            "source_question": "Artifact source question",
+            "goal_text": "Artifact goal text",
+            "tables": ["Form 2A"],
+            "columns": [{"table": "Form 2A", "column": "IC_AGE", "description": "Age in years"}],
+            "sql": 'select IC_AGE from "Form 2A"',
+            "status": "prepared",
+        },
+    }
+    candidate.question = ""
+    candidate.source_question = ""
+    candidate.goal_text = ""
+
+    updated = _execute_successful_sql(monkeypatch, state, rag_state, candidate)
+
+    task_id = updated["memory"]["last_task_id"]
+    task = updated["memory"]["completed_tasks"][task_id]
+    assert task["source_question"] == "Artifact source question"
+    assert task["goal_text"] == "Artifact goal text"
+    assert task["label"] == "DB-RAG SQL extraction: Artifact source question"
+
+
+def test_sql_execution_completion_keeps_live_pointers_cleared(monkeypatch) -> None:
+    state, rag_state, candidate = _successful_sql_execution_state()
+
+    updated = _execute_successful_sql(monkeypatch, state, rag_state, candidate)
+
+    updated_rag_state = updated["agents"]["rag_db_qa"]
+    assert updated_rag_state["thread_status"] == "completed"
+    assert updated_rag_state["active_thread"] is False
+    assert updated_rag_state["pending_sql_candidate_artifact_id"] is None
+    assert updated_rag_state.get("pending_sql_candidate") is None
+    assert updated_rag_state["pending_column_review_artifact_id"] is None
+    assert updated_rag_state["approved_column_selection_artifact_id"] is None
+    assert updated_rag_state.get("pending_column_review") is None
+
+
+def test_revised_sql_execution_task_links_parent_task(monkeypatch) -> None:
+    from graph.memory import complete_task
+
+    state, rag_state, candidate = _successful_sql_execution_state()
+    state = complete_task(
+        state,
+        kind="db_rag_sql_extraction",
+        source_question="Original extraction",
+        goal_text="Original extraction",
+        label="DB-RAG SQL extraction: Original extraction",
+        summary="Original task.",
+    )
+    parent_task_id = state["memory"]["last_task_id"]
+    rag_state["active_task"] = {
+        "task_id": "task_generated_placeholder",
+        "parent_task_id": parent_task_id,
+        "relationship_to_parent": "revision",
+    }
+
+    updated = _execute_successful_sql(monkeypatch, state, rag_state, candidate)
+
+    memory = updated["memory"]
+    task_id = memory["last_task_id"]
+    task = memory["completed_tasks"][task_id]
+    assert task_id != "task_generated_placeholder"
+    assert task["parent_task_id"] == parent_task_id
+    assert task["relationship_to_parent"] == "revision"
+    assert memory["task_order"] == [parent_task_id, task_id]
+    assert memory["last_task_id_by_kind"]["db_rag_sql_extraction"] == task_id
+    assert updated["agents"]["rag_db_qa"].get("active_task") is None
+
+
 def test_build_subset_schema_enriches_from_reviewed_schema_catalog(monkeypatch) -> None:
     import pandas as pd
 
@@ -899,6 +1518,87 @@ def test_build_subset_schema_enriches_from_reviewed_schema_catalog(monkeypatch) 
         "description": "Fallback description",
         "dataType": "int64",
     }
+
+
+def test_build_subset_schema_enriches_aliased_output_columns_from_selected_columns(monkeypatch) -> None:
+    import pandas as pd
+
+    from graph.nodes.db_rag_qa import helpers as rag_helpers
+
+    def _fake_lookup(table: str, column: str):
+        if table == "Form 2A" and column == "IC_AGE":
+            return {
+                "description": "Age in years at enrollment",
+                "values": None,
+                "depends_on": "IC_ENROLL=1",
+                "condition": "index case only",
+                "section_context": "Demographics",
+            }
+        if table == "Form 2A" and column == "IC_GENDER":
+            return {
+                "description": "Gender at enrollment",
+                "values": {"1": "Male", "2": "Female"},
+                "depends_on": None,
+                "condition": None,
+                "section_context": "Demographics",
+            }
+        return None
+
+    monkeypatch.setattr(rag_helpers, "_lookup_schema_variable_metadata", _fake_lookup)
+
+    df = pd.DataFrame({"age": [34, 35], "gender": ["F", "M"]})
+    schema = rag_helpers._build_subset_schema(
+        df,
+        [
+            {"table": "Form 2A", "column": "IC_AGE", "description": "Age in years"},
+            {"table": "Form 2A", "column": "IC_GENDER", "description": "Gender"},
+        ],
+        sql='SELECT IC_AGE AS age, IC_GENDER AS gender FROM "Form 2A"',
+    )
+
+    assert schema["age"] == {
+        "description": "Age in years at enrollment",
+        "depends_on": "IC_ENROLL=1",
+        "condition": "index case only",
+        "section_context": "Demographics",
+        "dataType": "int64",
+    }
+    assert schema["gender"] == {
+        "description": "Gender at enrollment",
+        "values": {"1": "Male", "2": "Female"},
+        "section_context": "Demographics",
+        "dataType": "object",
+    }
+
+
+def test_build_subset_schema_enriches_renamed_columns_from_approved_columns_without_sql(monkeypatch) -> None:
+    import pandas as pd
+
+    from graph.nodes.db_rag_qa import helpers as rag_helpers
+
+    def _fake_lookup(table: str, column: str):
+        if table == "Form 2A" and column == "IC_AGE":
+            return {"description": "Age in years at enrollment"}
+        if table == "Form 2A" and column == "IC_GENDER":
+            return {"description": "Gender at enrollment"}
+        return None
+
+    monkeypatch.setattr(rag_helpers, "_lookup_schema_variable_metadata", _fake_lookup)
+
+    df = pd.DataFrame({"age": [34, 35], "gender": ["F", "M"]})
+    schema = rag_helpers._build_subset_schema(
+        df,
+        [
+            {"table": "Form 2A", "column": "IC_AGE", "description": "Age in years"},
+            {"table": "Form 2A", "column": "IC_GENDER", "description": "Gender"},
+        ],
+        sql="",
+    )
+
+    assert schema["age"]["description"] == "Age in years at enrollment"
+    assert schema["gender"]["description"] == "Gender at enrollment"
+    assert schema["age"]["dataType"] == "int64"
+    assert schema["gender"]["dataType"] == "object"
 
 
 def test_execution_does_not_auto_repair_unreviewed_sql(monkeypatch) -> None:

@@ -25,6 +25,7 @@ from ...conversation_events import (
     build_sql_event,
     store_thread_artifact,
 )
+from ...memory import complete_task
 from ..state_helpers import clear_clarification_meta
 
 _SUPPORTED_PROVIDERS = {"openai", "anthropic"}
@@ -172,6 +173,25 @@ def _artifact_content(state: AgentState, artifact_id: str | None) -> dict[str, A
     artifact = dict(files.get(artifact_key) or {})
     content = artifact.get("content")
     return dict(content) if isinstance(content, dict) else {}
+
+
+def _completed_sql_task_texts(
+    candidate: Any,
+    *,
+    sql_candidate_artifact: dict[str, Any],
+    approved_selection: dict[str, Any],
+) -> tuple[str, str]:
+    candidate_source = str(_read_value(candidate, "source_question", "") or "").strip()
+    candidate_question = str(_read_value(candidate, "question", "") or "").strip()
+    candidate_goal = str(_read_value(candidate, "goal_text", "") or "").strip()
+    sql_source = str(sql_candidate_artifact.get("source_question") or "").strip()
+    sql_goal = str(sql_candidate_artifact.get("goal_text") or "").strip()
+    selection_source = str(approved_selection.get("source_question") or "").strip()
+    selection_goal = str(approved_selection.get("goal_text") or "").strip()
+
+    source_question = candidate_source or candidate_question or sql_source or selection_source
+    goal_text = candidate_goal or candidate_source or candidate_question or sql_goal or selection_goal or selection_source
+    return source_question, goal_text
 
 
 def _serialize_column_selection(selection: Any) -> dict[str, Any]:
@@ -322,21 +342,139 @@ def _build_subset_dataset_id() -> str:
     return f"subset-{uuid4().hex[:8]}"
 
 
-def _build_subset_schema(dataframe: Any, selected_columns: list[dict[str, str]]) -> dict[str, dict[str, Any]]:
+def _projection_aliases_to_selected_columns(
+    sql: str,
+    selected_columns: list[dict[str, str]],
+) -> dict[str, dict[str, str]]:
+    sql_text = str(sql or "").strip()
+    if not sql_text:
+        return {}
+
+    selected_by_pair = {
+        (str(col.get("table") or "").strip(), str(col.get("column") or "").strip()): dict(col)
+        for col in list(selected_columns or [])
+        if str(col.get("column") or "").strip()
+    }
+    selected_by_column: dict[str, list[dict[str, str]]] = {}
+    for col in list(selected_columns or []):
+        col_name = str(col.get("column") or "").strip()
+        if not col_name:
+            continue
+        selected_by_column.setdefault(col_name, []).append(dict(col))
+
+    def _match_selected(source_table: str, source_name: str) -> dict[str, str] | None:
+        matched = None
+        if source_table:
+            matched = selected_by_pair.get((source_table, source_name))
+        if matched is None:
+            candidates = selected_by_column.get(source_name) or []
+            if len(candidates) == 1:
+                matched = candidates[0]
+        return dict(matched) if matched is not None else None
+
+    try:
+        import sqlglot
+        from sqlglot import exp
+
+        expression = sqlglot.parse_one(sql_text, dialect="duckdb")
+    except Exception:
+        alias_map: dict[str, dict[str, str]] = {}
+        # Fallback for environments without sqlglot: extract simple `source AS alias` projections.
+        # Handles sources like `IC_AGE`, `form.IC_AGE`, `"IC_AGE"`, `"form"."IC_AGE"`.
+        for source_table_token, source_col_token, output_alias_token in re.findall(
+            r'(?is)(?:"?([A-Za-z_][A-Za-z0-9_]*)"?\.)?"?([A-Za-z_][A-Za-z0-9_]*)"?\s+AS\s+"?([A-Za-z_][A-Za-z0-9_]*)"?',
+            sql_text,
+        ):
+            source_table = str(source_table_token or "").strip()
+            source_name = str(source_col_token or "").strip()
+            output_name = str(output_alias_token or "").strip()
+            if not source_name or not output_name:
+                continue
+            matched = _match_selected(source_table, source_name)
+            if matched is not None:
+                alias_map[output_name] = matched
+        return alias_map
+
+    alias_map: dict[str, dict[str, str]] = {}
+    select = expression.find(exp.Select)
+    if select is None:
+        return alias_map
+
+    for projection in list(select.expressions or []):
+        output_name = str(getattr(projection, "alias_or_name", "") or "").strip()
+        if not output_name:
+            continue
+
+        source_column = None
+        for column_ref in projection.find_all(exp.Column):
+            source_column = column_ref
+            break
+        if source_column is None:
+            continue
+
+        source_table = str(getattr(source_column, "table", "") or "").strip()
+        source_name = str(getattr(source_column, "name", "") or "").strip()
+        if not source_name:
+            continue
+
+        matched = _match_selected(source_table, source_name)
+        if matched is not None:
+            alias_map[output_name] = dict(matched)
+
+    return alias_map
+
+
+def _selected_columns_by_output_position(
+    dataframe: Any,
+    selected_columns: list[dict[str, str]],
+) -> dict[str, dict[str, str]]:
+    output_columns = [str(name or "").strip() for name in list(getattr(dataframe, "columns", []))]
+    approved_columns = [
+        dict(column)
+        for column in list(selected_columns or [])
+        if str(column.get("column") or "").strip()
+    ]
+    # Conservative fallback: only infer by position when the projection cardinality matches exactly.
+    if not output_columns or len(output_columns) != len(approved_columns):
+        return {}
+    return {
+        output_columns[idx]: approved_columns[idx]
+        for idx in range(len(output_columns))
+        if output_columns[idx]
+    }
+
+
+def _build_subset_schema(
+    dataframe: Any,
+    selected_columns: list[dict[str, str]],
+    *,
+    sql: str = "",
+) -> dict[str, dict[str, Any]]:
     selected_by_name = {
         str(column.get("column") or "").strip(): column
         for column in list(selected_columns or [])
         if str(column.get("column") or "").strip()
     }
+    selected_by_alias = _projection_aliases_to_selected_columns(sql, selected_columns)
+    selected_by_position = _selected_columns_by_output_position(dataframe, selected_columns)
 
     schema: dict[str, dict[str, Any]] = {}
     dtypes = getattr(dataframe, "dtypes", None)
     for column_name in list(getattr(dataframe, "columns", [])):
         column_key = str(column_name)
         meta: dict[str, Any] = {}
-        selected = selected_by_name.get(column_key, {})
+        selected = (
+            selected_by_name.get(column_key)
+            or selected_by_alias.get(column_key)
+            or selected_by_position.get(column_key)
+            or {}
+        )
         table_name = str(selected.get("table") or "").strip()
         reviewed_meta = _lookup_schema_variable_metadata(table_name, column_key)
+        if reviewed_meta is None:
+            selected_column_name = str(selected.get("column") or "").strip()
+            if selected_column_name:
+                reviewed_meta = _lookup_schema_variable_metadata(table_name, selected_column_name)
         description = str(
             (reviewed_meta or {}).get("description") or selected.get("description") or ""
         ).strip()
@@ -376,7 +514,11 @@ def _persist_sql_subset_artifact(
         dataset_id=_build_subset_dataset_id(),
         kind="subset",
         dataframe=_read_value(execution_result, "dataframe"),
-        schema=_build_subset_schema(_read_value(execution_result, "dataframe"), selected_columns),
+        schema=_build_subset_schema(
+            _read_value(execution_result, "dataframe"),
+            selected_columns,
+            sql=str(_read_value(execution_result, "sql", _read_value(candidate, "sql", "")) or "").strip(),
+        ),
         provenance={
             "source": "db_rag_sql",
             "source_question": str(_read_value(candidate, "source_question", _read_value(candidate, "question", "")) or "").strip(),
@@ -629,6 +771,7 @@ def _execute_prepared_sql_candidate(
     candidate: Any,
     service,
 ) -> AgentState:
+    active_task = dict(rag_state.get("active_task") or {})
     approved_review = dict(rag_state.get("pending_column_review") or {})
     selection_artifact_id = str(
         rag_state.get("approved_column_selection_artifact_id")
@@ -637,6 +780,7 @@ def _execute_prepared_sql_candidate(
     ).strip()
     sql_candidate_artifact_id = str(rag_state.get("pending_sql_candidate_artifact_id") or "").strip()
     approved_selection = _artifact_content(state, selection_artifact_id)
+    sql_candidate_artifact = _artifact_content(state, sql_candidate_artifact_id)
     review_snapshot = dict(approved_selection or approved_review)
     try:
         if not approved_selection:
@@ -685,8 +829,36 @@ def _execute_prepared_sql_candidate(
     updated = _store_sql_candidate_output(updated, _serialize_prepared_sql_candidate(candidate))
     updated = _clear_output_error(updated)
     updated["meta"] = clear_clarification_meta(updated.get("meta") or {})
+    source_question, goal_text = _completed_sql_task_texts(
+        candidate,
+        sql_candidate_artifact=sql_candidate_artifact,
+        approved_selection=approved_selection,
+    )
+    updated = complete_task(
+        updated,
+        kind="db_rag_sql_extraction",
+        source_question=source_question,
+        goal_text=goal_text,
+        label=f"DB-RAG SQL extraction: {source_question.strip()[:80]}",
+        summary=f"Reviewed SQL executed and saved dataset {artifact['id']}.",
+        artifact_refs={
+            "selection_artifact_id": selection_artifact_id,
+            "sql_candidate_artifact_id": sql_candidate_artifact_id,
+            "dataset_artifact_id": artifact["id"],
+        },
+        parent_task_id=active_task.get("parent_task_id"),
+        relationship_to_parent=active_task.get("relationship_to_parent"),
+        provenance={
+            "producer_node": "rag_db_qa",
+            "selection_id": str(getattr(candidate, "selection_id", "") or ""),
+        },
+    )
     rag_state.pop("pending_sql_candidate", None)
     rag_state.pop("pending_column_review", None)
+    rag_state.pop("active_task", None)
+    rag_state["pending_sql_candidate_artifact_id"] = None
+    rag_state["pending_column_review_artifact_id"] = None
+    rag_state["approved_column_selection_artifact_id"] = None
     rag_state["error"] = None
     rag_state["last_database_question"] = candidate.question
     rag_state["thread_status"] = "completed"
@@ -733,20 +905,37 @@ def _format_sql_block(sql: str) -> str:
 
 
 def _format_column_review_response(answer_text: str, selection: dict[str, Any], *, revised: bool = False) -> str:
+    details = (
+        f"Selected tables:\n{_format_tables(_string_list(selection.get('tables', [])))}\n\n"
+        f"Selected columns:\n{_format_columns(_serialize_columns(selection.get('columns', [])))}"
+    )
+    rationale = str(selection.get("rationale") or "").strip()
+    if rationale:
+        details = f"{details}\n\nRationale:\n{rationale}"
+
     if revised:
         return (
             "I refreshed the DB-RAG column selection based on your feedback.\n\n"
-            "Please review the updated selection in the panel below."
+            f"Please review the updated selection in the panel below.\n\n{details}"
         )
     if answer_text:
-        return f"{answer_text}\n\nPlease review the proposed column selection in the panel below."
-    return "Please review the proposed DB-RAG column selection in the panel below."
+        return (
+            f"{answer_text}\n\n"
+            f"Please review the proposed column selection in the panel below.\n\n{details}"
+        )
+    return f"Please review the proposed DB-RAG column selection in the panel below.\n\n{details}"
 
 
 def _format_sql_candidate_response(candidate: dict[str, Any]) -> str:
+    tables = _format_tables(_string_list(candidate.get("tables", [])))
+    columns = _format_columns(_serialize_columns(candidate.get("columns", [])))
+    sql_block = _format_sql_block(str(candidate.get("sql") or ""))
     return (
         "I prepared a read-only SQL candidate from the approved DB-RAG selection.\n\n"
-        "Please review the SQL details in the panel below before execution."
+        "Please review the SQL details in the panel below before execution.\n\n"
+        f"Selected tables:\n{tables}\n\n"
+        f"Selected columns:\n{columns}\n\n"
+        f"Proposed SQL:\n{sql_block}"
     )
 
 

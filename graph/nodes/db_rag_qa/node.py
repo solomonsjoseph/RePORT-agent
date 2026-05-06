@@ -3,7 +3,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
-from ...state import AgentState
+from ...memory import complete_task
+from ...state import AgentState, MetaKeys
 from ..state_helpers import clear_clarification_meta, get_agent_state, set_clarification_meta
 from ..tool_routing import latest_user_message
 from .helpers import (
@@ -36,7 +37,6 @@ from .helpers import (
 
 _EXPLICIT_EXTRACTION_CUES = (
     "sql",
-    "query",
     "extract",
     "subset",
     "filter",
@@ -45,6 +45,22 @@ _EXPLICIT_EXTRACTION_CUES = (
     "rows",
     "generate the sql",
     "run the query",
+)
+
+_RESOLVED_TASK_META_KEYS = (
+    MetaKeys.RESOLVED_TASK_ID,
+    MetaKeys.RESOLVED_TASK_KIND,
+    MetaKeys.RESOLVED_TASK_RELATIONSHIP,
+    MetaKeys.RESOLVED_TASK_INTENDED_ACTION,
+    MetaKeys.RESOLVED_TASK_USER_MESSAGE_HASH,
+    "resolved_task_meta_consumed",
+)
+
+_REVISION_SYNTHETIC_MARKERS = (
+    "User revision request:",
+    "Parent extraction goal:",
+    "Parent task summary:",
+    "Prior SQL:",
 )
 
 
@@ -59,6 +75,16 @@ def _artifact_content(state: AgentState, artifact_id: str | None) -> dict[str, A
         return None
     content = artifact.get("content")
     return dict(content) if isinstance(content, dict) else None
+
+
+def _clear_resolved_task_meta(state: AgentState) -> AgentState:
+    meta = dict(state.get("meta") or {})
+    for key in _RESOLVED_TASK_META_KEYS:
+        meta.pop(key, None)
+    return {
+        **state,
+        "meta": meta,
+    }
 
 
 def _is_explicit_extraction_question(question: str) -> bool:
@@ -571,6 +597,255 @@ def _handle_pending_extraction_reply(
     return _reprompt_pending_extraction(state, rag_state, pending_extraction_opt_in)
 
 
+def _completed_task(state: AgentState, task_id: str | None) -> dict[str, Any] | None:
+    task_key = str(task_id or "").strip()
+    if not task_key:
+        return None
+    memory = dict(state.get("memory") or {})
+    completed = dict(memory.get("completed_tasks") or {})
+    task = completed.get(task_key)
+    return dict(task) if isinstance(task, dict) else None
+
+
+def _terminal_resolved_reference_error(
+    state: AgentState,
+    rag_state: dict[str, Any],
+    text: str,
+) -> AgentState:
+    updated = _append_ai_response(_clear_resolved_task_meta(state), text)
+    updated = _append_assistant_event(updated, updated["output"]["qa_response"])
+    updated = _clear_output_error(updated)
+    rag_state["error"] = None
+    rag_state["thread_status"] = "error"
+    return _finalize_rag_state(updated, rag_state, status="done", active_thread=False)
+
+
+def _sql_inspection_response(parent_task: dict[str, Any], sql_payload: dict[str, Any]) -> str:
+    sql = str(sql_payload.get("sql") or "").strip()
+    goal_text = str(
+        sql_payload.get("goal_text")
+        or parent_task.get("goal_text")
+        or parent_task.get("source_question")
+        or ""
+    ).strip()
+    tables = ", ".join(str(table) for table in list(sql_payload.get("tables") or []) if str(table).strip())
+    columns = ", ".join(
+        ".".join(
+            part
+            for part in (
+                str(column.get("table") or "").strip(),
+                str(column.get("column") or "").strip(),
+            )
+            if part
+        )
+        for column in list(sql_payload.get("columns") or [])
+        if isinstance(column, dict) and str(column.get("column") or "").strip()
+    )
+    context_lines = []
+    if goal_text:
+        context_lines.append(f"Original extraction goal: {goal_text}")
+    if tables:
+        context_lines.append(f"Tables: {tables}")
+    if columns:
+        context_lines.append(f"Columns: {columns}")
+    context = "\n".join(context_lines)
+    return (
+        f"Here is the SQL from the completed DB-RAG extraction:\n\n```sql\n{sql}\n```\n\n"
+        f"{context}"
+    ).strip()
+
+
+def _handle_resolved_sql_inspection(
+    state: AgentState,
+    rag_state: dict[str, Any],
+    *,
+    question: str,
+    parent_task_id: str,
+    parent_task: dict[str, Any],
+) -> AgentState:
+    artifact_refs = dict(parent_task.get("artifact_refs") or {})
+    sql_artifact_id = str(artifact_refs.get("sql_candidate_artifact_id") or "").strip()
+    sql_payload = _artifact_content(state, sql_artifact_id)
+    if not sql_payload:
+        return _terminal_resolved_reference_error(
+            state,
+            rag_state,
+            "I found the referenced DB-RAG task, but its SQL candidate artifact is missing. I cannot inspect it.",
+        )
+
+    response_text = _sql_inspection_response(parent_task, sql_payload)
+    updated = _append_ai_response(_clear_resolved_task_meta(state), response_text)
+    updated = _append_assistant_event(updated, updated["output"]["qa_response"])
+    updated = _clear_output_error(updated)
+    updated = complete_task(
+        updated,
+        kind="qa_answer",
+        source_question=question,
+        goal_text=f"Inspect SQL artifact for {parent_task.get('label') or parent_task_id}",
+        label=f"QA answer: {question.strip()[:80]}",
+        summary="Answered from a completed DB-RAG SQL candidate artifact.",
+        artifact_refs={"sql_candidate_artifact_id": sql_artifact_id},
+        parent_task_id=parent_task_id,
+        relationship_to_parent="inspect_artifact",
+        provenance={"producer_node": "rag_db_qa"},
+    )
+    rag_state["pending_column_review_artifact_id"] = None
+    rag_state["approved_column_selection_artifact_id"] = None
+    rag_state["pending_sql_candidate_artifact_id"] = None
+    rag_state.pop("pending_column_review", None)
+    rag_state.pop("pending_sql_candidate", None)
+    rag_state["error"] = None
+    rag_state["thread_status"] = "answered_artifact"
+    return _finalize_rag_state(updated, rag_state, status="done", active_thread=False)
+
+
+def _build_revision_question(question: str, parent_task: dict[str, Any], sql_payload: dict[str, Any]) -> str:
+    parent_summary = str(parent_task.get("summary") or "").strip()
+    parent_goal = str(parent_task.get("goal_text") or parent_task.get("source_question") or "").strip()
+    sql = str(sql_payload.get("sql") or "").strip()
+    parts = [f"User revision request: {question.strip()}"]
+    if parent_goal:
+        parts.append(f"Parent extraction goal: {parent_goal}")
+    if parent_summary:
+        parts.append(f"Parent task summary: {parent_summary}")
+    if sql:
+        parts.append(f"Prior SQL:\n{sql}")
+    return "\n\n".join(parts)
+
+
+def _clean_revision_goal(*, question: str, resolved_goal: str) -> str:
+    goal = str(resolved_goal or "").strip()
+    if not goal or any(marker in goal for marker in _REVISION_SYNTHETIC_MARKERS):
+        return str(question or "").strip()
+    return goal
+
+
+def _contains_revision_synthetic_marker(text: str) -> bool:
+    return any(marker in str(text or "") for marker in _REVISION_SYNTHETIC_MARKERS)
+
+
+def _handle_resolved_sql_revision(
+    state: AgentState,
+    rag_state: dict[str, Any],
+    *,
+    service,
+    reranker_model: str | None,
+    question: str,
+    parent_task_id: str,
+    parent_task: dict[str, Any],
+) -> AgentState:
+    artifact_refs = dict(parent_task.get("artifact_refs") or {})
+    selection_artifact_id = str(artifact_refs.get("selection_artifact_id") or "").strip()
+    sql_artifact_id = str(artifact_refs.get("sql_candidate_artifact_id") or "").strip()
+    selection_payload = _artifact_content(state, selection_artifact_id)
+    sql_payload = _artifact_content(state, sql_artifact_id)
+    if not selection_payload or not sql_payload:
+        return _terminal_resolved_reference_error(
+            state,
+            rag_state,
+            "I found the referenced DB-RAG task, but its selection or SQL artifact is missing. I cannot revise it.",
+        )
+
+    revision_question = _build_revision_question(question, parent_task, sql_payload)
+    context = service.retrieve_context(revision_question, reranker_model=reranker_model)
+    context_summary = _serialize_context_summary(context)
+    prior_intent = _serialize_intent(sql_payload.get("intent_snapshot") or selection_payload.get("intent_snapshot") or {})
+    intent = _resolve_intent_for_question(
+        service=service,
+        question=revision_question,
+        context=context,
+        prior_intent=prior_intent,
+        force_extraction=True,
+    )
+    intent["source_question"] = question
+    intent["goal_text"] = _clean_revision_goal(
+        question=question,
+        resolved_goal=str(intent.get("goal_text") or ""),
+    )
+    if _contains_revision_synthetic_marker(str(intent.get("intent_id") or "")):
+        intent["intent_id"] = f"intent:{question}"
+    rag_state = _reset_active_workflow_for_new_question(
+        rag_state,
+        question=question,
+        intent=intent,
+        context_summary=context_summary,
+    )
+    rag_state["active_task"] = {
+        "parent_task_id": parent_task_id,
+        "relationship_to_parent": "revision",
+    }
+    state_without_resolved_meta = _clear_resolved_task_meta(state)
+    preserved_meta = dict(state_without_resolved_meta.get("meta") or {})
+    updated = _start_column_review(
+        state_without_resolved_meta,
+        rag_state,
+        service=service,
+        question=question,
+        intent=intent,
+        context=context,
+        revised=False,
+    )
+    meta = dict(preserved_meta)
+    meta.update(dict(updated.get("meta") or {}))
+    for key in _RESOLVED_TASK_META_KEYS:
+        meta.pop(key, None)
+    updated["meta"] = meta
+    return updated
+
+
+def _handle_resolved_memory_reference(
+    state: AgentState,
+    rag_state: dict[str, Any],
+    *,
+    service,
+    reranker_model: str | None,
+    question: str,
+) -> AgentState | None:
+    meta = dict(state.get("meta") or {})
+    if meta.get(MetaKeys.RESOLVED_TASK_KIND) != "db_rag_sql_extraction":
+        return None
+
+    parent_task_id = str(meta.get(MetaKeys.RESOLVED_TASK_ID) or "").strip()
+    parent_task = _completed_task(state, parent_task_id)
+    if not parent_task:
+        return _terminal_resolved_reference_error(
+            state,
+            rag_state,
+            "I could not find the referenced completed DB-RAG SQL extraction task.",
+        )
+
+    relationship = str(meta.get(MetaKeys.RESOLVED_TASK_RELATIONSHIP) or "").strip()
+    if relationship == "inspect_artifact":
+        return _handle_resolved_sql_inspection(
+            state,
+            rag_state,
+            question=question,
+            parent_task_id=parent_task_id,
+            parent_task=parent_task,
+        )
+    if relationship == "revision":
+        return _handle_resolved_sql_revision(
+            state,
+            rag_state,
+            service=service,
+            reranker_model=reranker_model,
+            question=question,
+            parent_task_id=parent_task_id,
+            parent_task=parent_task,
+        )
+    if relationship == "use_as_input":
+        return _terminal_resolved_reference_error(
+            state,
+            rag_state,
+            "This resolved dataset handoff should be routed to code generation, not DB-RAG.",
+        )
+    return _terminal_resolved_reference_error(
+        state,
+        rag_state,
+        f"DB-RAG cannot handle the resolved DB-RAG SQL relationship '{relationship or 'unknown'}'.",
+    )
+
+
 def _handle_fresh_db_rag_question(
     state: AgentState,
     rag_state: dict[str, Any],
@@ -693,6 +968,16 @@ def rag_db_qa_node(
             reranker_model=reranker_model,
             question=question,
         )
+
+    resolved = _handle_resolved_memory_reference(
+        state,
+        rag_state,
+        service=service,
+        reranker_model=reranker_model,
+        question=question,
+    )
+    if resolved is not None:
+        return resolved
 
     return _handle_fresh_db_rag_question(
         state,

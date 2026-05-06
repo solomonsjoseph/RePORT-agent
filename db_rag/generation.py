@@ -17,10 +17,15 @@ def extract_sql(text: str) -> str:
     match = re.search(r"```(?:sql)?\s*(.*?)```", text, re.DOTALL | re.IGNORECASE)
     if match:
         return match.group(1).strip()
-    for prefix in ("SELECT", "WITH"):
-        idx = text.upper().find(prefix)
-        if idx >= 0:
-            return text[idx:].strip()
+    starts: list[int] = []
+    with_match = re.search(r"\bWITH\b", text, re.IGNORECASE)
+    if with_match:
+        starts.append(with_match.start())
+    select_match = re.search(r"\bSELECT\b", text, re.IGNORECASE)
+    if select_match:
+        starts.append(select_match.start())
+    if starts:
+        return text[min(starts):].strip()
     return text
 
 
