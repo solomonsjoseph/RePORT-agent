@@ -3,6 +3,7 @@ from langchain_core.messages import HumanMessage
 
 from ..conversation_events import append_conversation_event, build_review_decision_event
 from ..state import MetaKeys
+from .human_review_cancel import append_review_cancel_audit
 from .state_helpers import update_agent_state
 
 NODE_NAME = "human_review_after_error"
@@ -19,6 +20,36 @@ def human_review_after_error_node(state):
         "error": output.get("error", {}),
     })
     decision = feedback.get("action")
+
+    if decision == "cancel":
+        output.pop("generated_code", None)
+        meta = dict(state.get("meta", {}))
+        meta[MetaKeys.ERROR_ITERATIONS] = 0
+        meta.pop(MetaKeys.FINAL_APPROVED_CODE_HASH, None)
+        meta.pop(MetaKeys.EXECUTION_TICKET_HASH, None)
+        meta.pop(MetaKeys.ERROR_RECOVERY_ACTIVE, None)
+        updated_state = {
+            **state,
+            "meta": meta,
+            "output": output,
+        }
+        updated_state = append_review_cancel_audit(
+            updated_state,
+            actor="human_review_after_error",
+            review_kind="after_error_review",
+        )
+        updated_state = update_agent_state(updated_state, "executor", {"run_status": "idle"})
+        return update_agent_state(
+            updated_state,
+            "human_review",
+            {
+                "status": "done",
+                "after_error_decision": "cancel",
+                "before_run_decision": None,
+                "approved_code_hash": None,
+            },
+        )
+
     messages = list(state.get("messages", []))
     suggestion = feedback.get("suggestion", None)
     if suggestion:

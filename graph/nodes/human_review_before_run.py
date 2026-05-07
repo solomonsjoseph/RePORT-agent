@@ -2,6 +2,7 @@ from langgraph.types import interrupt
 from langchain_core.messages import HumanMessage
 from ..conversation_events import append_conversation_event, build_review_decision_event
 from ..state import MetaKeys
+from .human_review_cancel import append_review_cancel_audit
 from .state_helpers import update_agent_state
 
 NODE_NAME = "human_review_before_run"
@@ -18,6 +19,34 @@ def human_review_before_run_node(state):
         "generated_code": output.get("generated_code", ""),
     })
     decision = feedback.get("action")
+
+    if decision == "cancel":
+        output.pop("generated_code", None)
+        meta = dict(state.get("meta", {}))
+        meta.pop(MetaKeys.EXECUTION_TICKET_HASH, None)
+        meta.pop(MetaKeys.FINAL_APPROVED_CODE_HASH, None)
+        meta.pop(MetaKeys.ERROR_RECOVERY_ACTIVE, None)
+        updated_state = {
+            **state,
+            "output": output,
+            "meta": meta,
+        }
+        updated_state = append_review_cancel_audit(
+            updated_state,
+            actor="human_review_before_run",
+            review_kind="before_run_review",
+        )
+        updated_state = update_agent_state(updated_state, "executor", {"run_status": "idle"})
+        return update_agent_state(
+            updated_state,
+            "human_review",
+            {
+                "status": "done",
+                "before_run_decision": "cancel",
+                "approved_code_hash": None,
+            },
+        )
+
     messages = list(state.get("messages", []))
     suggestion = feedback.get("suggestion", None)
     if suggestion:

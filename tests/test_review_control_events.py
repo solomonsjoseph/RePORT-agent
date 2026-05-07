@@ -138,3 +138,125 @@ def test_review_cancel_helper_appends_assistant_and_decision_event() -> None:
     cancel_messages = [message for message in history if message.content == module.CANCEL_REVIEW_MESSAGE]
     assert len(cancel_messages) == 1
     assert cancel_messages[0].type == "ai"
+
+
+def test_human_review_before_run_cancel_clears_live_code_state() -> None:
+    _install_stubs(decision="cancel", suggestion="do not use this")
+    for mod in (
+        "graph.nodes.human_review_before_run",
+        "graph.nodes.human_review_cancel",
+        "graph.state",
+        "graph.nodes.state_helpers",
+    ):
+        sys.modules.pop(mod, None)
+    module = importlib.import_module("graph.nodes.human_review_before_run")
+
+    state = {
+        "messages": [],
+        "output": {"generated_code": "print(1)", "code_summary": "summary"},
+        "meta": {
+            "current_code_hash": "hash-1",
+            "execution_ticket_hash": "hash-1",
+            "final_approved_code_hash": "hash-1",
+            "error_recovery_active": True,
+            "last_user_message_hash": "u-cancel-run",
+        },
+        "agents": {"executor": {"run_status": "pending"}},
+    }
+
+    updated = module.human_review_before_run_node(state)
+
+    assert updated["agents"]["human_review"]["before_run_decision"] == "cancel"
+    assert updated["agents"]["human_review"]["approved_code_hash"] is None
+    assert updated["agents"]["executor"]["run_status"] == "idle"
+    assert "generated_code" not in updated["output"]
+    assert "execution_ticket_hash" not in updated["meta"]
+    assert "final_approved_code_hash" not in updated["meta"]
+    assert "error_recovery_active" not in updated["meta"]
+    assert len(updated["messages"]) == 1
+    assert updated["messages"][0].content.startswith("Cancelled the pending review")
+    assert updated["artifacts"]["conversation_events"][-1]["decision"] == "cancel"
+
+
+def test_human_review_after_error_cancel_clears_retry_state_without_feedback_message() -> None:
+    _install_stubs(decision="cancel", suggestion="try again anyway")
+    for mod in (
+        "graph.nodes.human_review_after_error",
+        "graph.nodes.human_review_cancel",
+        "graph.state",
+        "graph.nodes.state_helpers",
+    ):
+        sys.modules.pop(mod, None)
+    module = importlib.import_module("graph.nodes.human_review_after_error")
+
+    state = {
+        "messages": [],
+        "output": {
+            "generated_code": "print(1)",
+            "error": {"category": "retryable_code", "type": "ValueError", "message": "bad column"},
+        },
+        "meta": {
+            "error_iterations": 5,
+            "current_code_hash": "hash-1",
+            "execution_ticket_hash": "hash-1",
+            "final_approved_code_hash": "hash-1",
+            "error_recovery_active": True,
+            "last_user_message_hash": "u-cancel-error",
+        },
+        "agents": {"executor": {"run_status": "error"}},
+    }
+
+    updated = module.human_review_after_error_node(state)
+
+    assert updated["agents"]["human_review"]["after_error_decision"] == "cancel"
+    assert updated["agents"]["executor"]["run_status"] == "idle"
+    assert updated["meta"]["error_iterations"] == 0
+    assert "generated_code" not in updated["output"]
+    assert "execution_ticket_hash" not in updated["meta"]
+    assert "final_approved_code_hash" not in updated["meta"]
+    assert "error_recovery_active" not in updated["meta"]
+    assert len(updated["messages"]) == 1
+    assert "try again anyway" not in updated["messages"][0].content
+    assert updated["artifacts"]["conversation_events"][-1]["decision"] == "cancel"
+
+
+def test_human_review_before_output_cancel_does_not_append_final_result() -> None:
+    _install_stubs(decision="cancel", suggestion="change the output")
+    for mod in (
+        "graph.nodes.human_review_before_output",
+        "graph.nodes.human_review_cancel",
+        "graph.state",
+        "graph.nodes.state_helpers",
+    ):
+        sys.modules.pop(mod, None)
+    module = importlib.import_module("graph.nodes.human_review_before_output")
+
+    state = {
+        "messages": [],
+        "output": {
+            "generated_code": "print(1)",
+            "text": "result text",
+            "code_summary": "summary",
+        },
+        "meta": {
+            "current_code_hash": "hash-1",
+            "execution_ticket_hash": "hash-1",
+            "final_approved_code_hash": "old-hash",
+            "error_recovery_active": True,
+            "last_user_message_hash": "u-cancel-final",
+        },
+        "agents": {"executor": {"run_status": "ok"}},
+        "artifacts": {"files": {}},
+    }
+
+    updated = module.human_review_before_output_node(state)
+
+    assert updated["agents"]["human_review"]["final_decision"] == "cancel"
+    assert updated["agents"]["executor"]["run_status"] == "idle"
+    assert "execution_ticket_hash" not in updated["meta"]
+    assert "final_approved_code_hash" not in updated["meta"]
+    assert "error_recovery_active" not in updated["meta"]
+    assert len(updated["messages"]) == 1
+    assert "result text" not in updated["messages"][0].content
+    assert updated["artifacts"]["conversation_events"][-1]["review_kind"] == "final_review"
+    assert updated["artifacts"]["conversation_events"][-1]["decision"] == "cancel"

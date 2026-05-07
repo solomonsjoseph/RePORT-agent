@@ -1,5 +1,6 @@
 from langgraph.types import interrupt
 from langchain_core.messages import HumanMessage, AIMessage
+from .human_review_cancel import append_review_cancel_audit
 from .state_helpers import update_agent_state
 from ..state_views import get_artifact_files
 from ..conversation_events import (
@@ -39,6 +40,32 @@ def human_review_before_output_node(state):
     decision = feedback.get("action")
     output_text = output.get("text", None)
     messages = list(state.get("messages", []))
+
+    if decision == "cancel":
+        meta = dict(state.get("meta") or {})
+        meta.pop(MetaKeys.FINAL_APPROVED_CODE_HASH, None)
+        meta.pop(MetaKeys.EXECUTION_TICKET_HASH, None)
+        meta.pop(MetaKeys.ERROR_RECOVERY_ACTIVE, None)
+        updated_state = {
+            **state,
+            "messages": messages,
+            "meta": meta,
+            "output": output,
+        }
+        updated_state = append_review_cancel_audit(
+            updated_state,
+            actor="human_review_before_output",
+            review_kind="final_review",
+        )
+        updated_state = update_agent_state(updated_state, "executor", {"run_status": "idle"})
+        return update_agent_state(
+            updated_state,
+            "human_review",
+            {
+                "status": "done",
+                "final_decision": "cancel",
+            },
+        )
 
     if decision == "approve":
         code = output.get("generated_code")
