@@ -69,6 +69,15 @@ def test_choose_analysis_dataset_uses_explicit_analysis_dataset_id() -> None:
     assert reason == "explicit"
 
 
+def test_get_analysis_dataset_artifact_prefers_pinned_analysis_dataset_id() -> None:
+    from utils.dataset_artifacts import get_analysis_dataset_artifact
+
+    artifact = get_analysis_dataset_artifact(_dataset_state(analysis_dataset_id="uploaded-1"))
+
+    assert artifact is not None
+    assert artifact["id"] == "uploaded-1"
+
+
 def test_build_active_dataset_artifacts_patch_sets_global_active_dataset() -> None:
     from utils.dataset_artifacts import build_active_dataset_artifacts_patch
 
@@ -240,11 +249,57 @@ def test_generate_code_accepts_exact_dataset_id_reply_and_pins_analysis_selectio
         question_override="subset-1",
     )
 
-    assert llm.prompts[0]["context"] == "context::subset-1"
+    assert "context::subset-1" in llm.prompts[0]["context"]
+    assert 'datasets["subset-1"]' in llm.prompts[0]["context"]
     assert updated["meta"]["analysis_dataset_id"] == "subset-1"
     assert "analysis_dataset_candidate_ids" not in updated["meta"]
     assert "analysis_dataset_pending_request" not in updated["meta"]
     assert updated["output"]["generated_code"] == "print(1)"
+
+
+def test_generate_code_records_selected_dataset_id_in_assumptions(generate_code_module) -> None:
+    module, HumanMessage, _AIMessage = generate_code_module
+
+    class FakeLLM:
+        def invoke(self, _prompt):
+            return SimpleNamespace(
+                content=(
+                    '{"response_type":"code_result","summary":"done",'
+                    '"assumptions":"Gender values are cleaned before tabulation.",'
+                    '"code":"print(1)"}'
+                )
+            )
+
+    state = _dataset_state(analysis_dataset_id="subset-1")
+    state["messages"] = [HumanMessage("tabulate gender")]
+
+    updated = module.generate_code_node(state, FakeLLM(), {"runtime_datasets": True})
+
+    assumptions = updated["output"]["code_assumptions"]
+    assert "Gender values are cleaned before tabulation." in assumptions
+    assert "Dataset used: subset-1" in assumptions
+
+
+def test_generate_code_prompt_context_names_dataset_mapping(generate_code_module) -> None:
+    module, HumanMessage, _AIMessage = generate_code_module
+
+    class FakeLLM:
+        def __init__(self):
+            self.prompts = []
+
+        def invoke(self, prompt):
+            self.prompts.append(prompt)
+            return SimpleNamespace(
+                content='{"response_type":"code_result","summary":"done","assumptions":"","code":"print(1)"}'
+            )
+
+    llm = FakeLLM()
+    state = _dataset_state(analysis_dataset_id="subset-1")
+    state["messages"] = [HumanMessage("tabulate gender")]
+
+    module.generate_code_node(state, llm, {"runtime_datasets": True})
+
+    assert 'datasets["subset-1"]' in llm.prompts[0]["context"]
 
 
 def test_generate_code_reprompts_when_dataset_reply_is_not_exact_id(generate_code_module) -> None:

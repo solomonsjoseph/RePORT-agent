@@ -117,7 +117,12 @@ def execute_code_node(state, df):
             status="started",
         ),
     )
-    result, stdout, figure_png, error = run_python_user(code, resolved_df)
+    meta = dict(state.get("meta") or {})
+    result, stdout, figure_png, error = run_python_user(
+        code,
+        resolved_df,
+        dataset_id=str(meta.get(MetaKeys.ANALYSIS_DATASET_ID) or "").strip() or None,
+    )
 
     if error:
         output = dict(state.get("output") or {})

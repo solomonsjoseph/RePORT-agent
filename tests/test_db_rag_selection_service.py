@@ -200,6 +200,101 @@ def test_prepare_column_selection_includes_rank_failure_reason_in_fallback() -> 
     assert "rate limit" in selection.fallback_reason
 
 
+def test_prepare_column_selection_reports_empty_structured_ranking_in_fallback() -> None:
+    service = _SelectionService(
+        ranked_output={
+            "columns": [],
+            "rationale": "",
+            "raw_model_output": '{"columns":[],"rationale":"No relevant columns."}',
+        }
+    )
+
+    selection = service.prepare_column_selection("Study treatment failure.", _context())
+
+    assert selection.selection_source == "retrieval_fallback"
+    assert "Structured ranking returned no column identifiers" in selection.fallback_reason
+    assert selection.raw_model_output == '{"columns":[],"rationale":"No relevant columns."}'
+
+
+def test_prepare_column_selection_enforces_required_column_constraints_from_intent_snapshot() -> None:
+    service = _SelectionService(
+        ranked_output={
+            "columns": ["Form 2A||IC_AGE"],
+            "rationale": "Only ranked age.",
+            "raw_model_output": '{"columns":["Form 2A||IC_AGE"]}',
+        }
+    )
+    context = DbRagContext(
+        tables=[
+            DbRagTableHit(table="Form 2A", text="Index case demographics"),
+            DbRagTableHit(table="Final Outcome", text="Outcome form"),
+        ],
+        columns=[
+            DbRagColumnHit(table="Form 2A", column="IC_AGE", text="Age"),
+            DbRagColumnHit(table="Form 2A", column="IC_DMDX", text="Diabetes status"),
+            DbRagColumnHit(table="Form 2A", column="IC_ALCUSE", text="Alcohol usage"),
+            DbRagColumnHit(table="Final Outcome", column="FOA_COHAOUT", text="TB outcome"),
+        ],
+        table_context="Form 2A\n\nFinal Outcome",
+        column_context="IC_AGE\n\nIC_DMDX\n\nIC_ALCUSE\n\nFOA_COHAOUT",
+    )
+    intent_snapshot = {
+        "required_columns": [
+            {"column": "IC_DMDX", "table": "Form 2A", "semantic": "diabetes_status"},
+            {"field": "IC_ALCUSE", "table": "Form 2A", "semantic": "alcohol_usage"},
+            {"column": "FOA_COHAOUT", "table": "Final Outcome", "semantic": "tb_outcome"},
+        ],
+    }
+
+    selection = service.prepare_column_selection(
+        "Add diabetes, alcohol, and outcome to the subset.",
+        context,
+        intent_snapshot=intent_snapshot,
+    )
+
+    selected = [f'{column["table"]}.{column["column"]}' for column in selection.columns]
+    assert selected == [
+        "Form 2A.IC_AGE",
+        "Form 2A.IC_DMDX",
+        "Form 2A.IC_ALCUSE",
+        "Final Outcome.FOA_COHAOUT",
+    ]
+
+
+def test_prepare_column_selection_still_accepts_legacy_requested_fields() -> None:
+    service = _SelectionService(
+        ranked_output={
+            "columns": ["Form 2A||IC_AGE"],
+            "rationale": "Only ranked age.",
+            "raw_model_output": '{"columns":["Form 2A||IC_AGE"]}',
+        }
+    )
+    context = DbRagContext(
+        tables=[DbRagTableHit(table="Form 2A", text="Index case demographics")],
+        columns=[
+            DbRagColumnHit(table="Form 2A", column="IC_AGE", text="Age"),
+            DbRagColumnHit(table="Form 2A", column="IC_DMDX", text="Diabetes status"),
+        ],
+        table_context="Form 2A",
+        column_context="IC_AGE\n\nIC_DMDX",
+    )
+
+    selection = service.prepare_column_selection(
+        "Add diabetes to the subset.",
+        context,
+        intent_snapshot={
+            "requested_fields": [
+                "{'field': 'IC_DMDX', 'table': 'Form 2A', 'semantic': 'diabetes_status'}",
+            ],
+        },
+    )
+
+    assert [f'{column["table"]}.{column["column"]}' for column in selection.columns] == [
+        "Form 2A.IC_AGE",
+        "Form 2A.IC_DMDX",
+    ]
+
+
 def test_prepare_column_selection_excludes_columns_missing_from_runtime_duckdb_schema(monkeypatch, tmp_path) -> None:
     duckdb_path = tmp_path / "report.duckdb"
     duckdb_path.touch()

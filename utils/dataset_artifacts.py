@@ -113,7 +113,15 @@ def build_dataset_context(artifact: dict[str, Any] | None) -> str:
         )
 
     schema_text = "\n".join(schema_lines) if schema_lines else "No schema metadata available."
+    dataset_id = str(artifact.get("id") or "").strip()
+    access_text = (
+        f'Selected analysis dataset ID: {dataset_id}\n'
+        f'Use this dataset in generated code as datasets["{dataset_id}"].\n\n'
+        if dataset_id
+        else ""
+    )
     return (
+        f"{access_text}"
         "Available columns:\n"
         f"{col_section}\n\n"
         "Column metadata:\n"
@@ -134,6 +142,15 @@ def get_active_dataset_artifact(state: dict[str, Any]) -> dict[str, Any] | None:
     if len(datasets) == 1:
         return next(iter(datasets.values()))
     return None
+
+
+def get_analysis_dataset_artifact(state: dict[str, Any]) -> dict[str, Any] | None:
+    meta = dict(state.get("meta") or {})
+    selected_id = str(meta.get("analysis_dataset_id") or "").strip()
+    datasets = get_registered_datasets(state)
+    if selected_id:
+        return datasets.get(selected_id)
+    return get_active_dataset_artifact(state)
 
 
 def get_analysis_dataset_candidates(state: dict[str, Any]) -> list[dict[str, Any]]:

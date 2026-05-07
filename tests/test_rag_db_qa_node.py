@@ -122,7 +122,6 @@ class _Service:
             goal_text=self.resolved_goal_text or question,
             mode="metadata",
             population=None,
-            requested_fields=[],
             filters=[],
             required_tables=[],
             required_columns=[],
@@ -947,6 +946,47 @@ def test_resolved_goal_text_is_preserved_separately_from_source_question() -> No
     assert rag_state["pending_extraction_opt_in"]["goal_text"] == (
         "Identify index-case age, gender, diabetes status, and TB outcome variables."
     )
+
+
+def test_active_intent_uses_required_columns_without_requested_fields() -> None:
+    service = _Service()
+
+    def _resolve_intent(question: str, context, prior_intent=None):
+        del context, prior_intent
+        return SimpleNamespace(
+            intent_id="intent:diabetes",
+            source_question=question,
+            goal_text="Subset diabetes status.",
+            mode="extraction",
+            population=None,
+            filters=[{"table": "Form 1A", "column": "IS_ENROLL", "operator": "=", "value": "Yes"}],
+            required_tables=[],
+            required_columns=[
+                {"table": "Form 2A", "column": "IC_DMDX", "semantic": "diabetes_status"},
+            ],
+            excluded_tables=[],
+            excluded_columns=[],
+            feedback_history=[],
+            status="active",
+        )
+
+    service.resolve_intent = _resolve_intent
+
+    updated = rag_db_qa_node(
+        _state("Subset diabetes status for enrolled index cases."),
+        llm=None,
+        provider="openai",
+        service=service,
+    )
+
+    intent = updated["agents"]["rag_db_qa"]["active_intent"]
+    assert "requested_fields" not in intent
+    assert intent["required_columns"] == [
+        {"table": "Form 2A", "column": "IC_DMDX", "semantic": "diabetes_status"},
+    ]
+    assert intent["filters"] == [
+        {"table": "Form 1A", "column": "IS_ENROLL", "operator": "=", "value": "Yes"},
+    ]
 
 
 def test_explicit_extraction_artifact_preserves_distinct_goal_text_and_source_question() -> None:

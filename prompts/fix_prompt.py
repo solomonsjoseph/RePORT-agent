@@ -8,7 +8,7 @@ Important:
 - Treat Boolean Strings ('Yes'/'No') as categorical variables.
 - Treat categorical columns exactly as described in the schema.
 - Use time/event variables ONLY when schema indicates they are relevant.
-- Do NOT add imports. Use df and schema as-is.
+- Do NOT add imports. Use the selected dataset as datasets["<dataset_id>"], using the dataset ID shown in DATA CONTEXT.
 - Always output ONE corrected python code block.
 
 DATA CONTEXT:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 from typing import Any
 
 from db_rag.generation import DB_RAG_CONTEXT_FALLBACK_RATIONALE, default_selection_id
@@ -9,6 +10,35 @@ from .runtime_schema import duckdb_runtime_column_exists
 from .schema import _lookup_schema_column
 
 
+def _coerce_mapping(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return {}
+        try:
+            parsed = ast.literal_eval(text)
+        except (SyntaxError, ValueError):
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _structured_field_columns(entries: Any) -> list[str]:
+    columns: list[str] = []
+    for raw_entry in list(entries or []):
+        entry = _coerce_mapping(raw_entry)
+        table = str(entry.get("table") or "").strip()
+        column = str(entry.get("column") or entry.get("field") or "").strip()
+        if not table or not column:
+            continue
+        qualified = f"{table}.{column}"
+        if qualified not in columns:
+            columns.append(qualified)
+    return columns
+
+
 def _constraint_set_from_payload(payload: DbRagIntent | dict[str, Any] | None) -> FeedbackConstraintSet:
     if isinstance(payload, DbRagIntent):
         source = payload.__dict__
@@ -16,12 +46,42 @@ def _constraint_set_from_payload(payload: DbRagIntent | dict[str, Any] | None) -
         source = payload
     else:
         source = {}
+    required_columns: list[str] = []
+    for raw_value in list(source.get("required_columns") or []):
+        entry = _coerce_mapping(raw_value)
+        if entry:
+            table = str(entry.get("table") or "").strip()
+            column = str(entry.get("column") or entry.get("field") or "").strip()
+            value = f"{table}.{column}" if table and column else ""
+        else:
+            value = str(raw_value or "").strip()
+        if value and value not in required_columns:
+            required_columns.append(value)
+    for qualified in [
+        *_structured_field_columns(source.get("requested_fields")),
+        *_structured_field_columns(source.get("filters")),
+    ]:
+        if qualified not in required_columns:
+            required_columns.append(qualified)
+
+    excluded_columns: list[str] = []
+    for raw_value in list(source.get("excluded_columns") or []):
+        entry = _coerce_mapping(raw_value)
+        if entry:
+            table = str(entry.get("table") or "").strip()
+            column = str(entry.get("column") or entry.get("field") or "").strip()
+            value = f"{table}.{column}" if table and column else ""
+        else:
+            value = str(raw_value or "").strip()
+        if value and value not in excluded_columns:
+            excluded_columns.append(value)
+
     return FeedbackConstraintSet(
         goal_text=str(source.get("goal_text") or "").strip(),
         required_tables=tuple(str(value or "").strip() for value in list(source.get("required_tables") or []) if str(value or "").strip()),
-        required_columns=tuple(str(value or "").strip() for value in list(source.get("required_columns") or []) if str(value or "").strip()),
+        required_columns=tuple(required_columns),
         excluded_tables=tuple(str(value or "").strip() for value in list(source.get("excluded_tables") or []) if str(value or "").strip()),
-        excluded_columns=tuple(str(value or "").strip() for value in list(source.get("excluded_columns") or []) if str(value or "").strip()),
+        excluded_columns=tuple(excluded_columns),
     )
 
 

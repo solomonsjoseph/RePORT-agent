@@ -100,18 +100,21 @@ ERROR_CATEGORY_TIMEOUT = "timeout"
 _MODULE_NOT_FOUND_RE = re.compile(r"No module named ['\"]([^'\"]+)['\"]")
 
 
-def _build_exec_globals(df: pd.DataFrame) -> dict[str, Any]:
+def _build_exec_globals(df: pd.DataFrame, *, dataset_id: str | None = None) -> dict[str, Any]:
     import matplotlib.pyplot as plt
     import numpy as np
     from lifelines import CoxPHFitter, KaplanMeierFitter
     from scipy.stats import chi2_contingency, fisher_exact
 
+    dataset_key = str(dataset_id or "").strip()
+    datasets = {dataset_key: df} if dataset_key else {}
     return {
         "pd": pd,
         "np": np,
         "KaplanMeierFitter": KaplanMeierFitter,
         "CoxPHFitter": CoxPHFitter,
-        "df": df,
+        "datasets": datasets,
+        "selected_dataset_id": dataset_key,
         "chi2_contingency": chi2_contingency,
         "fisher_exact": fisher_exact,
         "plt": plt,
@@ -119,10 +122,10 @@ def _build_exec_globals(df: pd.DataFrame) -> dict[str, Any]:
     }
 
 
-def _execute_user_code(code: str, df: pd.DataFrame):
+def _execute_user_code(code: str, df: pd.DataFrame, *, dataset_id: str | None = None):
     """Execute user code quietly and return structured errors."""
 
-    global_env = _build_exec_globals(df)
+    global_env = _build_exec_globals(df, dataset_id=dataset_id)
     local_env: dict[str, Any] = {}
 
     stdout_buf = io.StringIO()
@@ -392,7 +395,7 @@ def _docker_command(input_dir: Path, output_dir: Path) -> list[str]:
     ]
 
 
-def _run_docker_sandbox(code: str, df: pd.DataFrame):
+def _run_docker_sandbox(code: str, df: pd.DataFrame, *, dataset_id: str | None = None):
     timeout_seconds = float(os.getenv("EXECUTION_TIMEOUT_SEC", "20"))
     with tempfile.TemporaryDirectory(prefix="report-agent-exec-") as tmpdir:
         tmp_path = Path(tmpdir)
@@ -403,6 +406,7 @@ def _run_docker_sandbox(code: str, df: pd.DataFrame):
 
         (input_dir / "code.py").write_text(code, encoding="utf-8")
         df.to_csv(input_dir / "dataset.csv", index=False)
+        (input_dir / "dataset_id.txt").write_text(str(dataset_id or ""), encoding="utf-8")
 
         command = _docker_command(input_dir, output_dir)
         try:
@@ -468,7 +472,7 @@ def _run_docker_sandbox(code: str, df: pd.DataFrame):
         return result, stdout, figure_png, error
 
 
-def run_python_user(code: str, df: pd.DataFrame):
+def run_python_user(code: str, df: pd.DataFrame, *, dataset_id: str | None = None):
     """Execute user code and return result, stdout, figure, and structured error."""
 
     policy_error = _preflight_policy_check(code)
@@ -477,11 +481,11 @@ def run_python_user(code: str, df: pd.DataFrame):
 
     execution_mode = current_execution_mode()
     if execution_mode in {"inline", "trusted_local"}:
-        return _execute_user_code(code, df)
+        return _execute_user_code(code, df, dataset_id=dataset_id)
     if execution_mode == "docker":
-        return _run_docker_sandbox(code, df)
+        return _run_docker_sandbox(code, df, dataset_id=dataset_id)
     if execution_mode == "subprocess":
-        return _run_docker_sandbox(code, df)
+        return _run_docker_sandbox(code, df, dataset_id=dataset_id)
 
     return None, "", b"", _make_error(
         "SandboxExecutionError",

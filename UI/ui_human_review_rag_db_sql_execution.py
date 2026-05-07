@@ -13,7 +13,6 @@ def ui_human_review_rag_db_sql_execution(app, config, payload, interrupt_id, que
     question = str(payload.get("question") or "").strip()
     rationale = str(payload.get("rationale") or "").strip()
     selection_id = str(payload.get("selection_id") or "").strip()
-    tables = list(payload.get("tables") or [])
     columns = list(payload.get("columns") or [])
     sql = str(payload.get("sql") or "").strip()
     feedback_history = list(payload.get("feedback_history") or [])
@@ -26,10 +25,6 @@ def ui_human_review_rag_db_sql_execution(app, config, payload, interrupt_id, que
     if rationale:
         st.markdown("**Selection rationale**")
         st.write(rationale)
-    if tables:
-        st.markdown("**Approved tables**")
-        for table in tables:
-            st.write(f"- {table}")
     if columns:
         st.markdown("**Approved columns**")
         for column in columns:

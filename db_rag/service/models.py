@@ -53,12 +53,11 @@ class DbRagIntent:
     goal_text: str
     mode: str
     population: str | None
-    requested_fields: list[str] = field(default_factory=list)
-    filters: list[str] = field(default_factory=list)
+    required_columns: list[Any] = field(default_factory=list)
+    filters: list[Any] = field(default_factory=list)
     required_tables: list[str] = field(default_factory=list)
-    required_columns: list[str] = field(default_factory=list)
     excluded_tables: list[str] = field(default_factory=list)
-    excluded_columns: list[str] = field(default_factory=list)
+    excluded_columns: list[Any] = field(default_factory=list)
     feedback_history: list[dict[str, str]] = field(default_factory=list)
     status: str = "active"
 

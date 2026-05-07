@@ -22,13 +22,15 @@ def _safe_json_value(value: Any) -> Any:
     return value
 
 
-def _execute_user_code(code: str, df: pd.DataFrame):
+def _execute_user_code(code: str, df: pd.DataFrame, *, dataset_id: str | None = None):
+    dataset_key = str(dataset_id or "").strip()
     global_env = {
         "pd": pd,
         "np": np,
         "KaplanMeierFitter": KaplanMeierFitter,
         "CoxPHFitter": CoxPHFitter,
-        "df": df,
+        "datasets": {dataset_key: df} if dataset_key else {},
+        "selected_dataset_id": dataset_key,
         "chi2_contingency": chi2_contingency,
         "fisher_exact": fisher_exact,
         "plt": plt,
@@ -80,8 +82,10 @@ def main() -> int:
 
     code = (input_dir / "code.py").read_text(encoding="utf-8")
     df = pd.read_csv(input_dir / "dataset.csv")
+    dataset_id_path = input_dir / "dataset_id.txt"
+    dataset_id = dataset_id_path.read_text(encoding="utf-8").strip() if dataset_id_path.exists() else ""
 
-    result, stdout, figure_png, error = _execute_user_code(code, df)
+    result, stdout, figure_png, error = _execute_user_code(code, df, dataset_id=dataset_id)
 
     payload = {
         "status": "error" if error else "ok",

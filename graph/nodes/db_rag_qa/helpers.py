@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
@@ -117,6 +118,66 @@ def _string_list(values: Any) -> list[str]:
     for value in list(values or []):
         text = str(value or "").strip()
         if text:
+            result.append(text)
+    return result
+
+
+def _coerce_mapping(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return {}
+        try:
+            parsed = ast.literal_eval(text)
+        except (SyntaxError, ValueError):
+            return {}
+        return dict(parsed) if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _structured_column_refs(values: Any, *, allow_strings: bool = False) -> list[Any]:
+    result: list[Any] = []
+    for value in list(values or []):
+        entry = _coerce_mapping(value)
+        if entry:
+            table = str(entry.get("table") or "").strip()
+            column = str(entry.get("column") or entry.get("field") or "").strip()
+            if not table or not column:
+                continue
+            normalized: dict[str, Any] = {"table": table, "column": column}
+            semantic = str(entry.get("semantic") or "").strip()
+            if semantic:
+                normalized["semantic"] = semantic
+            if normalized not in result:
+                result.append(normalized)
+            continue
+        if allow_strings:
+            text = str(value or "").strip()
+            if text and text not in result:
+                result.append(text)
+    return result
+
+
+def _structured_filter_refs(values: Any) -> list[Any]:
+    result: list[Any] = []
+    for value in list(values or []):
+        entry = _coerce_mapping(value)
+        if entry:
+            table = str(entry.get("table") or "").strip()
+            column = str(entry.get("column") or entry.get("field") or "").strip()
+            if not table or not column:
+                continue
+            normalized: dict[str, Any] = {"table": table, "column": column}
+            for key in ("operator", "value", "semantic"):
+                if key in entry and str(entry.get(key) or "").strip():
+                    normalized[key] = str(entry.get(key) or "").strip()
+            if normalized not in result:
+                result.append(normalized)
+            continue
+        text = str(value or "").strip()
+        if text and text not in result:
             result.append(text)
     return result
 
@@ -279,18 +340,21 @@ def _serialize_context_pool(context: Any) -> dict[str, list[dict[str, Any]]]:
 
 def _serialize_intent(intent: Any) -> dict[str, Any]:
     payload = dict(intent) if isinstance(intent, dict) else getattr(intent, "__dict__", {})
+    required_columns = _structured_column_refs(payload.get("required_columns", []), allow_strings=True)
+    for column in _structured_column_refs(payload.get("requested_fields", [])):
+        if column not in required_columns:
+            required_columns.append(column)
     return {
         "intent_id": str(payload.get("intent_id") or "").strip(),
         "source_question": str(payload.get("source_question") or "").strip(),
         "goal_text": str(payload.get("goal_text") or "").strip(),
         "mode": str(payload.get("mode") or "").strip(),
         "population": str(payload.get("population") or "").strip() or None,
-        "requested_fields": _string_list(payload.get("requested_fields", [])),
-        "filters": _string_list(payload.get("filters", [])),
+        "filters": _structured_filter_refs(payload.get("filters", [])),
         "required_tables": _string_list(payload.get("required_tables", [])),
-        "required_columns": _string_list(payload.get("required_columns", [])),
+        "required_columns": required_columns,
         "excluded_tables": _string_list(payload.get("excluded_tables", [])),
-        "excluded_columns": _string_list(payload.get("excluded_columns", [])),
+        "excluded_columns": _structured_column_refs(payload.get("excluded_columns", []), allow_strings=True),
         "feedback_history": list(payload.get("feedback_history") or []),
         "status": str(payload.get("status") or "active").strip(),
     }
@@ -301,7 +365,6 @@ def _intent_snapshot(intent: dict[str, Any]) -> dict[str, Any]:
         "intent_id": intent["intent_id"],
         "goal_text": intent["goal_text"],
         "population": intent.get("population"),
-        "requested_fields": list(intent.get("requested_fields") or []),
         "filters": list(intent.get("filters") or []),
         "required_tables": list(intent.get("required_tables") or []),
         "required_columns": list(intent.get("required_columns") or []),
@@ -322,7 +385,6 @@ def _bootstrap_active_intent(rag_state: dict[str, Any], question: str) -> dict[s
         "goal_text": review_question,
         "mode": "extraction",
         "population": None,
-        "requested_fields": [],
         "filters": [],
         "required_tables": [],
         "required_columns": [],

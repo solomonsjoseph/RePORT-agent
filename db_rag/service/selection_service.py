@@ -223,18 +223,19 @@ class DbRagSelectionMixin:
         candidate: ColumnSelectionCandidate,
         intent: DbRagIntent,
     ) -> tuple[bool, str]:
+        constraints = _constraint_set_from_payload(intent)
         selected_tables = set(candidate.tables)
         selected_columns = {f'{entry["table"]}.{entry["column"]}' for entry in candidate.columns}
-        for table in intent.required_tables:
+        for table in constraints.required_tables:
             if table not in selected_tables:
                 return False, f"Missing required table: {table}"
-        for column in intent.required_columns:
+        for column in constraints.required_columns:
             if column not in selected_columns:
                 return False, f"Missing required column: {column}"
-        for table in intent.excluded_tables:
+        for table in constraints.excluded_tables:
             if table in selected_tables:
                 return False, f"Selection includes excluded table: {table}"
-        for column in intent.excluded_columns:
+        for column in constraints.excluded_columns:
             if column in selected_columns:
                 return False, f"Selection includes excluded column: {column}"
         return True, ""
@@ -384,6 +385,8 @@ class DbRagSelectionMixin:
             preview = ", ".join(ranked_ids[:5])
             suffix = "..." if len(ranked_ids) > 5 else ""
             ranking_error = f"Structured ranking returned identifiers outside the candidate list: {preview}{suffix}"
+        if not ranked_ids and not ranking_error:
+            ranking_error = "Structured ranking returned no column identifiers."
 
         if not validated_columns:
             candidate = ColumnSelectionCandidate(

@@ -249,6 +249,31 @@ def _resolve_dataset_selection_reply(
     return artifact, "selected"
 
 
+def _dataset_reference_context(artifact: dict | None, context_text: str) -> str:
+    dataset_id = str((artifact or {}).get("id") or "").strip()
+    if not dataset_id:
+        return context_text
+    reference = (
+        f'Selected analysis dataset ID: {dataset_id}\n'
+        f'Use this dataset in generated code as datasets["{dataset_id}"].'
+    )
+    context_text = str(context_text or "").strip()
+    if f'datasets["{dataset_id}"]' in context_text:
+        return context_text
+    return f"{reference}\n\n{context_text}" if context_text else reference
+
+
+def _assumptions_with_dataset_id(assumptions: str, dataset_id: str | None) -> str:
+    dataset_text = str(dataset_id or "").strip()
+    assumptions_text = str(assumptions or "").strip()
+    if not dataset_text:
+        return assumptions_text
+    dataset_line = f"Dataset used: {dataset_text}."
+    if dataset_line in assumptions_text:
+        return assumptions_text
+    return f"{assumptions_text}\n{dataset_line}" if assumptions_text else dataset_line
+
+
 def generate_code_node(state, llm, context, question_override=None):
     generate_state = get_agent_state(state, "generate_code")
     messages = state.get("messages", [])
@@ -264,6 +289,7 @@ def generate_code_node(state, llm, context, question_override=None):
     resolved_context = context(state) if callable(context) else context
     latest_human = str(question_override or _latest_human_content(messages) or "").strip()
     meta = dict(state.get("meta", {}))
+    selected_dataset_id = ""
     if isinstance(resolved_context, dict) and resolved_context.get("runtime_datasets"):
         selected_artifact, reply_status = _resolve_dataset_selection_reply(state, latest_human)
         if reply_status == "invalid":
@@ -275,6 +301,8 @@ def generate_code_node(state, llm, context, question_override=None):
             )
         if selected_artifact is not None:
             resolved_context = build_dataset_context(selected_artifact)
+            resolved_context = _dataset_reference_context(selected_artifact, resolved_context)
+            selected_dataset_id = str(selected_artifact.get("id") or "").strip()
             meta[MetaKeys.ANALYSIS_DATASET_ID] = selected_artifact["id"]
             meta = _clear_analysis_dataset_meta(meta)
         else:
@@ -291,6 +319,8 @@ def generate_code_node(state, llm, context, question_override=None):
                 )
             if selected_artifact is not None:
                 resolved_context = build_dataset_context(selected_artifact)
+                resolved_context = _dataset_reference_context(selected_artifact, resolved_context)
+                selected_dataset_id = str(selected_artifact.get("id") or "").strip()
                 meta[MetaKeys.ANALYSIS_DATASET_ID] = selected_artifact["id"]
                 meta = _clear_analysis_dataset_meta(meta)
             else:
@@ -340,7 +370,10 @@ def generate_code_node(state, llm, context, question_override=None):
     output["generated_code"] = code
     output["qa_response"] = payload["summary"]
     output["code_summary"] = payload["summary"]
-    output["code_assumptions"] = payload["assumptions"]
+    output["code_assumptions"] = _assumptions_with_dataset_id(
+        payload["assumptions"],
+        selected_dataset_id or meta.get(MetaKeys.ANALYSIS_DATASET_ID),
+    )
 
     human_review_state = dict(state.get("agents", {}).get("human_review", {}))
     human_review_state["before_run_decision"] = None

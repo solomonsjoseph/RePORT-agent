@@ -5,7 +5,7 @@ from .state_helpers import clear_clarification_meta, update_agent_state
 from .code_guardrails import code_fingerprint, is_executable_python
 from ..state import MetaKeys
 from ..workflow_config import ERROR_HANDLER_RECENT_TURNS
-from utils.dataset_artifacts import build_dataset_context, get_active_dataset_artifact
+from utils.dataset_artifacts import build_dataset_context, get_analysis_dataset_artifact
 
 NODE_NAME = "error_handler"
 NODE_CAPABILITY = (
@@ -28,7 +28,7 @@ def error_handler_node(state, llm, context):
     meta["error_iterations"] = error_iterations + 1
 
     if isinstance(context, dict) and context.get("runtime_datasets"):
-        context = build_dataset_context(get_active_dataset_artifact(state))
+        context = build_dataset_context(get_analysis_dataset_artifact(state))
     elif callable(context):
         context = context(state)
 

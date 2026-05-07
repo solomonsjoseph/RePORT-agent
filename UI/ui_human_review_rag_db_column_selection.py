@@ -54,7 +54,7 @@ def ui_human_review_rag_db_column_selection(app, config, payload, interrupt_id, 
     selection_id = str(payload.get("selection_id") or "").strip()
     selection_source = str(payload.get("selection_source") or "").strip()
     fallback_reason = str(payload.get("fallback_reason") or "").strip()
-    tables = list(payload.get("tables") or [])
+    raw_model_output = str(payload.get("raw_model_output") or "").strip()
     columns = list(payload.get("columns") or [])
     feedback_history = list(payload.get("feedback_history") or [])
 
@@ -73,11 +73,9 @@ def ui_human_review_rag_db_column_selection(app, config, payload, interrupt_id, 
         fallback_notice = _fallback_notice(rationale, fallback_reason)
         if fallback_notice:
             st.info(fallback_notice)
-
-    if tables:
-        st.markdown("**Selected tables**")
-        for table in tables:
-            st.write(f"- {table}")
+        if raw_model_output:
+            with st.expander("Structured ranking raw output", expanded=False):
+                st.code(raw_model_output, language="json")
 
     if columns:
         st.markdown("**Selected columns**")

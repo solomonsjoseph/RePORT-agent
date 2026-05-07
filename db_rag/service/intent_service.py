@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 from typing import Any
 
@@ -16,6 +17,99 @@ from ..generation import (
     default_selection_id,
     parse_json_object,
 )
+
+
+def _coerce_mapping(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return {}
+        try:
+            parsed = ast.literal_eval(text)
+        except (SyntaxError, ValueError):
+            return {}
+        return dict(parsed) if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _structured_column_refs(values: Any) -> list[Any]:
+    result: list[Any] = []
+    for value in list(values or []):
+        entry = _coerce_mapping(value)
+        if entry:
+            table = str(entry.get("table") or "").strip()
+            column = str(entry.get("column") or entry.get("field") or "").strip()
+            if not table or not column:
+                continue
+            normalized: dict[str, Any] = {"table": table, "column": column}
+            semantic = str(entry.get("semantic") or "").strip()
+            if semantic:
+                normalized["semantic"] = semantic
+            if normalized not in result:
+                result.append(normalized)
+            continue
+        text = str(value or "").strip()
+        if "." in text and text not in result:
+            result.append(text)
+    return result
+
+
+def _structured_filter_refs(values: Any) -> list[Any]:
+    result: list[Any] = []
+    for value in list(values or []):
+        entry = _coerce_mapping(value)
+        if entry:
+            table = str(entry.get("table") or "").strip()
+            column = str(entry.get("column") or entry.get("field") or "").strip()
+            if not table or not column:
+                continue
+            normalized: dict[str, Any] = {"table": table, "column": column}
+            for key in ("operator", "value", "semantic"):
+                if key in entry and str(entry.get(key) or "").strip():
+                    normalized[key] = str(entry.get(key) or "").strip()
+            if normalized not in result:
+                result.append(normalized)
+            continue
+        text = str(value or "").strip()
+        if text and text not in result:
+            result.append(text)
+    return result
+
+
+def _qualified_columns(values: Any) -> list[str]:
+    result: list[str] = []
+    for value in list(values or []):
+        entry = _coerce_mapping(value)
+        if entry:
+            table = str(entry.get("table") or "").strip()
+            column = str(entry.get("column") or entry.get("field") or "").strip()
+            qualified = f"{table}.{column}" if table and column else ""
+        else:
+            qualified = str(value or "").strip()
+        if qualified and qualified not in result:
+            result.append(qualified)
+    return result
+
+
+def _intent_from_payload(payload: dict[str, Any]) -> DbRagIntent:
+    return DbRagIntent(
+        intent_id=str(payload.get("intent_id") or "").strip(),
+        source_question=str(payload.get("source_question") or "").strip(),
+        goal_text=str(payload.get("goal_text") or "").strip(),
+        mode=str(payload.get("mode") or "").strip(),
+        population=str(payload.get("population") or "").strip() or None,
+        required_columns=_structured_column_refs(
+            payload.get("required_columns") or payload.get("requested_fields") or []
+        ),
+        filters=_structured_filter_refs(payload.get("filters") or []),
+        required_tables=[str(value or "").strip() for value in list(payload.get("required_tables") or []) if str(value or "").strip()],
+        excluded_tables=[str(value or "").strip() for value in list(payload.get("excluded_tables") or []) if str(value or "").strip()],
+        excluded_columns=_structured_column_refs(payload.get("excluded_columns") or []),
+        feedback_history=list(payload.get("feedback_history") or []),
+        status=str(payload.get("status") or "active").strip(),
+    )
 
 
 class DbRagIntentMixin:
@@ -175,7 +269,10 @@ class DbRagIntentMixin:
                     SystemMessage(
                         content=(
                             "You are normalizing a RePORT DB-RAG request into a structured intent. "
-                            "Return only JSON with keys intent_id, goal_text, mode, population, requested_fields, filters."
+                            "Return only JSON with keys intent_id, goal_text, mode, population, required_columns, filters. "
+                            "Use required_columns for exact table/column fields the user wants included. "
+                            "Each required_columns item must be an object with table, column, and optional semantic. "
+                            "Each filters item must be an object with table, column, operator, and value when known."
                         )
                     ),
                     HumanMessage(
@@ -195,8 +292,8 @@ class DbRagIntentMixin:
             goal_text=str(parsed.get("goal_text") or question).strip(),
             mode=str(parsed.get("mode") or "metadata").strip(),
             population=str(parsed.get("population") or "").strip() or None,
-            requested_fields=[str(value).strip() for value in list(parsed.get("requested_fields") or []) if str(value).strip()],
-            filters=[str(value).strip() for value in list(parsed.get("filters") or []) if str(value).strip()],
+            required_columns=_structured_column_refs(parsed.get("required_columns") or parsed.get("requested_fields") or []),
+            filters=_structured_filter_refs(parsed.get("filters") or []),
         )
 
     def update_intent_from_feedback(
@@ -206,7 +303,7 @@ class DbRagIntentMixin:
     ) -> DbRagIntent:
         from langchain_core.messages import HumanMessage, SystemMessage
 
-        base = intent if isinstance(intent, DbRagIntent) else DbRagIntent(**intent)
+        base = intent if isinstance(intent, DbRagIntent) else _intent_from_payload(intent)
         response = self.llm.invoke(
             [
                 SystemMessage(
@@ -239,7 +336,7 @@ class DbRagIntentMixin:
             if table_name and table_name in schema_tables and table_name not in required_tables:
                 required_tables.append(table_name)
 
-        for item in [*list(base.required_columns), *list(parsed.get("required_columns") or [])]:
+        for item in [*_qualified_columns(base.required_columns), *_qualified_columns(parsed.get("required_columns") or [])]:
             value = str(item or "").strip()
             if "." not in value:
                 continue
@@ -255,7 +352,7 @@ class DbRagIntentMixin:
             if table_name and table_name in schema_tables and table_name not in excluded_tables:
                 excluded_tables.append(table_name)
 
-        for item in [*list(base.excluded_columns), *list(parsed.get("excluded_columns") or [])]:
+        for item in [*_qualified_columns(base.excluded_columns), *_qualified_columns(parsed.get("excluded_columns") or [])]:
             value = str(item or "").strip()
             if "." not in value:
                 continue
@@ -276,12 +373,11 @@ class DbRagIntentMixin:
             goal_text=goal_text,
             mode=base.mode,
             population=base.population,
-            requested_fields=list(base.requested_fields),
             filters=list(base.filters),
             required_tables=required_tables,
-            required_columns=required_columns,
+            required_columns=_structured_column_refs(required_columns),
             excluded_tables=excluded_tables,
-            excluded_columns=excluded_columns,
+            excluded_columns=_structured_column_refs(excluded_columns),
             feedback_history=list(feedback_history),
             status=base.status,
         )

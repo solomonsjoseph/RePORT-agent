@@ -5,7 +5,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from UI import ui_human_review_rag_db_column_selection as review_ui
+from UI import ui_human_review_rag_db_sql_execution as review_ui
 
 
 class _FakeColumn:
@@ -31,7 +31,8 @@ class _FakeStreamlit:
     def write(self, value):
         self.rendered.append(str(value))
 
-    def info(self, value):
+    def code(self, value, language=None):
+        del language
         self.rendered.append(str(value))
 
     def text_area(self, *args, **kwargs):
@@ -42,45 +43,22 @@ class _FakeStreamlit:
         return [_FakeColumn() for _ in range(count)]
 
 
-def test_retrieval_fallback_message_is_not_rendered_twice(monkeypatch) -> None:
-    fake_st = _FakeStreamlit()
-    monkeypatch.setattr(review_ui, "st", fake_st)
-    fallback_message = (
-        "Structured ranking output was unavailable. Showing retrieved candidate tables and columns directly for human review."
-    )
-
-    review_ui.ui_human_review_rag_db_column_selection(
-        app=None,
-        config={},
-        payload={
-            "rationale": fallback_message,
-            "selection_source": "retrieval_fallback",
-            "fallback_reason": fallback_message,
-            "tables": ["Form 2A"],
-            "columns": [{"table": "Form 2A", "column": "IC_AGE"}],
-        },
-        interrupt_id="interrupt-1",
-        queue_resume=lambda *_args, **_kwargs: None,
-    )
-
-    assert fake_st.rendered.count(fallback_message) == 1
-
-
-def test_column_selection_review_omits_selected_tables_section(monkeypatch) -> None:
+def test_sql_execution_review_omits_approved_tables_section(monkeypatch) -> None:
     fake_st = _FakeStreamlit()
     monkeypatch.setattr(review_ui, "st", fake_st)
 
-    review_ui.ui_human_review_rag_db_column_selection(
+    review_ui.ui_human_review_rag_db_sql_execution(
         app=None,
         config={},
         payload={
             "tables": ["Form 2A"],
             "columns": [{"table": "Form 2A", "column": "IC_AGE"}],
+            "sql": 'select "IC_AGE" from "Form 2A"',
         },
         interrupt_id="interrupt-1",
         queue_resume=lambda *_args, **_kwargs: None,
     )
 
-    assert "**Selected tables**" not in fake_st.rendered
+    assert "**Approved tables**" not in fake_st.rendered
     assert "- Form 2A" not in fake_st.rendered
     assert "- `Form 2A.IC_AGE`" in fake_st.rendered
