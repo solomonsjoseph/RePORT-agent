@@ -37,7 +37,9 @@ from .state_logic import (
     derive_planner_memory,
 )
 from .workflow_status import derive_workflow_status
-from ..state_helpers import clear_clarification_meta
+
+
+__all__ = ["orchestrator_node", "resolve_reference_for_turn"]
 
 
 _RESOLVED_TASK_META_KEYS = (
@@ -405,6 +407,24 @@ def _ready_deterministic_action(
     return None
 
 
+def _ready_rag_db_sql_generation_resume(
+    state: AgentState,
+    available_action_set: set[str],
+) -> str | None:
+    if "rag_db_qa" not in available_action_set:
+        return None
+    rag_state = dict((state.get("agents") or {}).get("rag_db_qa") or {})
+    approved_selection_id = str(
+        rag_state.get("approved_column_selection_artifact_id") or ""
+    ).strip()
+    if (
+        approved_selection_id
+        and rag_state.get("thread_status") == "awaiting_sql_generation"
+    ):
+        return "rag_db_qa"
+    return None
+
+
 def _resumed_from(state: AgentState, node_name: str) -> bool:
     if state.get("last_action") == node_name:
         return True
@@ -599,6 +619,7 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
     routing_state = _refresh_planner_memory(routing_state)
     routing_state = _store_workflow_status(routing_state)
     routing_state = update_recurrence_state(routing_state)
+    meta = dict(routing_state.get("meta") or {})
 
     if not next_action and _should_end_for_completion(routing_state):
         next_action = "end"
@@ -626,6 +647,12 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
             routing_state,
             available_action_list,
             fresh_unanswered_user_turn=fresh_unanswered_user_turn,
+        )
+
+    if not next_action:
+        next_action = _ready_rag_db_sql_generation_resume(
+            routing_state,
+            available_action_set,
         )
 
     if not next_action:

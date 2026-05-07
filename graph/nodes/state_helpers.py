@@ -28,18 +28,6 @@ def update_agent_state(state: dict, agent_name: str, updates: dict[str, Any]) ->
     }
 
 
-def enqueue_tool_requester(state: dict, agent_name: str) -> dict[str, Any]:
-    meta = dict(state.get("meta", {}))
-    queue = list(meta.get("tool_request_queue", []))
-    if agent_name not in queue:
-        queue.append(agent_name)
-    meta["tool_request_queue"] = queue
-    return {
-        **state,
-        "meta": meta,
-    }
-
-
 def clear_clarification_meta(meta: dict[str, Any] | None) -> dict[str, Any]:
     updated = dict(meta or {})
     updated.pop(MetaKeys.AWAITING_USER_CLARIFICATION, None)

@@ -7,8 +7,8 @@ from uuid import uuid4
 
 from .conversation_schema import (
     ConversationArtifactInput,
+    ConversationArtifactRecord,
     ConversationArtifacts,
-    ConversationEvent,
     ConversationEventInput,
     ConversationMeta,
     JsonObject,

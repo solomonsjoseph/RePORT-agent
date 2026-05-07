@@ -48,8 +48,6 @@ def conversation_render_state(
     history: list[Any],
     *,
     run_status: Mapping[str, Any] | None,
-    qa_ready: bool,
-    analysis_ready: bool,
     has_review_interrupt: bool,
 ) -> ConversationRenderState:
     compact_running = should_render_compact_running_view(
@@ -65,12 +63,6 @@ def conversation_render_state(
     elif state == "running":
         status_level = "info"
         status_text = "⏳ Working in background..."
-    elif analysis_ready:
-        status_level = "success"
-        status_text = "Analysis completed"
-    elif qa_ready:
-        status_level = "success"
-        status_text = "Response ready"
     return ConversationRenderState(
         messages=tuple(history),
         status_level=status_level,
@@ -110,6 +102,9 @@ def conversation_history_with_pending_user(
     messages = list(history)
     if pending_user_message is None:
         return messages
+    pending_text = str(getattr(pending_user_message, "content", "") or "").strip()
+    if pending_user_text_caught_up(messages, pending_text):
+        return messages
     messages = [
         msg
         for msg in messages
@@ -117,6 +112,17 @@ def conversation_history_with_pending_user(
     ]
     messages.append(pending_user_message)
     return messages
+
+
+def pending_user_text_caught_up(history: list[Any], pending_text: str | None) -> bool:
+    normalized_pending = str(pending_text or "").strip()
+    if not normalized_pending:
+        return True
+    return any(
+        getattr(msg, "type", None) == "human"
+        and str(getattr(msg, "content", "") or "").strip() == normalized_pending
+        for msg in history
+    )
 
 
 def canonicalize_conversation_history(

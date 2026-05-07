@@ -25,6 +25,7 @@ from .helpers import (
     _format_column_review_response,
     _format_sql_candidate_response,
     _intent_snapshot,
+    _normalize_population_scope,
     _question_from_stale_qa_followup,
     _read_value,
     _render_db_rag_recent_turns,
@@ -37,6 +38,7 @@ from .helpers import (
     _store_column_selection_artifact,
     _store_sql_candidate_artifact,
     _store_sql_candidate_output,
+    _with_population_scope_warning,
 )
 
 _EXPLICIT_EXTRACTION_CUES = (
@@ -119,6 +121,30 @@ def _is_explicit_extraction_question(question: str) -> bool:
     if not normalized:
         return False
     return any(cue in normalized for cue in _EXPLICIT_EXTRACTION_CUES)
+
+
+def _classify_population_scope_for_question(
+    service,
+    *,
+    question: str,
+    context: Any,
+    active_intent: dict[str, Any] | None = None,
+    intent_snapshot: dict[str, Any] | None = None,
+    referenced_artifacts: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if not hasattr(service, "classify_population_scope"):
+        return _normalize_population_scope({})
+    try:
+        result = service.classify_population_scope(
+            question=question,
+            context=context,
+            active_intent=active_intent,
+            intent_snapshot=intent_snapshot,
+            referenced_artifacts=referenced_artifacts,
+        )
+    except Exception:
+        return _normalize_population_scope({})
+    return _normalize_population_scope(result)
 
 
 def _resolve_intent_for_question(
@@ -401,6 +427,7 @@ def _start_column_review(
     feedback_history: list[dict[str, Any]] | None = None,
     previous_selection: dict[str, Any] | None = None,
     revised: bool,
+    population_scope: dict[str, Any] | None = None,
 ) -> AgentState:
     selection_goal_text = str(intent.get("goal_text") or question).strip() or question
     selection = service.prepare_column_selection(
@@ -414,6 +441,9 @@ def _start_column_review(
     selection_payload["question"] = selection_goal_text
     selection_payload["feedback_history"] = list(selection_payload.get("feedback_history") or feedback_history or [])
     selection_payload["status"] = "awaiting_review"
+    selection_payload["population_scope"] = _normalize_population_scope(
+        population_scope or rag_state.get("population_scope") or {}
+    )
 
     updated, artifact_id = _store_column_selection_artifact(
         state,
@@ -436,6 +466,7 @@ def _start_column_review(
     updated["meta"] = clear_clarification_meta(updated.get("meta") or {})
 
     rag_state["active_intent"] = intent
+    rag_state["population_scope"] = selection_payload["population_scope"]
     rag_state["pending_extraction_opt_in"] = None
     rag_state["pending_column_review_artifact_id"] = artifact_id
     rag_state["approved_column_selection_artifact_id"] = None
@@ -504,6 +535,9 @@ def _start_sql_review(
     candidate_payload = _serialize_prepared_sql_candidate(prepared_candidate)
     candidate_payload["question"] = approved_question
     candidate_payload["status"] = "prepared"
+    candidate_payload["population_scope"] = _normalize_population_scope(
+        selection_payload.get("population_scope") or rag_state.get("population_scope") or {}
+    )
 
     intent = _serialize_intent(rag_state.get("active_intent") or {})
     updated, candidate_artifact_id = _store_sql_candidate_artifact(
@@ -513,6 +547,7 @@ def _start_sql_review(
         source_question=str(selection_payload.get("source_question") or approved_question),
         goal_text=str(selection_payload.get("goal_text") or approved_question),
         intent_snapshot=selection_payload.get("intent_snapshot") or _intent_snapshot(intent),
+        population_scope=candidate_payload["population_scope"],
     )
     updated = _append_ai_response(updated, _format_sql_candidate_response(candidate_payload))
     updated = _store_sql_candidate_output(updated, candidate_payload)
@@ -1096,12 +1131,20 @@ def _handle_fresh_db_rag_question(
         prior_intent=dict(rag_state.get("active_intent") or {}),
         force_extraction=explicit_extraction,
     )
+    population_scope = _classify_population_scope_for_question(
+        service,
+        question=question,
+        context=context,
+        active_intent=intent,
+        intent_snapshot=_intent_snapshot(intent),
+    )
     rag_state = _reset_active_workflow_for_new_question(
         rag_state,
         question=question,
         intent=intent,
         context_summary=context_summary,
     )
+    rag_state["population_scope"] = population_scope
 
     if explicit_extraction:
         return _start_column_review(
@@ -1112,6 +1155,7 @@ def _handle_fresh_db_rag_question(
             intent=intent,
             context=context,
             revised=False,
+            population_scope=population_scope,
         )
 
     answer = service.answer_from_context(question, context)
@@ -1121,9 +1165,10 @@ def _handle_fresh_db_rag_question(
     response_text = answer_text if prompt.lower() in answer_text.lower() else (
         f"{answer_text}\n\n{prompt}" if answer_text else prompt
     )
+    response_text = _with_population_scope_warning(response_text, population_scope, target="metadata")
 
     updated = _append_ai_response(state, response_text)
-    updated = _append_assistant_event(updated, answer_text or response_text)
+    updated = _append_assistant_event(updated, response_text)
     updated = _append_clarification_event(updated, prompt)
     updated = _clear_output_error(updated)
     updated["meta"] = set_clarification_meta(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 from typing import Any
 
 from utils.performance import timing_stage
@@ -48,17 +49,15 @@ class DbRagRetrievalMixin:
                 ),
             }
 
-        try:
-            import chromadb  # noqa: F401
-            import duckdb  # noqa: F401
-        except ModuleNotFoundError as exc:
-            return {
-                "ready": False,
-                "message": (
-                    f"DB-RAG dependency '{exc.name}' is not installed. Install the project requirements and run "
-                    "`python -m db_rag.build_index --rebuild`."
-                ),
-            }
+        for dependency in ("chromadb", "duckdb"):
+            if importlib.util.find_spec(dependency) is None:
+                return {
+                    "ready": False,
+                    "message": (
+                        f"DB-RAG dependency '{dependency}' is not installed. Install the project requirements and run "
+                        "`python -m db_rag.build_index --rebuild`."
+                    ),
+                }
 
         return {"ready": True, "message": ""}
 

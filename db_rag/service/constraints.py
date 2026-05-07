@@ -3,8 +3,6 @@ from __future__ import annotations
 import ast
 from typing import Any
 
-from db_rag.generation import DB_RAG_CONTEXT_FALLBACK_RATIONALE, default_selection_id
-
 from .models import ColumnSelectionCandidate, DbRagContext, DbRagIntent, FeedbackConstraintSet
 from .runtime_schema import duckdb_runtime_column_exists
 from .schema import _lookup_schema_column
@@ -285,24 +283,3 @@ def _normalize_previous_selection(previous_selection: Any) -> dict[str, Any]:
         "feedback_history": [],
         "status": "",
     }
-
-
-def _build_invalid_column_selection_candidate(
-    question: str,
-    context: DbRagContext,
-    feedback_history: list[dict[str, Any]],
-) -> ColumnSelectionCandidate:
-    columns = [{"table": entry.table, "column": entry.column} for entry in context.columns]
-    return ColumnSelectionCandidate(
-        selection_id=default_selection_id(question, context.table_names, columns, feedback_history),
-        question=question,
-        tables=[],
-        columns=[],
-        rationale=DB_RAG_CONTEXT_FALLBACK_RATIONALE,
-        feedback_history=feedback_history,
-    )
-
-
-def _default_selection_id(question: str, context: DbRagContext, feedback_history: list[dict[str, Any]]) -> str:
-    columns = [{"table": entry.table, "column": entry.column} for entry in context.columns]
-    return default_selection_id(question, context.table_names, columns, feedback_history)

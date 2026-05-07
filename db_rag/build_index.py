@@ -19,7 +19,7 @@ from .config import (
     env_path_for_project,
     manifest_path_for_model,
 )
-from .data_loader import build_duckdb, load_excel_data, profile_column, source_fingerprint
+from .data_loader import build_duckdb, load_excel_data, source_fingerprint
 from .vectorstore import build_chroma, write_manifest
 
 

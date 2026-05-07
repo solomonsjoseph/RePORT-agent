@@ -76,41 +76,67 @@ _EXTRACTION_OPT_IN_PROMPT = (
     "Would you like me to identify the tables and columns needed for a data extraction "
     "from this database question?"
 )
+_POPULATION_SCOPE_LABELS = {"specified", "ambiguous", "not_population_scoped", "unknown"}
+_POPULATION_SCOPE_POPULATIONS = {"index_case", "household_contact", "both"}
+_POPULATION_SCOPE_COLUMN_WARNING = (
+    "Warning: This database contains both index cases and household contacts. "
+    "Your question did not specify which population to use, so please verify that the selected columns "
+    "match your intended population."
+)
+_POPULATION_SCOPE_METADATA_WARNING = (
+    "Warning: This database contains both index cases and household contacts. "
+    "Your question did not specify which population to use, so please verify that the answer "
+    "matches your intended population."
+)
 
 
-def _looks_like_substantive_db_followup(text: str) -> bool:
-    normalized = " ".join(str(text or "").strip().lower().split())
-    if not normalized:
-        return False
-
-    tokens = normalized.split()
-    if len(tokens) <= 2 and normalized in {"maybe", "not sure", "unsure"}:
-        return False
-
-    if re.search(r"\b[A-Z]{2,}_[A-Z0-9_]+\b", str(text or "")):
-        return True
-
-    db_cues = {
-        "form",
-        "variable",
-        "column",
-        "table",
-        "field",
-        "subset",
-        "cohort",
-        "index",
-        "outcome",
-        "join",
-        "filter",
-    }
-    if any(token in db_cues for token in tokens):
-        return True
-
-    return len(tokens) >= 6
 def _read_value(payload: Any, field: str, default: Any = None) -> Any:
     if isinstance(payload, dict):
         return payload.get(field, default)
     return getattr(payload, field, default)
+
+
+def _normalize_population_scope(value: Any) -> dict[str, Any]:
+    raw = dict(value) if isinstance(value, dict) else {}
+    label = str(raw.get("label") or "").strip().lower()
+    if label not in _POPULATION_SCOPE_LABELS:
+        label = "unknown"
+    population = str(raw.get("population") or "").strip().lower() or None
+    if population not in _POPULATION_SCOPE_POPULATIONS:
+        population = None
+    try:
+        confidence = float(raw.get("confidence", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        confidence = 0.0
+    confidence = max(0.0, min(1.0, confidence))
+    reason = str(raw.get("reason") or "").strip()
+    warning = str(raw.get("warning") or "").strip()
+    return {
+        "label": label,
+        "population": population,
+        "warning": warning,
+        "confidence": confidence,
+        "reason": reason,
+    }
+
+
+def _population_scope_warning(scope: Any, *, target: str) -> str:
+    normalized = _normalize_population_scope(scope)
+    if normalized.get("label") != "ambiguous":
+        return ""
+    if target == "metadata":
+        return _POPULATION_SCOPE_METADATA_WARNING
+    return _POPULATION_SCOPE_COLUMN_WARNING
+
+
+def _with_population_scope_warning(text: str, scope: Any, *, target: str) -> str:
+    warning = _population_scope_warning(scope, target=target)
+    body = str(text or "").strip()
+    if not warning:
+        return body
+    if body.startswith(warning):
+        return body
+    return f"{warning}\n\n{body}" if body else warning
 
 
 def _string_list(values: Any) -> list[str]:
@@ -268,6 +294,7 @@ def _serialize_column_selection(selection: Any) -> dict[str, Any]:
         "selection_source": str(_read_value(selection, "selection_source", "legacy") or "legacy").strip(),
         "fallback_reason": str(_read_value(selection, "fallback_reason", "") or "").strip(),
         "raw_model_output": str(_read_value(selection, "raw_model_output", "") or "").strip(),
+        "population_scope": _normalize_population_scope(_read_value(selection, "population_scope", {})),
     }
 
 
@@ -283,6 +310,7 @@ def _deserialize_column_selection(payload: dict[str, Any]) -> SimpleNamespace:
         selection_source=str(payload.get("selection_source") or "legacy").strip(),
         fallback_reason=str(payload.get("fallback_reason") or "").strip(),
         raw_model_output=str(payload.get("raw_model_output") or "").strip(),
+        population_scope=_normalize_population_scope(payload.get("population_scope") or {}),
     )
 
 
@@ -294,6 +322,7 @@ def _serialize_prepared_sql_candidate(candidate: Any) -> dict[str, Any]:
         "columns": _serialize_columns(_read_value(candidate, "columns", [])),
         "selection_id": str(_read_value(candidate, "selection_id", "") or "").strip(),
         "status": str(_read_value(candidate, "status", "prepared") or "prepared").strip(),
+        "population_scope": _normalize_population_scope(_read_value(candidate, "population_scope", {})),
     }
 
 
@@ -305,6 +334,7 @@ def _deserialize_prepared_sql_candidate(payload: dict[str, Any]) -> SimpleNamesp
         columns=_serialize_columns(payload.get("columns", [])),
         selection_id=str(payload.get("selection_id") or "").strip(),
         status=str(payload.get("status") or "prepared").strip(),
+        population_scope=_normalize_population_scope(payload.get("population_scope") or {}),
     )
 
 
@@ -691,21 +721,6 @@ def _append_clarification_event(state: AgentState, text: str) -> AgentState:
     )
 
 
-def _store_sql_artifact(state: AgentState, sql: str, summary: str) -> tuple[AgentState, str]:
-    updated_state = store_thread_artifact(
-        state,
-        {
-            "kind": "sql",
-            "producer": "rag_db_qa",
-            "mime": "text/sql",
-            "summary": summary,
-            "content": sql,
-        },
-    )
-    artifact_id = next(reversed(dict(updated_state.get("artifacts") or {}).get("files") or {}))
-    return updated_state, artifact_id
-
-
 def _store_column_selection_artifact(
     state: AgentState,
     *,
@@ -739,6 +754,7 @@ def _store_column_selection_artifact(
                 "selection_source": selection.get("selection_source", "legacy"),
                 "fallback_reason": selection.get("fallback_reason", ""),
                 "raw_model_output": selection.get("raw_model_output", ""),
+                "population_scope": _normalize_population_scope(selection.get("population_scope") or {}),
             },
         },
     )
@@ -754,6 +770,7 @@ def _store_sql_candidate_artifact(
     source_question: str,
     goal_text: str,
     intent_snapshot: dict[str, Any],
+    population_scope: dict[str, Any] | None = None,
 ) -> tuple[AgentState, str]:
     updated_state = store_thread_artifact(
         state,
@@ -772,6 +789,9 @@ def _store_sql_candidate_artifact(
                 "columns": list(candidate["columns"]),
                 "sql": candidate["sql"],
                 "status": candidate.get("status", "prepared"),
+                "population_scope": _normalize_population_scope(
+                    population_scope or candidate.get("population_scope") or {}
+                ),
             },
         },
     )
@@ -940,6 +960,11 @@ def _execute_prepared_sql_candidate(
         f'SQL used:\n{_format_sql_block(str(_read_value(execution_result, "sql", "") or ""))}\n\n'
         f'Saved dataset id: {artifact["id"]}'
     )
+    response_text = _with_population_scope_warning(
+        response_text,
+        sql_candidate_artifact.get("population_scope") or approved_selection.get("population_scope") or {},
+        target="columns",
+    )
     updated = _append_ai_response(persisted_state, response_text)
     updated = _append_assistant_event(updated, response_text)
     updated = _store_sql_candidate_output(updated, _serialize_prepared_sql_candidate(candidate))
@@ -1023,16 +1048,24 @@ def _format_sql_block(sql: str) -> str:
 
 def _format_column_review_response(answer_text: str, selection: dict[str, Any], *, revised: bool = False) -> str:
     if revised:
-        return "I refreshed the DB-RAG column selection based on your feedback.\n\nPlease review the updated selection in the panel below."
+        return _with_population_scope_warning(
+            "I refreshed the DB-RAG column selection based on your feedback.\n\nPlease review the updated selection in the panel below.",
+            selection.get("population_scope") or {},
+            target="columns",
+        )
     if answer_text:
-        return f"{answer_text}\n\nPlease review the proposed column selection in the panel below."
-    return "Please review the proposed DB-RAG column selection in the panel below."
+        text = f"{answer_text}\n\nPlease review the proposed column selection in the panel below."
+    else:
+        text = "Please review the proposed DB-RAG column selection in the panel below."
+    return _with_population_scope_warning(text, selection.get("population_scope") or {}, target="columns")
 
 
 def _format_sql_candidate_response(candidate: dict[str, Any]) -> str:
-    return (
+    return _with_population_scope_warning(
         "I prepared a read-only SQL candidate from the approved DB-RAG selection.\n\n"
-        "Please review the SQL details in the panel below before execution."
+        "Please review the SQL details in the panel below before execution.",
+        candidate.get("population_scope") or {},
+        target="columns",
     )
 
 
@@ -1045,21 +1078,6 @@ def _classify_opt_in_reply(text: str) -> str:
     if normalized in _NEGATIVE_REPLIES:
         return "no"
     return "unknown"
-
-
-def _is_bare_acknowledgement(text: str) -> bool:
-    return _classify_opt_in_reply(text) in {"yes", "no"}
-
-
-def _is_non_informative_followup(text: str) -> bool:
-    normalized = " ".join(str(text or "").strip().lower().split())
-    if not normalized:
-        return True
-    if normalized in _NON_INFORMATIVE_FOLLOWUPS:
-        return True
-    if _classify_opt_in_reply(normalized) in {"yes", "no"}:
-        return True
-    return False
 
 
 def _render_db_rag_recent_turns(state: AgentState, question: str) -> str:

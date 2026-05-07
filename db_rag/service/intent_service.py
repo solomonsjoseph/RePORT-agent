@@ -159,6 +159,25 @@ class DbRagIntentMixin:
             resolve_model=resolve_db_rag_reply_classifier_model,
         )
 
+    def classify_population_scope(
+        self,
+        *,
+        question: str,
+        context: DbRagContext,
+        active_intent: dict[str, Any] | None = None,
+        intent_snapshot: dict[str, Any] | None = None,
+        referenced_artifacts: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return classifier.classify_population_scope(
+            question=question,
+            table_context=context.table_context,
+            column_context=context.column_context,
+            active_intent=active_intent,
+            intent_snapshot=intent_snapshot,
+            referenced_artifacts=referenced_artifacts,
+            resolve_model=resolve_db_rag_reply_classifier_model,
+        )
+
     def build_recoverable_error_clarification(
         self,
         *,

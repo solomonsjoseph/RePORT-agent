@@ -59,7 +59,6 @@ from utils.streamlit_config import (
 )
 from utils.run_manager import GraphRunManager
 from utils.export_thread import build_thread_export
-from utils.message_window import compact_messages
 from utils.display_history import build_display_history, serialize_display_history
 from graph.conversation_events import ensure_conversation_state
 from graph.state_views import get_conversation_events
@@ -75,6 +74,7 @@ from utils.streamlit_rendering import (
     conversation_controls_state,
     conversation_history_with_pending_user,
     normalize_submitted_question,
+    pending_user_text_caught_up,
 )
 from utils.dataset_artifacts import (
     build_active_dataset_artifacts_patch,
@@ -552,7 +552,10 @@ def render_interactive_area() -> None:
 
     if state:
         st.session_state.chat_history = build_display_history(state)
-        if any(isinstance(msg, HumanMessage) for msg in st.session_state.chat_history):
+        if pending_user_text_caught_up(
+            st.session_state.chat_history,
+            optimistic_pending_user_text,
+        ):
             st.session_state.pop("optimistic_pending_user_text", None)
     st.session_state.chat_history = conversation_history_with_pending_user(
         st.session_state.chat_history,
@@ -574,17 +577,6 @@ def render_interactive_area() -> None:
         model_name=model_name,
         state={**state, "output": output} if state else {"output": output, "messages": st.session_state.chat_history},
     )
-    executor_ok = state.get("agents", {}).get("executor", {}).get("run_status") == "ok" if state else False
-    meta = state.get("meta", {}) if state else {}
-    current_code_hash = meta.get("current_code_hash")
-    final_approved_code_hash = meta.get("final_approved_code_hash")
-    final_approved = bool(
-        current_code_hash
-        and final_approved_code_hash
-        and current_code_hash == final_approved_code_hash
-    ) if state else False
-    qa_ready = bool(output.get("qa_response"))
-    analysis_ready = executor_ok and final_approved
     display_history = list(st.session_state.chat_history)
 
     interrupt_event = snapshot.interrupts[0] if snapshot and snapshot.interrupts else None
@@ -648,8 +640,6 @@ def render_interactive_area() -> None:
     render_state = conversation_render_state(
         display_history,
         run_status=run_status,
-        qa_ready=qa_ready,
-        analysis_ready=analysis_ready,
         has_review_interrupt=should_render_interrupt,
     )
     render_compact_running_view = render_state.hide_secondary_sections
@@ -673,8 +663,6 @@ def render_interactive_area() -> None:
 
     if render_state.status_level == "info":
         st.info(render_state.status_text)
-    elif render_state.status_level == "success":
-        st.success(render_state.status_text)
     elif render_state.status_level == "error":
         st.error(render_state.status_text)
 

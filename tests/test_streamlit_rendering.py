@@ -5,6 +5,7 @@ from utils.streamlit_rendering import (
     conversation_controls_state,
     conversation_history_with_pending_user,
     normalize_submitted_question,
+    pending_user_text_caught_up,
     should_render_compact_running_view,
 )
 
@@ -90,6 +91,24 @@ def test_conversation_history_with_pending_user_preserves_existing_messages() ->
     assert history == [existing, pending]
 
 
+def test_conversation_history_with_pending_user_does_not_duplicate_matching_message() -> None:
+    persisted = Message("next question", "human")
+    pending = Message("next question", "human")
+
+    history = conversation_history_with_pending_user(
+        [persisted],
+        pending,
+        welcome_message="Hello! Ask me anything ...",
+    )
+
+    assert history == [persisted]
+
+
+def test_pending_user_text_caught_up_requires_matching_human_message() -> None:
+    assert pending_user_text_caught_up([Message("older question", "human")], "new question") is False
+    assert pending_user_text_caught_up([Message("new question", "human")], "new question") is True
+
+
 def test_canonicalize_conversation_history_drops_welcome_after_human_turn() -> None:
     history = canonicalize_conversation_history(
         [
@@ -134,8 +153,6 @@ def test_conversation_render_state_preserves_full_history_while_running() -> Non
     render_state = conversation_render_state(
         history,
         run_status={"state": "running"},
-        qa_ready=False,
-        analysis_ready=False,
         has_review_interrupt=False,
     )
 
@@ -149,7 +166,7 @@ def test_conversation_render_state_preserves_full_history_while_running() -> Non
     assert render_state.hide_secondary_sections is True
 
 
-def test_conversation_render_state_places_success_status_after_latest_message() -> None:
+def test_conversation_render_state_omits_success_status_for_qa_response() -> None:
     history = [
         Message("question", "human"),
         Message("answer", "ai"),
@@ -158,15 +175,30 @@ def test_conversation_render_state_places_success_status_after_latest_message() 
     render_state = conversation_render_state(
         history,
         run_status={"state": "idle"},
-        qa_ready=True,
-        analysis_ready=False,
         has_review_interrupt=False,
     )
 
     assert [msg.content for msg in render_state.messages][-1] == "answer"
-    assert render_state.status_level == "success"
-    assert render_state.status_text == "Response ready"
+    assert render_state.status_level is None
+    assert render_state.status_text is None
     assert render_state.hide_secondary_sections is False
+
+
+def test_conversation_render_state_omits_success_status_for_analysis_completion() -> None:
+    history = [
+        Message("question", "human"),
+        Message("answer with dataset", "ai"),
+    ]
+
+    render_state = conversation_render_state(
+        history,
+        run_status={"state": "idle"},
+        has_review_interrupt=False,
+    )
+
+    assert [msg.content for msg in render_state.messages][-1] == "answer with dataset"
+    assert render_state.status_level is None
+    assert render_state.status_text is None
 
 
 def test_conversation_render_state_keeps_background_status_with_latest_message() -> None:
@@ -179,8 +211,6 @@ def test_conversation_render_state_keeps_background_status_with_latest_message()
     render_state = conversation_render_state(
         history,
         run_status={"state": "running"},
-        qa_ready=False,
-        analysis_ready=False,
         has_review_interrupt=False,
     )
 

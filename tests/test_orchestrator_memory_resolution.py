@@ -632,6 +632,41 @@ def test_consumed_resolved_meta_clears_before_deterministic_followup(monkeypatch
     assert "resolved_task_meta_consumed" not in result["meta"]
 
 
+def test_approved_db_rag_column_selection_routes_to_sql_generation() -> None:
+    node = _fresh_node_module()
+    state = _base_state("Also help me to add alcohol usage and hiv status columns for my database")
+    state["output"]["qa_response"] = "Please review the proposed DB-RAG column selection in the panel below."
+    state["last_action"] = "human_review_rag_db_column_selection"
+    state["artifacts"]["datasets"]["uploaded-1"] = {"kind": "uploaded", "name": "uploaded.csv"}
+    state["agents"]["rag_db_qa"] = {
+        "approved_column_selection_artifact_id": "sel-art-1",
+        "pending_column_review_artifact_id": None,
+        "pending_sql_candidate_artifact_id": None,
+        "pending_column_review": {"status": "approved", "selection_id": "sel-1"},
+        "thread_status": "awaiting_sql_generation",
+    }
+    user_hash = node._user_message_hash(state)
+    state["meta"][MetaKeys.LAST_USER_MESSAGE_HASH] = user_hash
+    state["meta"][MetaKeys.STAGNATION_COUNT] = 4
+    state["meta"][MetaKeys.PROGRESS_SNAPSHOT] = {
+        "milestone": "needs_code",
+        "completion_status": "incomplete",
+        "blocker_signature": "missing_next_step",
+        "generated_code_hash": None,
+        "error_signature": None,
+        "selected_action": "human_review_rag_db_column_selection",
+        "user_turn_hash": user_hash,
+    }
+
+    result = node.orchestrator_node(
+        state,
+        _LLM(action="end"),
+        ["rag_db_qa", "human_review_rag_db_column_selection", "qa", "end"],
+    )
+
+    assert result["next_action"] == "rag_db_qa"
+
+
 def test_resolved_db_rag_use_as_input_sets_analysis_dataset_id_and_routes_generate_code(monkeypatch) -> None:
     node = _fresh_node_module()
     state = _state_with_sql_task("analyze that subset")
@@ -1003,7 +1038,6 @@ def test_memory_reference_clarification_reply_without_known_relationship_retries
 def test_memory_reference_clarification_selected_candidate_retry_failure_reasks(monkeypatch) -> None:
     node = _fresh_clarification_module()
     state = _memory_clarification_state("Task 2", relationship=None)
-    selected_task_id = state["memory"]["task_order"][1]
 
     def resolve(_selected_state, _llm, _user_message, _user_message_hash):
         return {

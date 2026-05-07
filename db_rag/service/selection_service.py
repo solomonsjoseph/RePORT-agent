@@ -261,7 +261,6 @@ class DbRagSelectionMixin:
             )
         constraints = _merge_constraint_sets(base_constraints, grounded_constraints)
         valid_tables = set(context.table_names)
-        valid_columns = {(entry.table, entry.column) for entry in context.columns}
         explicit_schema_columns = _resolve_explicit_schema_mentions(question, normalized_feedback_history)
         explicit_valid_columns = [
             column

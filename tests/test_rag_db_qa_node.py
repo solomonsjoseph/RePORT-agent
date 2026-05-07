@@ -93,6 +93,7 @@ class _Service:
         self.sql_error_message: str | None = None
         self.answer_needs_sql: bool = False
         self.resolved_goal_text: str | None = None
+        self.population_scope_result: dict[str, object] | None = None
 
     def readiness(self):
         return {"ready": True}
@@ -194,6 +195,19 @@ class _Service:
         del pending_kind, pending_question, recent_transcript
         self.calls.append(("classify_pending_reply", user_reply))
         return dict(self.pending_reply_result or {"label": "unknown", "confidence": 0.0})
+
+    def classify_population_scope(
+        self,
+        *,
+        question: str,
+        context,
+        active_intent: dict[str, object] | None = None,
+        intent_snapshot: dict[str, object] | None = None,
+        referenced_artifacts: dict[str, object] | None = None,
+    ):
+        del context, active_intent, intent_snapshot, referenced_artifacts
+        self.calls.append(("classify_population_scope", question))
+        return dict(self.population_scope_result or {"label": "unknown", "confidence": 0.0})
 
 
 class _ServiceWithoutPendingClassifiers(_Service):
@@ -762,6 +776,50 @@ def test_metadata_question_always_opens_extraction_prompt_after_answer() -> None
     assert _EXTRACTION_PROMPT in updated["output"]["qa_response"]
 
 
+def test_ambiguous_population_metadata_question_warns_before_answer() -> None:
+    service = _Service()
+    service.population_scope_result = {
+        "label": "ambiguous",
+        "population": None,
+        "confidence": 0.91,
+        "reason": "The question asks for gender distribution without specifying index cases or household contacts.",
+    }
+
+    updated = rag_db_qa_node(_state("What is the gender distribution?"), llm=None, provider="openai", service=service)
+
+    response = updated["output"]["qa_response"]
+    assert response.startswith(
+        "Warning: This database contains both index cases and household contacts."
+    )
+    assert "verify that the answer matches your intended population" in response
+    assert "Metadata answer for: What is the gender distribution?" in response
+    rag_state = updated["agents"]["rag_db_qa"]
+    assert rag_state["population_scope"]["label"] == "ambiguous"
+    assert rag_state["population_scope"]["confidence"] == 0.91
+    assert ("classify_population_scope", "What is the gender distribution?") in service.calls
+
+
+def test_specified_population_metadata_question_does_not_warn() -> None:
+    service = _Service()
+    service.population_scope_result = {
+        "label": "specified",
+        "population": "index_case",
+        "confidence": 0.93,
+        "reason": "The question specifies index cases.",
+    }
+
+    updated = rag_db_qa_node(
+        _state("What is the gender distribution among index cases?"),
+        llm=None,
+        provider="openai",
+        service=service,
+    )
+
+    assert not updated["output"]["qa_response"].startswith("Warning:")
+    assert "Metadata answer for: What is the gender distribution among index cases?" in updated["output"]["qa_response"]
+    assert updated["agents"]["rag_db_qa"]["population_scope"]["label"] == "specified"
+
+
 def test_metadata_question_ignores_needs_sql_routing_flag() -> None:
     service = _Service()
     service.answer_needs_sql = True
@@ -906,6 +964,35 @@ def test_explicit_extraction_question_opens_column_review_without_opt_in() -> No
     events = updated["artifacts"]["conversation_events"]
     assert events[-1]["type"] == "review_request"
     assert events[-1]["artifact_id"] == rag_state["pending_column_review_artifact_id"]
+
+
+def test_ambiguous_population_column_review_warns_and_stores_scope() -> None:
+    service = _Service()
+    service.population_scope_result = {
+        "label": "ambiguous",
+        "population": None,
+        "confidence": 0.89,
+        "reason": "The extraction asks for participants without specifying index cases or household contacts.",
+    }
+
+    updated = rag_db_qa_node(
+        _state("Generate the SQL to subset participants with diabetes."),
+        llm=None,
+        provider="openai",
+        service=service,
+    )
+
+    response = updated["output"]["qa_response"]
+    assert response.startswith(
+        "Warning: This database contains both index cases and household contacts."
+    )
+    assert "verify that the selected columns match your intended population" in response
+    assert "Please review the proposed DB-RAG column selection in the panel below." in response
+    rag_state = updated["agents"]["rag_db_qa"]
+    artifact = updated["artifacts"]["files"][rag_state["pending_column_review_artifact_id"]]
+    assert artifact["content"]["population_scope"]["label"] == "ambiguous"
+    assert artifact["content"]["population_scope"]["confidence"] == 0.89
+    assert rag_state["pending_column_review"]["population_scope"]["label"] == "ambiguous"
 
 
 def test_rag_db_node_records_stage_timings() -> None:

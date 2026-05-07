@@ -216,6 +216,85 @@ def classify_sql_review_feedback(
     )
 
 
+def classify_population_scope(
+    *,
+    question: str,
+    table_context: str,
+    column_context: str,
+    active_intent: dict[str, Any] | None,
+    intent_snapshot: dict[str, Any] | None,
+    referenced_artifacts: dict[str, Any] | None,
+    resolve_model=resolve_db_rag_reply_classifier_model,
+) -> dict[str, Any]:
+    model = resolve_model()
+    if not model:
+        return {"label": "unknown", "confidence": 0.0}
+
+    api_key = str(os.getenv("DB_RAG_REPLY_CLASSIFIER_API_KEY", "") or "").strip()
+    if not api_key:
+        api_key = str(os.getenv("OPENAI_API_KEY", "") or "").strip()
+    if not api_key:
+        return {"label": "unknown", "confidence": 0.0}
+
+    openai_client = _resolve_openai_client()
+    if openai_client is None:
+        return {"label": "unknown", "confidence": 0.0}
+
+    client_kwargs: dict[str, Any] = {"api_key": api_key}
+    base_url = str(os.getenv("DB_RAG_REPLY_CLASSIFIER_BASE_URL", "") or "").strip()
+    if base_url:
+        client_kwargs["base_url"] = base_url
+
+    try:
+        client = openai_client(**client_kwargs)
+        response = client.chat.completions.create(
+            model=model,
+            response_format={"type": "json_object"},
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You classify whether a RePORT database question has explicit population scope. "
+                        "The database has index cases and household contacts. Return JSON only with keys "
+                        "label, population, confidence, and reason. Allowed labels: specified, ambiguous, "
+                        "not_population_scoped, unknown. Allowed population values: index_case, "
+                        "household_contact, both, null. Mark ambiguous when a participant-level question could "
+                        "refer to either index cases or household contacts and the request/prior intent does not "
+                        "resolve the population. Mark not_population_scoped for schema-only questions."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"Question:\n{question}\n\n"
+                        f"Active intent:\n{json.dumps(active_intent or {}, indent=2, sort_keys=True)}\n\n"
+                        f"Intent snapshot:\n{json.dumps(intent_snapshot or {}, indent=2, sort_keys=True)}\n\n"
+                        f"Referenced artifacts:\n{json.dumps(referenced_artifacts or {}, indent=2, sort_keys=True)}\n\n"
+                        f"Table context:\n{table_context or 'none'}\n\n"
+                        f"Column context:\n{column_context or 'none'}"
+                    ),
+                },
+            ],
+        )
+        content = coerce_text_content(getattr(response.choices[0].message, "content", ""))
+        parsed = parse_json_object(content) or {}
+    except Exception:
+        return {"label": "unknown", "confidence": 0.0}
+
+    result = _normalize_classifier_result(
+        parsed,
+        allowed_labels={"specified", "ambiguous", "not_population_scoped", "unknown"},
+    )
+    if result["confidence"] < _NEW_HELPER_CONFIDENCE_THRESHOLD:
+        return {"label": "unknown", "confidence": 0.0}
+    population = str(parsed.get("population") or "").strip().lower()
+    if population not in {"index_case", "household_contact", "both"}:
+        population = None
+    result["population"] = population
+    result["reason"] = str(parsed.get("reason") or "").strip()
+    return result
+
+
 def build_recoverable_error_clarification(
     *,
     workflow: str,
