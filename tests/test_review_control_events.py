@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import json
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
@@ -126,6 +127,36 @@ def _install_orchestrator_stubs() -> None:
     sys.modules["langchain_core.messages"] = messages_mod
     sys.modules["langchain_core.prompts"] = prompts_mod
     sys.modules["langgraph.graph.message"] = graph_message_mod
+
+
+@contextmanager
+def _isolated_orchestrator_stubs():
+    module_names = (
+        "langchain_core",
+        "langchain_core.messages",
+        "langchain_core.prompts",
+        "langgraph.graph.message",
+        "prompts.planner_prompt",
+        "graph.nodes.orchestrator",
+        "graph.nodes.orchestrator.node",
+        "graph.nodes.orchestrator.planner",
+        "graph.nodes.orchestrator.policy",
+        "graph.nodes.orchestrator.action_mask",
+        "graph.nodes.orchestrator.context_builder",
+        "graph.nodes.orchestrator.state_logic",
+        "graph.state",
+    )
+    sentinel = object()
+    previous = {name: sys.modules.get(name, sentinel) for name in module_names}
+    try:
+        yield
+    finally:
+        for name, module in previous.items():
+            if module is sentinel:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = module
+        importlib.invalidate_caches()
 
 
 def _fresh_orchestrator_module():
@@ -548,20 +579,21 @@ def test_consume_final_review_cancel_clears_decision_after_one_consume() -> None
 
 
 def test_orchestrator_before_run_cancel_routes_to_end_without_planner_fallback() -> None:
-    module = _fresh_orchestrator_module()
-    state = _orchestrator_cancel_state(
-        "human_review_before_run",
-        {
-            "before_run_decision": "cancel",
-            "approved_code_hash": None,
-        },
-    )
+    with _isolated_orchestrator_stubs():
+        module = _fresh_orchestrator_module()
+        state = _orchestrator_cancel_state(
+            "human_review_before_run",
+            {
+                "before_run_decision": "cancel",
+                "approved_code_hash": None,
+            },
+        )
 
-    updated = module.orchestrator_node(
-        state,
-        _StaticLLM("end"),
-        ["generate_code", "execute_code", "qa", "end"],
-    )
+        updated = module.orchestrator_node(
+            state,
+            _StaticLLM("end"),
+            ["generate_code", "execute_code", "qa", "end"],
+        )
 
     assert updated["next_action"] == "end"
     assert updated["orchestrator"]["next_action"] == "end"
@@ -573,21 +605,22 @@ def test_orchestrator_before_run_cancel_routes_to_end_without_planner_fallback()
 
 
 def test_orchestrator_after_error_cancel_routes_to_end_without_planner_fallback() -> None:
-    module = _fresh_orchestrator_module()
-    state = _orchestrator_cancel_state(
-        "human_review_after_error",
-        {
-            "after_error_decision": "cancel",
-            "before_run_decision": "approve",
-            "approved_code_hash": "hash-1",
-        },
-    )
+    with _isolated_orchestrator_stubs():
+        module = _fresh_orchestrator_module()
+        state = _orchestrator_cancel_state(
+            "human_review_after_error",
+            {
+                "after_error_decision": "cancel",
+                "before_run_decision": "approve",
+                "approved_code_hash": "hash-1",
+            },
+        )
 
-    updated = module.orchestrator_node(
-        state,
-        _StaticLLM("end"),
-        ["generate_code", "qa", "end"],
-    )
+        updated = module.orchestrator_node(
+            state,
+            _StaticLLM("end"),
+            ["generate_code", "qa", "end"],
+        )
 
     assert updated["next_action"] == "end"
     assert updated["orchestrator"]["next_action"] == "end"
@@ -599,42 +632,44 @@ def test_orchestrator_after_error_cancel_routes_to_end_without_planner_fallback(
 
 
 def test_orchestrator_after_error_feedback_still_routes_to_generate_code() -> None:
-    module = _fresh_orchestrator_module()
-    state = _orchestrator_cancel_state(
-        "human_review_after_error",
-        {
-            "after_error_decision": "feedback",
-            "before_run_decision": None,
-            "approved_code_hash": None,
-        },
-    )
+    with _isolated_orchestrator_stubs():
+        module = _fresh_orchestrator_module()
+        state = _orchestrator_cancel_state(
+            "human_review_after_error",
+            {
+                "after_error_decision": "feedback",
+                "before_run_decision": None,
+                "approved_code_hash": None,
+            },
+        )
 
-    updated = module.orchestrator_node(
-        state,
-        _StaticLLM("end"),
-        ["generate_code", "qa", "end"],
-    )
+        updated = module.orchestrator_node(
+            state,
+            _StaticLLM("end"),
+            ["generate_code", "qa", "end"],
+        )
 
     assert updated["next_action"] == "generate_code"
     assert "generate_code" in updated["meta"].get("loop_guard_bypass_actions", [])
 
 
 def test_orchestrator_final_review_cancel_routes_to_end_with_live_generated_code() -> None:
-    module = _fresh_orchestrator_module()
-    state = _orchestrator_cancel_state(
-        "human_review_before_output",
-        {
-            "final_decision": "cancel",
-            "before_run_decision": None,
-            "approved_code_hash": None,
-        },
-    )
+    with _isolated_orchestrator_stubs():
+        module = _fresh_orchestrator_module()
+        state = _orchestrator_cancel_state(
+            "human_review_before_output",
+            {
+                "final_decision": "cancel",
+                "before_run_decision": None,
+                "approved_code_hash": None,
+            },
+        )
 
-    updated = module.orchestrator_node(
-        state,
-        _StaticLLM("end"),
-        ["human_review_before_run", "generate_code", "qa", "end"],
-    )
+        updated = module.orchestrator_node(
+            state,
+            _StaticLLM("end"),
+            ["human_review_before_run", "generate_code", "qa", "end"],
+        )
 
     assert updated["next_action"] == "end"
     assert updated["orchestrator"]["next_action"] == "end"
