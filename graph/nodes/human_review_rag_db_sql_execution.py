@@ -7,6 +7,7 @@ from langgraph.types import interrupt
 
 from ..conversation_events import append_conversation_event, build_review_decision_event
 from ..state import MetaKeys
+from .human_review_cancel import append_review_cancel_audit
 from .rag_db_qa import _deserialize_prepared_sql_candidate, _execute_prepared_sql_candidate
 from .state_helpers import update_agent_state
 
@@ -147,6 +148,36 @@ def human_review_rag_db_sql_execution_node(state, service):
 
     action = str(feedback.get("action") or "").strip().lower()
     suggestion = str(feedback.get("suggestion") or feedback.get("feedback") or feedback.get("message") or "").strip()
+
+    if action == "cancel":
+        candidate_payload["status"] = "cancelled"
+        updated_state = _replace_artifact_content(
+            state,
+            artifact_id=candidate_artifact_id,
+            content=candidate_payload,
+        )
+        updated_state = append_review_cancel_audit(
+            updated_state,
+            actor="human_review_rag_db_sql_execution",
+            review_kind="rag_db_sql_execution",
+        )
+        rag_state["pending_sql_candidate_artifact_id"] = None
+        rag_state["pending_sql_candidate"] = None
+        rag_state["approved_column_selection_artifact_id"] = None
+        rag_state["pending_column_review_artifact_id"] = None
+        rag_state["pending_column_review"] = None
+        rag_state.pop("sql_review_approved_artifact_id", None)
+        rag_state["thread_status"] = "cancelled"
+        rag_state["active_thread"] = False
+        agents = dict(updated_state.get("agents") or {})
+        base_rag_state = dict(agents.get("rag_db_qa") or {})
+        base_rag_state.pop("sql_review_approved_artifact_id", None)
+        agents["rag_db_qa"] = base_rag_state
+        updated_state = {
+            **updated_state,
+            "agents": agents,
+        }
+        return update_agent_state(updated_state, "rag_db_qa", rag_state)
 
     if action == "approve":
         updated_state = append_conversation_event(

@@ -43,9 +43,20 @@ def _install_stubs(decision: str, suggestion: str | None = None) -> None:
     messages_mod.AIMessage = _AIMessage
     messages_mod.BaseMessage = object
 
+    prompts_mod = ModuleType("langchain_core.prompts")
+    prompts_mod.ChatPromptTemplate = _ChatPromptTemplate
+    prompts_mod.MessagesPlaceholder = _MessagesPlaceholder
+    prompts_mod.FewShotChatMessagePromptTemplate = _FewShotChatMessagePromptTemplate
+
+    langchain_core_mod = ModuleType("langchain_core")
+    langchain_core_mod.messages = messages_mod
+    langchain_core_mod.prompts = prompts_mod
+
     sys.modules["langgraph.types"] = langgraph_types
     sys.modules["langgraph.graph.message"] = graph_message_mod
+    sys.modules["langchain_core"] = langchain_core_mod
     sys.modules["langchain_core.messages"] = messages_mod
+    sys.modules["langchain_core.prompts"] = prompts_mod
 
 
 class _FormattedPrompt:
@@ -418,6 +429,147 @@ def test_human_review_before_output_cancel_does_not_append_final_result() -> Non
     assert len(updated["messages"]) == 1
     assert "result text" not in updated["messages"][0].content
     assert updated["artifacts"]["conversation_events"][-1]["review_kind"] == "final_review"
+    assert updated["artifacts"]["conversation_events"][-1]["decision"] == "cancel"
+
+
+def test_rag_db_column_review_cancel_clears_live_review_pointers() -> None:
+    _install_stubs(decision="cancel", suggestion="ignore this")
+    for mod in (
+        "graph.nodes.human_review_rag_db_column_selection",
+        "graph.nodes.human_review_cancel",
+        "graph.state",
+        "graph.nodes.state_helpers",
+    ):
+        sys.modules.pop(mod, None)
+    module = importlib.import_module("graph.nodes.human_review_rag_db_column_selection")
+
+    state = {
+        "messages": [],
+        "output": {},
+        "meta": {"last_user_message_hash": "u-rag-col-cancel"},
+        "artifacts": {
+            "files": {
+                "sel-1": {
+                    "kind": "db_rag_column_selection",
+                    "artifact_id": "sel-1",
+                    "created_at": "2026-05-07T00:00:00+00:00",
+                    "producer": "rag_db_qa",
+                    "mime": "application/json",
+                    "summary": "Column selection awaiting review",
+                    "content": {
+                        "status": "awaiting_review",
+                        "goal_text": "extract diabetes rows",
+                        "source_question": "extract diabetes rows",
+                    }
+                }
+            }
+        },
+        "agents": {
+            "rag_db_qa": {
+                "pending_column_review_artifact_id": "sel-1",
+                "approved_column_selection_artifact_id": "sel-1",
+                "pending_sql_candidate_artifact_id": "sql-1",
+                "pending_column_review": {"status": "awaiting_review"},
+                "pending_sql_candidate": {"status": "prepared"},
+                "sql_review_approved_artifact_id": "sql-1",
+                "thread_status": "awaiting_column_review",
+                "active_thread": True,
+            }
+        },
+    }
+
+    updated = module.human_review_rag_db_column_selection_node(state)
+    rag_state = updated["agents"]["rag_db_qa"]
+
+    assert updated["artifacts"]["files"]["sel-1"]["content"]["status"] == "cancelled"
+    assert rag_state["pending_column_review_artifact_id"] is None
+    assert rag_state["approved_column_selection_artifact_id"] is None
+    assert rag_state["pending_sql_candidate_artifact_id"] is None
+    assert rag_state["pending_column_review"] is None
+    assert rag_state["pending_sql_candidate"] is None
+    assert "sql_review_approved_artifact_id" not in rag_state
+    assert rag_state["thread_status"] == "cancelled"
+    assert rag_state["active_thread"] is False
+    assert updated["artifacts"]["conversation_events"][-1]["decision"] == "cancel"
+
+
+def test_rag_db_sql_review_cancel_clears_sql_and_selection_pointers() -> None:
+    _install_stubs(decision="cancel", suggestion="ignore this")
+    for mod in (
+        "graph.nodes.human_review_rag_db_sql_execution",
+        "graph.nodes.human_review_cancel",
+        "graph.nodes.rag_db_qa",
+        "graph.state",
+        "graph.nodes.state_helpers",
+    ):
+        sys.modules.pop(mod, None)
+    module = importlib.import_module("graph.nodes.human_review_rag_db_sql_execution")
+
+    state = {
+        "messages": [],
+        "output": {},
+        "meta": {"last_user_message_hash": "u-rag-sql-cancel"},
+        "artifacts": {
+            "files": {
+                "sel-1": {
+                    "kind": "db_rag_column_selection",
+                    "artifact_id": "sel-1",
+                    "created_at": "2026-05-07T00:00:00+00:00",
+                    "producer": "rag_db_qa",
+                    "mime": "application/json",
+                    "summary": "Approved column selection",
+                    "content": {
+                        "status": "approved",
+                        "selection_id": "selection-1",
+                        "tables": ["Form 2A"],
+                        "columns": [{"table": "Form 2A", "column": "IC_AGE"}],
+                    }
+                },
+                "sql-1": {
+                    "kind": "db_rag_sql_candidate",
+                    "artifact_id": "sql-1",
+                    "created_at": "2026-05-07T00:00:00+00:00",
+                    "producer": "rag_db_qa",
+                    "mime": "application/json",
+                    "summary": "Prepared SQL candidate",
+                    "content": {
+                        "status": "prepared",
+                        "selection_artifact_id": "sel-1",
+                        "selection_id": "selection-1",
+                        "tables": ["Form 2A"],
+                        "columns": [{"table": "Form 2A", "column": "IC_AGE"}],
+                        "sql": "select 1",
+                    }
+                },
+            }
+        },
+        "agents": {
+            "rag_db_qa": {
+                "pending_sql_candidate_artifact_id": "sql-1",
+                "pending_sql_candidate": {"status": "prepared"},
+                "approved_column_selection_artifact_id": "sel-1",
+                "pending_column_review_artifact_id": "sel-1",
+                "pending_column_review": {"status": "approved"},
+                "sql_review_approved_artifact_id": "sql-1",
+                "thread_status": "awaiting_sql_review",
+                "active_thread": True,
+            }
+        },
+    }
+
+    updated = module.human_review_rag_db_sql_execution_node(state, service=object())
+    rag_state = updated["agents"]["rag_db_qa"]
+
+    assert updated["artifacts"]["files"]["sql-1"]["content"]["status"] == "cancelled"
+    assert rag_state["pending_sql_candidate_artifact_id"] is None
+    assert rag_state["pending_sql_candidate"] is None
+    assert rag_state["approved_column_selection_artifact_id"] is None
+    assert rag_state["pending_column_review_artifact_id"] is None
+    assert rag_state["pending_column_review"] is None
+    assert "sql_review_approved_artifact_id" not in rag_state
+    assert rag_state["thread_status"] == "cancelled"
+    assert rag_state["active_thread"] is False
+    assert updated["artifacts"]["conversation_events"][-1]["review_kind"] == "rag_db_sql_execution"
     assert updated["artifacts"]["conversation_events"][-1]["decision"] == "cancel"
 
 
