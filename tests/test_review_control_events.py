@@ -453,6 +453,100 @@ def test_consume_after_error_feedback_routes_to_generate_code_with_loop_guard_by
     assert "generate_code" in updated_meta.get(meta_keys.LOOP_GUARD_BYPASS_ACTIONS, [])
 
 
+def test_consume_before_run_cancel_clears_decision_after_one_consume() -> None:
+    for mod in (
+        "graph.nodes.orchestrator.state_logic",
+        "graph.state",
+    ):
+        sys.modules.pop(mod, None)
+    module = importlib.import_module("graph.nodes.orchestrator.state_logic")
+    state_module = importlib.import_module("graph.state")
+    meta_keys = state_module.MetaKeys
+
+    output = {"generated_code": "print(1)"}
+    agents = {
+        "executor": {"run_status": "pending"},
+        "human_review": {
+            "before_run_decision": "cancel",
+            "approved_code_hash": "hash-1",
+        },
+    }
+    meta = {
+        meta_keys.EXECUTION_TICKET_HASH: "hash-1",
+        meta_keys.FINAL_APPROVED_CODE_HASH: "hash-1",
+        meta_keys.ERROR_RECOVERY_ACTIVE: True,
+    }
+
+    updated_output, updated_agents, updated_meta, cancelled = module._consume_before_run_cancel(
+        output,
+        agents,
+        meta,
+    )
+    _second_output, _second_agents, _second_meta, second_cancelled = module._consume_before_run_cancel(
+        updated_output,
+        updated_agents,
+        updated_meta,
+    )
+
+    assert cancelled is True
+    assert second_cancelled is False
+    assert updated_agents["human_review"]["before_run_decision"] is None
+    assert updated_agents["human_review"]["approved_code_hash"] is None
+    assert updated_agents["executor"]["run_status"] == "idle"
+    assert "generated_code" not in updated_output
+    assert meta_keys.EXECUTION_TICKET_HASH not in updated_meta
+    assert meta_keys.FINAL_APPROVED_CODE_HASH not in updated_meta
+    assert meta_keys.ERROR_RECOVERY_ACTIVE not in updated_meta
+
+
+def test_consume_final_review_cancel_clears_decision_after_one_consume() -> None:
+    for mod in (
+        "graph.nodes.orchestrator.state_logic",
+        "graph.state",
+    ):
+        sys.modules.pop(mod, None)
+    module = importlib.import_module("graph.nodes.orchestrator.state_logic")
+    state_module = importlib.import_module("graph.state")
+    meta_keys = state_module.MetaKeys
+
+    output = {"generated_code": "print(1)"}
+    agents = {
+        "executor": {"run_status": "ok"},
+        "human_review": {
+            "final_decision": "cancel",
+            "before_run_decision": "approve",
+            "approved_code_hash": "hash-1",
+        },
+    }
+    meta = {
+        meta_keys.EXECUTION_TICKET_HASH: "hash-1",
+        meta_keys.FINAL_APPROVED_CODE_HASH: "hash-1",
+        meta_keys.ERROR_RECOVERY_ACTIVE: True,
+    }
+
+    updated_output, updated_agents, updated_meta, cancelled = module._consume_final_review_cancel(
+        output,
+        agents,
+        meta,
+    )
+    _second_output, _second_agents, _second_meta, second_cancelled = module._consume_final_review_cancel(
+        updated_output,
+        updated_agents,
+        updated_meta,
+    )
+
+    assert cancelled is True
+    assert second_cancelled is False
+    assert updated_agents["human_review"]["final_decision"] is None
+    assert updated_agents["human_review"]["before_run_decision"] is None
+    assert updated_agents["human_review"]["approved_code_hash"] is None
+    assert updated_agents["executor"]["run_status"] == "idle"
+    assert "generated_code" not in updated_output
+    assert meta_keys.EXECUTION_TICKET_HASH not in updated_meta
+    assert meta_keys.FINAL_APPROVED_CODE_HASH not in updated_meta
+    assert meta_keys.ERROR_RECOVERY_ACTIVE not in updated_meta
+
+
 def test_orchestrator_before_run_cancel_routes_to_end_without_planner_fallback() -> None:
     module = _fresh_orchestrator_module()
     state = _orchestrator_cancel_state(

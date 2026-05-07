@@ -182,6 +182,11 @@ def _consume_before_run_cancel(output: dict, agents: dict, meta: dict) -> tuple[
     updated_meta.pop(MetaKeys.ERROR_RECOVERY_ACTIVE, None)
 
     updated_agents = dict(agents)
+    updated_review = dict(review)
+    updated_review["before_run_decision"] = None
+    updated_review["approved_code_hash"] = None
+    updated_agents["human_review"] = updated_review
+
     executor = dict((updated_agents.get("executor") or {}))
     if executor:
         executor["run_status"] = "idle"
@@ -247,6 +252,12 @@ def _consume_final_review_cancel(
     updated_meta.pop(MetaKeys.ERROR_RECOVERY_ACTIVE, None)
 
     updated_agents = dict(agents)
+    updated_review = dict(review)
+    updated_review["final_decision"] = None
+    updated_review["before_run_decision"] = None
+    updated_review["approved_code_hash"] = None
+    updated_agents["human_review"] = updated_review
+
     executor = dict((updated_agents.get("executor") or {}))
     if executor:
         executor["run_status"] = "idle"
