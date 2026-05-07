@@ -26,14 +26,16 @@ def _install_stubs(decision: str, suggestion: str | None = None) -> None:
     messages_mod = ModuleType("langchain_core.messages")
 
     class _HumanMessage:
-        def __init__(self, content: str):
+        def __init__(self, content: str, additional_kwargs: dict | None = None):
             self.type = "human"
             self.content = content
+            self.additional_kwargs = additional_kwargs or {}
 
     class _AIMessage:
-        def __init__(self, content: str):
+        def __init__(self, content: str, additional_kwargs: dict | None = None):
             self.type = "ai"
             self.content = content
+            self.additional_kwargs = additional_kwargs or {}
 
     messages_mod.HumanMessage = _HumanMessage
     messages_mod.AIMessage = _AIMessage
@@ -119,10 +121,19 @@ def test_review_cancel_helper_appends_assistant_and_decision_event() -> None:
         review_kind="before_run_review",
     )
 
-    assert updated["messages"][-1].content == "Cancelled the pending review. You can start a new request when ready."
-    event = updated["artifacts"]["conversation_events"][-1]
-    assert event["type"] == "review_decision"
-    assert event["actor"] == "human_review_before_run"
-    assert event["review_kind"] == "before_run_review"
-    assert event["decision"] == "cancel"
-    assert event["text"] == "Cancelled the pending review. You can start a new request when ready."
+    assert updated["messages"][-1].content == module.CANCEL_REVIEW_MESSAGE
+    assistant_event, decision_event = updated["artifacts"]["conversation_events"][-2:]
+    assert assistant_event["type"] == "assistant"
+    assert assistant_event["actor"] == "human_review_before_run"
+    assert assistant_event["text"] == module.CANCEL_REVIEW_MESSAGE
+    assert decision_event["type"] == "review_decision"
+    assert decision_event["actor"] == "human_review_before_run"
+    assert decision_event["review_kind"] == "before_run_review"
+    assert decision_event["decision"] == "cancel"
+    assert decision_event["text"] == module.CANCEL_REVIEW_MESSAGE
+
+    sys.modules.pop("utils.display_history", None)
+    display_history_module = importlib.import_module("utils.display_history")
+    history = display_history_module.build_display_history(updated)
+    assert history[0].type == "ai"
+    assert history[0].content == module.CANCEL_REVIEW_MESSAGE
