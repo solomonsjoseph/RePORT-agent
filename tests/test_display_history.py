@@ -147,6 +147,47 @@ def test_build_display_history_includes_review_decisions_as_user_actions() -> No
     assert history[1].content == "Approved DB-RAG column selection."
 
 
+def test_build_display_history_skips_cancel_review_decision_when_assistant_event_exists() -> None:
+    cancel_text = "Cancelled the pending review. You can start a new request when ready."
+    state = {
+        "messages": [],
+        "artifacts": {
+            "conversation_events": [
+                {
+                    "event_id": "e1",
+                    "seq": 1,
+                    "created_at": "2026-05-07T00:00:00Z",
+                    "type": "assistant",
+                    "actor": "human_review_before_run",
+                    "actor_role": "assistant",
+                    "user_turn_hash": "u-cancel",
+                    "text": cancel_text,
+                },
+                {
+                    "event_id": "e2",
+                    "seq": 2,
+                    "created_at": "2026-05-07T00:00:01Z",
+                    "type": "review_decision",
+                    "actor": "human_review_before_run",
+                    "actor_role": "review",
+                    "user_turn_hash": "u-cancel",
+                    "review_kind": "before_run_review",
+                    "decision": "cancel",
+                    "text": cancel_text,
+                },
+            ],
+            "conversation_events_version": 1,
+            "artifact_manifest_version": 1,
+            "files": {},
+        },
+        "meta": {"next_event_seq": 3},
+    }
+
+    history = build_display_history(state)
+
+    assert [(message.type, message.content) for message in history] == [("ai", cancel_text)]
+
+
 def test_build_display_history_attaches_figure_to_parent_assistant_event() -> None:
     state = {
         "messages": [],

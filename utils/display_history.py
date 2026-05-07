@@ -40,6 +40,8 @@ def build_display_history(state: dict) -> list:
                 display_messages.append(HumanMessage(content=text))
             continue
         if event_type == "review_decision":
+            if event.get("decision") == "cancel":
+                continue
             if text:
                 display_messages.append(HumanMessage(content=text))
             continue

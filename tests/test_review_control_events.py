@@ -135,5 +135,6 @@ def test_review_cancel_helper_appends_assistant_and_decision_event() -> None:
     sys.modules.pop("utils.display_history", None)
     display_history_module = importlib.import_module("utils.display_history")
     history = display_history_module.build_display_history(updated)
-    assert history[0].type == "ai"
-    assert history[0].content == module.CANCEL_REVIEW_MESSAGE
+    cancel_messages = [message for message in history if message.content == module.CANCEL_REVIEW_MESSAGE]
+    assert len(cancel_messages) == 1
+    assert cancel_messages[0].type == "ai"
