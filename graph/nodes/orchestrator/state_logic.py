@@ -254,6 +254,9 @@ def _consume_after_error_decision(
     updated_meta.pop(MetaKeys.EXECUTION_TICKET_HASH, None)
     updated_meta.pop(MetaKeys.ERROR_RECOVERY_ACTIVE, None)
 
+    if str(decision or "").strip().lower() not in {"feedback", "regenerate"}:
+        return output, updated_agents, updated_meta, None
+
     bypass_actions = list(updated_meta.get(MetaKeys.LOOP_GUARD_BYPASS_ACTIONS, []))
     if "generate_code" not in bypass_actions:
         bypass_actions.append("generate_code")

@@ -260,3 +260,66 @@ def test_human_review_before_output_cancel_does_not_append_final_result() -> Non
     assert "result text" not in updated["messages"][0].content
     assert updated["artifacts"]["conversation_events"][-1]["review_kind"] == "final_review"
     assert updated["artifacts"]["conversation_events"][-1]["decision"] == "cancel"
+
+
+def test_consume_after_error_cancel_is_terminal_without_loop_guard_bypass() -> None:
+    for mod in (
+        "graph.nodes.orchestrator.state_logic",
+        "graph.state",
+    ):
+        sys.modules.pop(mod, None)
+    module = importlib.import_module("graph.nodes.orchestrator.state_logic")
+    state_module = importlib.import_module("graph.state")
+    meta_keys = state_module.MetaKeys
+
+    output = {}
+    agents = {
+        "human_review": {
+            "after_error_decision": "cancel",
+            "before_run_decision": "approve",
+            "approved_code_hash": "hash-1",
+        }
+    }
+    meta = {
+        meta_keys.EXECUTION_TICKET_HASH: "hash-1",
+        meta_keys.ERROR_RECOVERY_ACTIVE: True,
+    }
+
+    _updated_output, updated_agents, updated_meta, action = module._consume_after_error_decision(
+        output,
+        agents,
+        meta,
+    )
+
+    assert action is None
+    assert updated_agents["human_review"]["after_error_decision"] is None
+    assert updated_agents["human_review"]["before_run_decision"] is None
+    assert updated_agents["human_review"]["approved_code_hash"] is None
+    assert meta_keys.EXECUTION_TICKET_HASH not in updated_meta
+    assert meta_keys.ERROR_RECOVERY_ACTIVE not in updated_meta
+    assert "generate_code" not in updated_meta.get(meta_keys.LOOP_GUARD_BYPASS_ACTIONS, [])
+
+
+def test_consume_after_error_feedback_routes_to_generate_code_with_loop_guard_bypass() -> None:
+    for mod in (
+        "graph.nodes.orchestrator.state_logic",
+        "graph.state",
+    ):
+        sys.modules.pop(mod, None)
+    module = importlib.import_module("graph.nodes.orchestrator.state_logic")
+    state_module = importlib.import_module("graph.state")
+    meta_keys = state_module.MetaKeys
+
+    output = {}
+    agents = {"human_review": {"after_error_decision": "feedback"}}
+    meta = {}
+
+    _updated_output, updated_agents, updated_meta, action = module._consume_after_error_decision(
+        output,
+        agents,
+        meta,
+    )
+
+    assert action == "generate_code"
+    assert updated_agents["human_review"]["after_error_decision"] is None
+    assert "generate_code" in updated_meta.get(meta_keys.LOOP_GUARD_BYPASS_ACTIONS, [])
