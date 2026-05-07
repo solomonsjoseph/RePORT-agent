@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import importlib
 import sys
+from pathlib import Path
 from types import ModuleType
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 
 def _install_stubs(decision: str, suggestion: str | None = None) -> None:
@@ -25,7 +30,13 @@ def _install_stubs(decision: str, suggestion: str | None = None) -> None:
             self.type = "human"
             self.content = content
 
+    class _AIMessage:
+        def __init__(self, content: str):
+            self.type = "ai"
+            self.content = content
+
     messages_mod.HumanMessage = _HumanMessage
+    messages_mod.AIMessage = _AIMessage
     messages_mod.BaseMessage = object
 
     sys.modules["langgraph.types"] = langgraph_types
@@ -83,3 +94,35 @@ def test_human_review_after_error_emits_review_decision_event() -> None:
     assert event["review_kind"] == "after_error_review"
     assert event["decision"] == "regenerate"
     assert "grouped summary" in event["text"]
+
+
+def test_review_cancel_helper_appends_assistant_and_decision_event() -> None:
+    _install_stubs(decision="cancel")
+    for mod in (
+        "graph.nodes.human_review_cancel",
+        "graph.conversation_events",
+        "graph.state",
+    ):
+        sys.modules.pop(mod, None)
+    module = importlib.import_module("graph.nodes.human_review_cancel")
+
+    state = {
+        "messages": [],
+        "output": {},
+        "meta": {"last_user_message_hash": "u-cancel"},
+        "agents": {},
+    }
+
+    updated = module.append_review_cancel_audit(
+        state,
+        actor="human_review_before_run",
+        review_kind="before_run_review",
+    )
+
+    assert updated["messages"][-1].content == "Cancelled the pending review. You can start a new request when ready."
+    event = updated["artifacts"]["conversation_events"][-1]
+    assert event["type"] == "review_decision"
+    assert event["actor"] == "human_review_before_run"
+    assert event["review_kind"] == "before_run_review"
+    assert event["decision"] == "cancel"
+    assert event["text"] == "Cancelled the pending review. You can start a new request when ready."
