@@ -523,3 +523,29 @@ def test_orchestrator_after_error_feedback_still_routes_to_generate_code() -> No
 
     assert updated["next_action"] == "generate_code"
     assert "generate_code" in updated["meta"].get("loop_guard_bypass_actions", [])
+
+
+def test_orchestrator_final_review_cancel_routes_to_end_with_live_generated_code() -> None:
+    module = _fresh_orchestrator_module()
+    state = _orchestrator_cancel_state(
+        "human_review_before_output",
+        {
+            "final_decision": "cancel",
+            "before_run_decision": None,
+            "approved_code_hash": None,
+        },
+    )
+
+    updated = module.orchestrator_node(
+        state,
+        _StaticLLM("end"),
+        ["human_review_before_run", "generate_code", "qa", "end"],
+    )
+
+    assert updated["next_action"] == "end"
+    assert updated["orchestrator"]["next_action"] == "end"
+    assert updated["agents"]["executor"]["run_status"] == "idle"
+    assert "execution_ticket_hash" not in updated["meta"]
+    assert "final_approved_code_hash" not in updated["meta"]
+    assert "error_recovery_active" not in updated["meta"]
+    assert any("final-review cancel" in item for item in updated["observations"])

@@ -30,6 +30,7 @@ from .state_logic import (
     _consume_after_error_decision,
     _consume_before_run_approval,
     _consume_before_run_cancel,
+    _consume_final_review_cancel,
     _consume_final_review_regenerate,
     _consume_final_review_approval,
     _consume_regenerate_before_run,
@@ -534,25 +535,34 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
             state = {**state, "observations": observations}
 
     if _resumed_from(state, "human_review_before_output"):
-        output, agents, meta, regenerated_final = _consume_final_review_regenerate(output, agents, meta)
-        if regenerated_final:
-            next_action = "generate_code"
-            transition_selected_from_resume = True
-            orchestrator_state.pop("next_action", None)
-            observations = list(state.get("observations", []))
-            observations.append(
-                "orchestrator: received final-review regenerate request; routing back to generate_code"
-            )
-            state = {**state, "observations": observations}
-
-        output, agents, meta, approved_final = _consume_final_review_approval(output, agents, meta)
-        if approved_final:
+        output, agents, meta, final_cancelled = _consume_final_review_cancel(output, agents, meta)
+        if final_cancelled:
             next_action = "end"
             transition_selected_from_resume = True
             orchestrator_state.pop("next_action", None)
             observations = list(state.get("observations", []))
-            observations.append("orchestrator: consumed final approval; routing to end")
+            observations.append("orchestrator: consumed final-review cancel; ending workflow")
             state = {**state, "observations": observations}
+        else:
+            output, agents, meta, regenerated_final = _consume_final_review_regenerate(output, agents, meta)
+            if regenerated_final:
+                next_action = "generate_code"
+                transition_selected_from_resume = True
+                orchestrator_state.pop("next_action", None)
+                observations = list(state.get("observations", []))
+                observations.append(
+                    "orchestrator: received final-review regenerate request; routing back to generate_code"
+                )
+                state = {**state, "observations": observations}
+
+            output, agents, meta, approved_final = _consume_final_review_approval(output, agents, meta)
+            if approved_final:
+                next_action = "end"
+                transition_selected_from_resume = True
+                orchestrator_state.pop("next_action", None)
+                observations = list(state.get("observations", []))
+                observations.append("orchestrator: consumed final approval; routing to end")
+                state = {**state, "observations": observations}
 
     current_hash = _user_message_hash(state)
     if current_hash and transition_selected_from_resume and next_action in {"generate_code", "execute_code", "end"}:

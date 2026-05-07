@@ -229,6 +229,32 @@ def _consume_final_review_regenerate(
     return updated_output, updated_agents, updated_meta, True
 
 
+def _consume_final_review_cancel(
+    output: dict,
+    agents: dict,
+    meta: dict,
+) -> tuple[dict, dict, dict, bool]:
+    review = (agents.get("human_review") or {}) if isinstance(agents, dict) else {}
+    if review.get("final_decision") != "cancel":
+        return output, agents, meta, False
+
+    updated_output = dict(output)
+    updated_output.pop("generated_code", None)
+
+    updated_meta = dict(meta)
+    updated_meta.pop(MetaKeys.FINAL_APPROVED_CODE_HASH, None)
+    updated_meta.pop(MetaKeys.EXECUTION_TICKET_HASH, None)
+    updated_meta.pop(MetaKeys.ERROR_RECOVERY_ACTIVE, None)
+
+    updated_agents = dict(agents)
+    executor = dict((updated_agents.get("executor") or {}))
+    if executor:
+        executor["run_status"] = "idle"
+        updated_agents["executor"] = executor
+
+    return updated_output, updated_agents, updated_meta, True
+
+
 def _consume_before_run_approval(
     output: dict,
     agents: dict,
