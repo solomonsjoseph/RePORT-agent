@@ -348,6 +348,73 @@ def test_human_review_before_run_cancel_clears_live_code_state() -> None:
     assert updated["artifacts"]["conversation_events"][-1]["decision"] == "cancel"
 
 
+def test_cancelled_reviews_do_not_write_task_memory() -> None:
+    _install_stubs(decision="cancel")
+    for mod in (
+        "graph.nodes.human_review_before_run",
+        "graph.nodes.human_review_cancel",
+        "graph.state",
+        "graph.nodes.state_helpers",
+    ):
+        sys.modules.pop(mod, None)
+    module = importlib.import_module("graph.nodes.human_review_before_run")
+
+    completed_tasks = {"task_existing": {"task_id": "task_existing"}}
+    state = {
+        "messages": [],
+        "output": {"generated_code": "print(1)"},
+        "meta": {
+            "current_code_hash": "hash-1",
+            "last_user_message_hash": "u-cancel-memory",
+        },
+        "agents": {"executor": {"run_status": "pending"}},
+        "memory": {
+            "completed_tasks": completed_tasks,
+            "failed_tasks": {},
+            "task_order": ["task_existing"],
+            "last_task_id": "task_existing",
+            "last_task_id_by_kind": {},
+            "last_failed_task_id_by_kind": {},
+            "last_reference_resolution": None,
+            "pending_reference_clarification": None,
+        },
+    }
+
+    updated = module.human_review_before_run_node(state)
+
+    assert updated["memory"]["completed_tasks"] == completed_tasks
+    assert updated["memory"]["failed_tasks"] == {}
+
+
+def test_before_run_cancel_disables_before_run_readiness() -> None:
+    _install_stubs(decision="cancel")
+    for mod in (
+        "graph.nodes.human_review_before_run",
+        "graph.nodes.human_review_cancel",
+        "graph.nodes.node_registry",
+        "graph.state",
+        "graph.nodes.state_helpers",
+    ):
+        sys.modules.pop(mod, None)
+    module = importlib.import_module("graph.nodes.human_review_before_run")
+    registry = importlib.import_module("graph.nodes.node_registry")
+
+    state = {
+        "messages": [],
+        "output": {"generated_code": "print(1)"},
+        "meta": {
+            "current_code_hash": "hash-1",
+            "last_user_message_hash": "u-cancel-run-ready",
+        },
+        "agents": {"executor": {"run_status": "pending"}},
+    }
+
+    updated = module.human_review_before_run_node(state)
+    predicate = registry.NODE_REGISTRY_MAP["human_review_before_run"].is_ready
+
+    assert predicate(updated) is False
+
+
 def test_human_review_after_error_cancel_clears_retry_state_without_feedback_message() -> None:
     _install_stubs(decision="cancel", suggestion="try again anyway")
     for mod in (
@@ -432,16 +499,51 @@ def test_human_review_before_output_cancel_does_not_append_final_result() -> Non
     assert updated["artifacts"]["conversation_events"][-1]["decision"] == "cancel"
 
 
+def test_final_review_cancel_disables_final_review_readiness() -> None:
+    _install_stubs(decision="cancel")
+    for mod in (
+        "graph.nodes.human_review_before_output",
+        "graph.nodes.human_review_cancel",
+        "graph.nodes.node_registry",
+        "graph.state",
+        "graph.nodes.state_helpers",
+    ):
+        sys.modules.pop(mod, None)
+    module = importlib.import_module("graph.nodes.human_review_before_output")
+    registry = importlib.import_module("graph.nodes.node_registry")
+
+    state = {
+        "messages": [],
+        "output": {
+            "generated_code": "print(1)",
+            "text": "result text",
+        },
+        "meta": {
+            "current_code_hash": "hash-1",
+            "last_user_message_hash": "u-cancel-final-ready",
+        },
+        "agents": {"executor": {"run_status": "ok"}},
+        "artifacts": {"files": {}},
+    }
+
+    updated = module.human_review_before_output_node(state)
+    predicate = registry.NODE_REGISTRY_MAP["human_review_before_output"].is_ready
+
+    assert predicate(updated) is False
+
+
 def test_rag_db_column_review_cancel_clears_live_review_pointers() -> None:
     _install_stubs(decision="cancel", suggestion="ignore this")
     for mod in (
         "graph.nodes.human_review_rag_db_column_selection",
         "graph.nodes.human_review_cancel",
+        "graph.nodes.node_registry",
         "graph.state",
         "graph.nodes.state_helpers",
     ):
         sys.modules.pop(mod, None)
     module = importlib.import_module("graph.nodes.human_review_rag_db_column_selection")
+    registry = importlib.import_module("graph.nodes.node_registry")
 
     state = {
         "messages": [],
@@ -491,6 +593,8 @@ def test_rag_db_column_review_cancel_clears_live_review_pointers() -> None:
     assert rag_state["thread_status"] == "cancelled"
     assert rag_state["active_thread"] is False
     assert updated["artifacts"]["conversation_events"][-1]["decision"] == "cancel"
+    predicate = registry.NODE_REGISTRY_MAP["human_review_rag_db_column_selection"].is_ready
+    assert predicate(updated) is False
 
 
 def test_rag_db_sql_review_cancel_clears_sql_and_selection_pointers() -> None:
@@ -499,11 +603,13 @@ def test_rag_db_sql_review_cancel_clears_sql_and_selection_pointers() -> None:
         "graph.nodes.human_review_rag_db_sql_execution",
         "graph.nodes.human_review_cancel",
         "graph.nodes.rag_db_qa",
+        "graph.nodes.node_registry",
         "graph.state",
         "graph.nodes.state_helpers",
     ):
         sys.modules.pop(mod, None)
     module = importlib.import_module("graph.nodes.human_review_rag_db_sql_execution")
+    registry = importlib.import_module("graph.nodes.node_registry")
 
     state = {
         "messages": [],
@@ -571,6 +677,8 @@ def test_rag_db_sql_review_cancel_clears_sql_and_selection_pointers() -> None:
     assert rag_state["active_thread"] is False
     assert updated["artifacts"]["conversation_events"][-1]["review_kind"] == "rag_db_sql_execution"
     assert updated["artifacts"]["conversation_events"][-1]["decision"] == "cancel"
+    predicate = registry.NODE_REGISTRY_MAP["human_review_rag_db_sql_execution"].is_ready
+    assert predicate(updated) is False
 
 
 def test_consume_after_error_cancel_is_terminal_without_loop_guard_bypass() -> None:
