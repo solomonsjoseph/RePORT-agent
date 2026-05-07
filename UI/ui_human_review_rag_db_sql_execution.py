@@ -86,9 +86,15 @@ def ui_human_review_rag_db_sql_execution(app, config, payload, interrupt_id, que
 
         st.stop()
 
-    approve_col, regenerate_col = st.columns(2)
+    approve_col, regenerate_col, cancel_col = st.columns(3)
     approve = approve_col.button("✅ Approve & Run", key=f"{ui_type}_approve_{interrupt_id}")
     regenerate = regenerate_col.button("♻️ Regenerate", key=f"{ui_type}_regenerate_{interrupt_id}")
+    cancel = cancel_col.button("Cancel", key=f"{ui_type}_cancel_{interrupt_id}")
+
+    if cancel:
+        _dismiss_interrupt(interrupt_id)
+        queue_resume(interrupt_id, {"action": "cancel"})
+        st.rerun()
 
     if approve:
         if feedback:
