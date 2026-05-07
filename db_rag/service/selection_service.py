@@ -5,6 +5,7 @@ import os
 from typing import Any
 
 from utils.llm_response import coerce_text_content
+from utils.performance import timing_stage
 
 from .constraints import (
     _constraint_set_from_payload,
@@ -13,6 +14,7 @@ from .constraints import (
     _normalize_previous_selection,
 )
 from .models import ColumnSelectionCandidate, DbRagContext, DbRagIntent, FeedbackConstraintSet
+from .runtime_schema import duckdb_runtime_column_exists
 from ..config import resolve_db_rag_selection_model
 from .schema import _lookup_schema_column, _resolve_explicit_schema_mentions
 from ..generation import default_selection_id, parse_json_object
@@ -22,6 +24,13 @@ _OPENAI_RANKED_DEFAULT_RATIONALE = "Ranked from constrained retrieved candidates
 _RETRIEVAL_FALLBACK_RATIONALE = (
     "Structured ranking output was unavailable. Showing retrieved candidate tables and columns directly for human review."
 )
+
+
+def _fallback_reason(detail: str | None = None) -> str:
+    normalized = str(detail or "").strip()
+    if not normalized:
+        return _RETRIEVAL_FALLBACK_RATIONALE
+    return f"{_RETRIEVAL_FALLBACK_RATIONALE} Ranking detail: {normalized}"
 
 
 class _OpenAIStructuredColumnSelector:
@@ -45,17 +54,21 @@ class _OpenAIStructuredColumnSelector:
     ) -> dict[str, Any] | None:
         model = self._resolve_model()
         if not model:
-            return None
+            return {"columns": [], "rationale": "", "error": "DB_RAG_SELECTION_MODEL is empty."}
 
         api_key = str(os.getenv("DB_RAG_SELECTION_API_KEY", "") or "").strip()
         if not api_key:
             api_key = str(os.getenv("OPENAI_API_KEY", "") or "").strip()
         if not api_key:
-            return None
+            return {
+                "columns": [],
+                "rationale": "",
+                "error": "No DB_RAG_SELECTION_API_KEY or OPENAI_API_KEY is configured.",
+            }
 
         client_cls = self._resolve_client()
         if client_cls is None:
-            return None
+            return {"columns": [], "rationale": "", "error": "The openai package is not installed."}
 
         client_kwargs: dict[str, Any] = {"api_key": api_key}
         base_url = str(os.getenv("DB_RAG_SELECTION_BASE_URL", "") or "").strip()
@@ -63,8 +76,10 @@ class _OpenAIStructuredColumnSelector:
             client_kwargs["base_url"] = base_url
 
         candidate_lines = []
+        candidate_identifiers = []
         for entry in candidate_columns:
             identifier = f'{entry["table"]}||{entry["column"]}'
+            candidate_identifiers.append(identifier)
             description = str(entry.get("description") or "").strip()
             if description:
                 candidate_lines.append(f"- {identifier}: {description}")
@@ -73,50 +88,58 @@ class _OpenAIStructuredColumnSelector:
 
         try:
             client = client_cls(**client_kwargs)
-            response = client.chat.completions.create(
-                model=model,
-                response_format={
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": "db_rag_column_ranking",
-                        "strict": True,
-                        "schema": {
-                            "type": "object",
-                            "properties": {
-                                "columns": {
-                                    "type": "array",
-                                    "items": {"type": "string"},
+            with timing_stage("db_rag.selection.structured_rank", model=model, candidates=len(candidate_columns)):
+                response = client.chat.completions.create(
+                    model=model,
+                    response_format={
+                        "type": "json_schema",
+                        "json_schema": {
+                            "name": "db_rag_column_ranking",
+                            "strict": True,
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "columns": {
+                                        "type": "array",
+                                        "items": {
+                                            "type": "string",
+                                            "enum": candidate_identifiers,
+                                        },
+                                    },
+                                    "rationale": {"type": "string"},
                                 },
-                                "rationale": {"type": "string"},
+                                "required": ["columns", "rationale"],
+                                "additionalProperties": False,
                             },
-                            "required": ["columns", "rationale"],
-                            "additionalProperties": False,
                         },
                     },
-                },
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "Rank the provided RePORT database columns from most to least relevant for the question. "
-                            "Use only the exact identifiers from the candidate list. Return every ranked identifier once. "
-                            "Do not invent identifiers."
-                        ),
-                    },
-                    {
-                        "role": "user",
-                        "content": (
-                            f"Question:\n{question}\n\n"
-                            f"Candidate columns:\n{chr(10).join(candidate_lines) or 'none'}\n\n"
-                            f"Feedback history:\n{json.dumps(list(feedback_history or []), indent=2, sort_keys=True)}"
-                        ),
-                    },
-                ],
-            )
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": (
+                                "Rank the provided RePORT database columns from most to least relevant for the question. "
+                                "Use only the exact identifiers from the candidate list. Return every ranked identifier once. "
+                                "Do not invent identifiers."
+                            ),
+                        },
+                        {
+                            "role": "user",
+                            "content": (
+                                f"Question:\n{question}\n\n"
+                                f"Candidate columns:\n{chr(10).join(candidate_lines) or 'none'}\n\n"
+                                f"Feedback history:\n{json.dumps(list(feedback_history or []), indent=2, sort_keys=True)}"
+                            ),
+                        },
+                    ],
+                )
             content = coerce_text_content(getattr(response.choices[0].message, "content", ""))
             parsed = parse_json_object(content) or {}
-        except Exception:
-            return None
+        except Exception as exc:
+            return {
+                "columns": [],
+                "rationale": "",
+                "error": f"{type(exc).__name__}: {exc}",
+            }
 
         columns = parsed.get("columns")
         if not isinstance(columns, list):
@@ -124,6 +147,7 @@ class _OpenAIStructuredColumnSelector:
                 "columns": [],
                 "rationale": "",
                 "raw_model_output": content,
+                "error": "Structured ranking response did not contain a columns list.",
             }
         return {
             "columns": [str(value or "").strip() for value in columns if str(value or "").strip()],
@@ -148,30 +172,35 @@ class DbRagSelectionMixin:
 
         normalized_feedback_history = list(feedback_history or [])
         normalized_previous_selection = _normalize_previous_selection(previous_selection)
-        response = self.llm.invoke(
-            [
-                SystemMessage(
-                    content=(
-                        "You are grounding human review feedback for a RePORT DB-RAG column selection task. "
-                        "Map concept-level feedback onto exact schema table names and exact table.column strings "
-                        "using only the provided retrieved context and previous selection. "
-                        "Return JSON only with keys: "
-                        '{"goal_text": string, "required_tables": [string], "required_columns": [string], '
-                        '"excluded_tables": [string], "excluded_columns": [string]}.'
-                    )
-                ),
-                HumanMessage(
-                    content=(
-                        f"Question:\n{question}\n\n"
-                        f"Table context:\n{context.table_context or 'none'}\n\n"
-                        f"Column context:\n{context.column_context or 'none'}\n\n"
-                        f"Intent snapshot:\n{json.dumps(intent_snapshot or {}, indent=2, sort_keys=True)}\n\n"
-                        f"Feedback history:\n{json.dumps(normalized_feedback_history, indent=2, sort_keys=True)}\n\n"
-                        f"Previous selection candidate:\n{json.dumps(normalized_previous_selection, indent=2, sort_keys=True)}"
-                    )
-                ),
-            ]
-        )
+        with timing_stage(
+            "db_rag.selection.ground_feedback_constraints",
+            feedback_count=len(normalized_feedback_history),
+            has_previous_selection=bool(normalized_previous_selection),
+        ):
+            response = self.llm.invoke(
+                [
+                    SystemMessage(
+                        content=(
+                            "You are grounding human review feedback for a RePORT DB-RAG column selection task. "
+                            "Map concept-level feedback onto exact schema table names and exact table.column strings "
+                            "using only the provided retrieved context and previous selection. "
+                            "Return JSON only with keys: "
+                            '{"goal_text": string, "required_tables": [string], "required_columns": [string], '
+                            '"excluded_tables": [string], "excluded_columns": [string]}.'
+                        )
+                    ),
+                    HumanMessage(
+                        content=(
+                            f"Question:\n{question}\n\n"
+                            f"Table context:\n{context.table_context or 'none'}\n\n"
+                            f"Column context:\n{context.column_context or 'none'}\n\n"
+                            f"Intent snapshot:\n{json.dumps(intent_snapshot or {}, indent=2, sort_keys=True)}\n\n"
+                            f"Feedback history:\n{json.dumps(normalized_feedback_history, indent=2, sort_keys=True)}\n\n"
+                            f"Previous selection candidate:\n{json.dumps(normalized_previous_selection, indent=2, sort_keys=True)}"
+                        )
+                    ),
+                ]
+            )
         parsed = parse_json_object(coerce_text_content(getattr(response, "content", ""))) or {}
         return _constraint_set_from_payload(parsed)
 
@@ -221,13 +250,14 @@ class DbRagSelectionMixin:
         normalized_feedback_history = list(feedback_history or [])
         normalized_previous_selection = _normalize_previous_selection(previous_selection)
         base_constraints = _constraint_set_from_payload(intent_snapshot)
-        grounded_constraints = self.ground_feedback_constraints(
-            question,
-            context,
-            feedback_history=normalized_feedback_history,
-            previous_selection=previous_selection,
-            intent_snapshot=intent_snapshot,
-        )
+        with timing_stage("db_rag.selection.prepare_column_selection"):
+            grounded_constraints = self.ground_feedback_constraints(
+                question,
+                context,
+                feedback_history=normalized_feedback_history,
+                previous_selection=previous_selection,
+                intent_snapshot=intent_snapshot,
+            )
         constraints = _merge_constraint_sets(base_constraints, grounded_constraints)
         valid_tables = set(context.table_names)
         valid_columns = {(entry.table, entry.column) for entry in context.columns}
@@ -236,11 +266,13 @@ class DbRagSelectionMixin:
             column
             for column in explicit_schema_columns
             if _lookup_schema_column(column["table"], column["column"]) is not None
+            and duckdb_runtime_column_exists(column["table"], column["column"])
         ]
         constrained_previous_columns = [
             column
             for column in normalized_previous_selection.get("columns", [])
             if _lookup_schema_column(column["table"], column["column"]) is not None
+            and duckdb_runtime_column_exists(column["table"], column["column"])
         ]
         constrained_pool: list[dict[str, str]] = []
         seen_pairs: set[tuple[str, str]] = set()
@@ -253,6 +285,8 @@ class DbRagSelectionMixin:
                 continue
             qualified = f"{table}.{column}"
             if qualified in constraints.excluded_columns:
+                continue
+            if not duckdb_runtime_column_exists(table, column):
                 continue
             schema_entry = _lookup_schema_column(table, column)
             description = str((schema_entry or {}).get("description") or str(entry.text or "") or "").strip()
@@ -326,6 +360,7 @@ class DbRagSelectionMixin:
 
         ranked_ids = list((ranked or {}).get("columns") or [])
         raw_model_output = str((ranked or {}).get("raw_model_output") or "").strip()
+        ranking_error = str((ranked or {}).get("error") or "").strip()
         ranked_lookup = {
             f'{entry["table"]}||{entry["column"]}': dict(entry)
             for entry in constrained_pool
@@ -345,6 +380,11 @@ class DbRagSelectionMixin:
             validated_columns.append(entry)
             seen_ranked.add(pair)
 
+        if ranked_ids and not validated_columns and not ranking_error:
+            preview = ", ".join(ranked_ids[:5])
+            suffix = "..." if len(ranked_ids) > 5 else ""
+            ranking_error = f"Structured ranking returned identifiers outside the candidate list: {preview}{suffix}"
+
         if not validated_columns:
             candidate = ColumnSelectionCandidate(
                 selection_id=selection_id,
@@ -354,7 +394,7 @@ class DbRagSelectionMixin:
                 rationale=_RETRIEVAL_FALLBACK_RATIONALE,
                 feedback_history=normalized_feedback_history,
                 selection_source="retrieval_fallback",
-                fallback_reason=_RETRIEVAL_FALLBACK_RATIONALE,
+                fallback_reason=_fallback_reason(ranking_error),
                 raw_model_output=raw_model_output,
             )
             return _enforce_selection_constraints(candidate, context, constraints)

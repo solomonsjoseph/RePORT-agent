@@ -1,5 +1,9 @@
 import streamlit as st
 
+_RETRIEVAL_FALLBACK_NOTICE = (
+    "Structured ranking output was unavailable. Showing retrieved candidate tables and columns directly for human review."
+)
+
 
 def _dismiss_interrupt(interrupt_id):
     st.session_state["dismissed_interrupt_id"] = str(interrupt_id)
@@ -26,6 +30,16 @@ def _render_column_entry(column):
             parts.append(f"Samples: {sample_values}")
         return " - ".join(parts) if parts else str(column)
     return str(column)
+
+
+def _fallback_notice(rationale, fallback_reason):
+    rationale_text = str(rationale or "").strip()
+    fallback_text = str(fallback_reason or "").strip() or _RETRIEVAL_FALLBACK_NOTICE
+    if fallback_text == rationale_text:
+        return ""
+    if rationale_text and fallback_text.startswith(f"{rationale_text} "):
+        return fallback_text[len(rationale_text) :].strip()
+    return fallback_text
 
 
 def ui_human_review_rag_db_column_selection(app, config, payload, interrupt_id, queue_resume):
@@ -56,10 +70,9 @@ def ui_human_review_rag_db_column_selection(app, config, payload, interrupt_id, 
         st.markdown("**Rationale**")
         st.write(rationale)
     if selection_source == "retrieval_fallback":
-        st.info(
-            fallback_reason
-            or "Structured ranking was unavailable. Showing retrieved candidate tables and columns directly for review."
-        )
+        fallback_notice = _fallback_notice(rationale, fallback_reason)
+        if fallback_notice:
+            st.info(fallback_notice)
 
     if tables:
         st.markdown("**Selected tables**")

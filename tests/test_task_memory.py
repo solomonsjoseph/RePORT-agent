@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import re
+import sys
+from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from graph.memory import (
     ALLOWED_REFERENCE_LABELS,

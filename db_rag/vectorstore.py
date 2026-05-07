@@ -8,6 +8,7 @@ from urllib import error as urllib_error
 from urllib import request as urllib_request
 
 from dotenv import load_dotenv
+from utils.performance import timing_stage
 
 from .config import DEFAULT_OPENROUTER_BASE_URL, SUPPORTED_DB_RAG_RERANKER_MODELS
 
@@ -66,7 +67,13 @@ class OpenAIEmbeddingFunction:
 
     def _create_embedding_batch(self, batch: list[str]) -> list[list[float]]:
         if self._provider == "voyage":
-            response = self.client.embed(batch, model=self.model, input_type="document")
+            with timing_stage(
+                "db_rag.embedding",
+                provider=self._provider,
+                model=self.config_model,
+                batch_size=len(batch),
+            ):
+                response = self.client.embed(batch, model=self.model, input_type="document")
             embeddings = getattr(response, "embeddings", None)
             if embeddings:
                 return list(embeddings)
@@ -74,11 +81,17 @@ class OpenAIEmbeddingFunction:
             raise ValueError(f"No embedding data received for model {self.config_model}. Query preview: {preview!r}")
 
         for _attempt in range(self._MAX_EMPTY_DATA_RETRIES):
-            response = self.client.embeddings.create(
-                model=self.model,
-                input=batch,
-                **self._embedding_create_kwargs,
-            )
+            with timing_stage(
+                "db_rag.embedding",
+                provider=self._provider,
+                model=self.config_model,
+                batch_size=len(batch),
+            ):
+                response = self.client.embeddings.create(
+                    model=self.model,
+                    input=batch,
+                    **self._embedding_create_kwargs,
+                )
             data = getattr(response, "data", None)
             if data:
                 return [item.embedding for item in data]
@@ -143,7 +156,13 @@ class OpenAIReranker:
             return [0.0] * len(documents)
 
         if self._provider == "voyage":
-            response = self.client.rerank(query, documents, model=self.model, top_k=len(documents))
+            with timing_stage(
+                "db_rag.reranker.request",
+                provider=self._provider,
+                model=self.config_model,
+                documents=len(documents),
+            ):
+                response = self.client.rerank(query, documents, model=self.model, top_k=len(documents))
             scores = [0.0] * len(documents)
             for item in getattr(response, "results", []) or []:
                 index = getattr(item, "index", None)
@@ -168,8 +187,14 @@ class OpenAIReranker:
             method="POST",
         )
         try:
-            with urllib_request.urlopen(request, timeout=60) as response:
-                body = json.loads(response.read().decode("utf-8"))
+            with timing_stage(
+                "db_rag.reranker.request",
+                provider=self._provider,
+                model=self.config_model,
+                documents=len(documents),
+            ):
+                with urllib_request.urlopen(request, timeout=60) as response:
+                    body = json.loads(response.read().decode("utf-8"))
         except urllib_error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
             raise RuntimeError(f"OpenRouter rerank request failed for model {self.config_model}: {detail}") from exc

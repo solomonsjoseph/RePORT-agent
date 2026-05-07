@@ -19,12 +19,12 @@ def _raw_response_preview(content: str) -> str:
 def _parse_planner_response(
     content: str,
     available_actions: Iterable[str],
-) -> tuple[str, str, list[str], dict[str, str]]:
+) -> tuple[str, str, list[str], dict[str, object], dict[str, object]]:
     raw_content = content
     content = content.strip()
     available = set(available_actions)
     if not content:
-        return "end", "", [], {"parse_status": "empty_response"}
+        return "end", "", [], {"parse_status": "empty_response"}, {}
 
     try:
         payload = json.loads(content)
@@ -39,6 +39,7 @@ def _parse_planner_response(
                     "parse_status": "plain_action",
                     "raw_response_preview": _raw_response_preview(raw_content),
                 },
+                {},
             )
         return (
             "end",
@@ -48,6 +49,7 @@ def _parse_planner_response(
                 "parse_status": "invalid_json",
                 "raw_response_preview": _raw_response_preview(raw_content),
             },
+            {},
         )
 
     if not isinstance(payload, dict):
@@ -59,10 +61,11 @@ def _parse_planner_response(
                 "parse_status": "non_object_json",
                 "raw_response_preview": _raw_response_preview(raw_content),
             },
+            {},
         )
 
     action = payload.get("action", "")
-    thought = str(payload.get("thought", "") or "")
+    thought = str(payload.get("thought") or payload.get("route_reason") or "")
     parse_status = "ok"
 
     ranked_raw = payload.get("ranked_actions", [])
@@ -76,20 +79,29 @@ def _parse_planner_response(
                 break
 
     parsed_action = action if action in available else "end"
-    diagnostics: dict[str, str] = {"parse_status": parse_status}
+    diagnostics: dict[str, object] = {"parse_status": parse_status}
     if not thought:
         diagnostics["parse_status"] = "missing_thought"
     if action and action not in available:
         diagnostics["parse_status"] = "invalid_action"
         diagnostics["raw_response_preview"] = _raw_response_preview(raw_content)
-    return parsed_action, thought, ranked_actions, diagnostics
+    bindings = {
+        "route_reason": payload.get("route_reason"),
+        "referenced_task_id": payload.get("referenced_task_id"),
+        "relationship": payload.get("relationship"),
+        "dataset_id": payload.get("dataset_id"),
+        "confidence": payload.get("confidence"),
+        "needs_clarification": payload.get("needs_clarification"),
+        "clarification_question": payload.get("clarification_question"),
+    }
+    return parsed_action, thought, ranked_actions, diagnostics, bindings
 
 
 def llm_plan_next_action(
     state: AgentState,
     llm,
     available_actions: Iterable[str],
-) -> tuple[str, str, str]:
+) -> tuple[str, str, str, dict[str, object], dict[str, object]]:
     available_action_list = sorted(set(available_actions))
     planner_state = build_planner_runtime_state(state, available_action_list)
     masked_actions, mask_reasons = mask_actions(planner_state, available_action_list)
@@ -104,6 +116,9 @@ def llm_plan_next_action(
     planner_prompt = make_planner_prompt().format_prompt(
         actions=", ".join(masked_actions) if masked_actions else "none",
         environment_summary=planner_context["environment_summary"],
+        planner_environment=json.dumps(
+            planner_context["planner_environment"], default=str, ensure_ascii=False
+        ),
         planner_memory=json.dumps(
             planner_context["planner_memory"], default=str, ensure_ascii=False
         ),
@@ -124,7 +139,7 @@ def llm_plan_next_action(
         ),
     )
     planner_response = llm.invoke(planner_prompt.to_messages())
-    planner_action, thought, ranked_actions, diagnostics = _parse_planner_response(
+    planner_action, thought, ranked_actions, diagnostics, bindings = _parse_planner_response(
         coerce_text_content(getattr(planner_response, "content", "")),
         available_action_list,
     )
@@ -140,7 +155,7 @@ def llm_plan_next_action(
         suffix = f"ranked={masked_ranked_actions}"
         thought = f"{thought} {suffix}".strip() if thought else suffix
 
-    return final_action, thought, trace_action, diagnostics
+    return final_action, thought, trace_action, diagnostics, bindings
 
 
 def llm_select_next_action(
@@ -148,7 +163,7 @@ def llm_select_next_action(
     llm,
     available_actions: Iterable[str],
 ) -> tuple[str, str]:
-    final_action, thought, _planner_action, _diagnostics = llm_plan_next_action(
+    final_action, thought, _planner_action, _diagnostics, _bindings = llm_plan_next_action(
         state,
         llm,
         available_actions,

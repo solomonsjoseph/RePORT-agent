@@ -293,7 +293,7 @@ def clarification_node(state: AgentState, llm, context: str = "") -> AgentState:
 
     question = latest_user_message(state)
     pending_question = meta.get(MetaKeys.PENDING_QUESTION)
-    if kind in {"rag_db_extraction_opt_in", "generate_code_dataset_selection"}:
+    if kind in {"rag_db_extraction_opt_in", "db_rag_recoverable_error", "generate_code_dataset_selection"}:
         effective_question = question
     else:
         effective_question = (

@@ -16,8 +16,9 @@ def _install_langchain_message_stubs() -> None:
         messages = ModuleType("langchain_core.messages")
 
     class BaseMessage:
-        def __init__(self, content: str = "") -> None:
+        def __init__(self, content: str = "", additional_kwargs: dict | None = None) -> None:
             self.content = content
+            self.additional_kwargs = dict(additional_kwargs or {})
 
     class HumanMessage(BaseMessage):
         type = "human"
@@ -36,7 +37,7 @@ def _install_langchain_message_stubs() -> None:
 _install_langchain_message_stubs()
 
 from db_rag.service.models import DbRagColumnHit, DbRagContext, DbRagTableHit, FeedbackConstraintSet
-from db_rag.service.selection_service import DbRagSelectionMixin
+from db_rag.service.selection_service import DbRagSelectionMixin, _OpenAIStructuredColumnSelector
 
 
 class _SelectionService(DbRagSelectionMixin):
@@ -53,6 +54,31 @@ class _SelectionService(DbRagSelectionMixin):
         return self.ranked_output
 
 
+class _FakeStructuredSelectorClient:
+    last_request = None
+
+    def __init__(self, **kwargs) -> None:
+        self.kwargs = kwargs
+        self.chat = self
+        self.completions = self
+
+    def create(self, **kwargs):
+        _FakeStructuredSelectorClient.last_request = kwargs
+        response_content = (
+            '{"columns":["Form 2A||IC_AGE","Form 6||HIV_STATUS"],'
+            '"rationale":"Ranked exact identifiers."}'
+        )
+        message = type("Message", (), {"content": response_content})()
+        choice = type("Choice", (), {"message": message})()
+        return type("Response", (), {"choices": [choice]})()
+
+
+class _FakeOpenAISelector(_OpenAIStructuredColumnSelector):
+    @staticmethod
+    def _resolve_client():
+        return _FakeStructuredSelectorClient
+
+
 def _context() -> DbRagContext:
     return DbRagContext(
         tables=[
@@ -67,6 +93,25 @@ def _context() -> DbRagContext:
         table_context="Form 2A\n\nForm 6",
         column_context="IC_AGE\n\nIC_GENDER\n\nHIV_STATUS",
     )
+
+
+def test_openai_structured_selector_constrains_columns_to_exact_candidate_identifier_enum(monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    selector = _FakeOpenAISelector(resolve_model=lambda: "gpt-4o-mini")
+
+    result = selector.rank_columns(
+        question="Rank variables.",
+        candidate_columns=[
+            {"table": "Form 2A", "column": "IC_AGE", "description": "Age in years"},
+            {"table": "Form 6", "column": "HIV_STATUS", "description": "HIV status"},
+        ],
+        feedback_history=[],
+    )
+
+    schema = _FakeStructuredSelectorClient.last_request["response_format"]["json_schema"]["schema"]
+    item_schema = schema["properties"]["columns"]["items"]
+    assert item_schema["enum"] == ["Form 2A||IC_AGE", "Form 6||HIV_STATUS"]
+    assert result["columns"] == ["Form 2A||IC_AGE", "Form 6||HIV_STATUS"]
 
 
 def test_prepare_column_selection_skips_selector_for_tiny_candidate_pool() -> None:
@@ -135,4 +180,57 @@ def test_prepare_column_selection_falls_back_to_retrieval_pool_when_ranked_outpu
         "Form 6||HIV_STATUS",
     ]
     assert selection.fallback_reason
+    assert "Missing||BAD" in selection.fallback_reason
     assert selection.raw_model_output == '{"columns":["Missing||BAD"]}'
+
+
+def test_prepare_column_selection_includes_rank_failure_reason_in_fallback() -> None:
+    service = _SelectionService(
+        ranked_output={
+            "columns": [],
+            "rationale": "",
+            "raw_model_output": "",
+            "error": "selection ranking request failed: rate limit",
+        }
+    )
+
+    selection = service.prepare_column_selection("Study treatment failure.", _context())
+
+    assert selection.selection_source == "retrieval_fallback"
+    assert "rate limit" in selection.fallback_reason
+
+
+def test_prepare_column_selection_excludes_columns_missing_from_runtime_duckdb_schema(monkeypatch, tmp_path) -> None:
+    duckdb_path = tmp_path / "report.duckdb"
+    duckdb_path.touch()
+    table_name = "Form 12A - Index Case Follow-Up Visit Form"
+
+    class FakeDuckDbConnection:
+        def execute(self, sql: str):
+            if "FUA_VISTYPE" in sql:
+                raise Exception('Binder Error: Referenced column "FUA_VISTYPE" not found in FROM clause!')
+            return self
+
+        def close(self) -> None:
+            pass
+
+    fake_duckdb = ModuleType("duckdb")
+    fake_duckdb.connect = lambda *_args, **_kwargs: FakeDuckDbConnection()
+    monkeypatch.setattr("db_rag.service.runtime_schema.DUCKDB_PATH", duckdb_path, raising=False)
+    monkeypatch.setitem(sys.modules, "duckdb", fake_duckdb)
+
+    service = _SelectionService()
+    context = DbRagContext(
+        tables=[DbRagTableHit(table=table_name, text="Index case follow-up")],
+        columns=[
+            DbRagColumnHit(table=table_name, column="FUA_VISTYPE", text="Schema-only visit type"),
+            DbRagColumnHit(table=table_name, column="FUA_VISIT", text="Runtime visit type"),
+        ],
+        table_context=table_name,
+        column_context="FUA_VISTYPE\n\nFUA_VISIT",
+    )
+
+    selection = service.prepare_column_selection("Extract visit type observations.", context)
+
+    assert [column["column"] for column in selection.columns] == ["FUA_VISIT"]
+    assert selection.tables == [table_name]

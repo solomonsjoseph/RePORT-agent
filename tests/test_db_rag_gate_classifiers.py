@@ -212,6 +212,28 @@ def test_classify_sql_review_feedback_nonfinite_confidence_falls_back_to_unknown
     assert result == {"label": "unknown", "confidence": 0.0}
 
 
+def test_build_recoverable_error_clarification_returns_question(monkeypatch) -> None:
+    monkeypatch.setenv("DB_RAG_REPLY_CLASSIFIER_API_KEY", "test-key")
+    fake_openai = _install_fake_openai(
+        monkeypatch,
+        content='{"clarification_question":"Which join keys should I add before regenerating the DB-RAG selection?"}',
+    )
+
+    result = classifier.build_recoverable_error_clarification(
+        workflow="db_rag_sql_preparation",
+        error_payload={"type": "ValueError", "message": "SQL validation failed."},
+        context={"goal_text": "Extract diabetes observations.", "tables": ["Form 2A"], "columns": []},
+        resolve_model=lambda: "gpt-4o-mini",
+    )
+
+    assert result == {
+        "clarification_question": "Which join keys should I add before regenerating the DB-RAG selection?"
+    }
+    messages = fake_openai.last_create_kwargs["messages"]
+    assert "recoverable DB-RAG workflow error" in messages[0]["content"]
+    assert "db_rag_sql_preparation" in messages[1]["content"]
+
+
 def test_intent_mixin_exposes_extraction_gate_classifier() -> None:
     service = _IntentService()
     captured: dict[str, object] = {}
@@ -257,4 +279,27 @@ def test_intent_mixin_exposes_sql_review_feedback_classifier() -> None:
         intent_service.classifier.classify_sql_review_feedback = original
 
     assert result == {"label": "sql_only_revision", "confidence": 0.72}
+    assert captured["resolve_model"] is intent_service.resolve_db_rag_reply_classifier_model
+
+
+def test_intent_mixin_exposes_recoverable_error_clarification_builder() -> None:
+    service = _IntentService()
+    captured: dict[str, object] = {}
+
+    def _fake_builder(**kwargs):
+        captured.update(kwargs)
+        return {"clarification_question": "What should change?"}
+
+    original = intent_service.classifier.build_recoverable_error_clarification
+    intent_service.classifier.build_recoverable_error_clarification = _fake_builder
+    try:
+        result = service.build_recoverable_error_clarification(
+            workflow="db_rag_sql_preparation",
+            error_payload={"message": "bad sql"},
+            context={"goal_text": "Extract diabetes"},
+        )
+    finally:
+        intent_service.classifier.build_recoverable_error_clarification = original
+
+    assert result == {"clarification_question": "What should change?"}
     assert captured["resolve_model"] is intent_service.resolve_db_rag_reply_classifier_model

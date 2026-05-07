@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import json
+import sys
+from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from graph.memory import complete_task
 from graph.memory.reference_resolver import build_resolver_payload, resolve_reference_for_turn
@@ -562,6 +566,30 @@ def test_no_completed_tasks_returns_and_caches_new_task_without_llm() -> None:
         "user_message_hash": "hash-1",
         "result": first,
     }
+
+
+def test_resolver_prompt_lists_allowed_relationship_values() -> None:
+    state = _add_sql_task(_state())
+    task_id = state["memory"]["last_task_id"]
+    llm = StaticLLM(
+        {
+            "label": "resolved",
+            "task_id": task_id,
+            "relationship": "revision",
+            "intended_action": "fix_wrong_subset",
+            "confidence": "high",
+            "needs_reference": False,
+            "reason": "User says the completed extraction output was wrong.",
+        }
+    )
+
+    resolve_reference_for_turn(state, llm, "that output was wrong, use the right dataset", "hash-prompt")
+
+    prompt = llm.prompts[0]
+    assert "Allowed relationships: revision, rerun, explain, inspect_artifact, use_as_input, compare." in prompt
+    assert "Do not invent relationship names" in prompt
+    assert "follow_up_to_completed_task" in prompt
+    assert "use revision" in prompt
 
 
 def test_cached_resolution_reused_for_same_user_hash() -> None:

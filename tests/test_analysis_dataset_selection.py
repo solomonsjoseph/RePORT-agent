@@ -326,3 +326,57 @@ def test_clarification_node_passes_raw_dataset_selection_reply_back_to_generate_
                 sys.modules.pop(name, None)
             else:
                 sys.modules[name] = module
+
+
+def test_clarification_node_passes_raw_db_rag_recoverable_error_reply() -> None:
+    original = {
+        name: sys.modules.get(name)
+        for name in (
+            "graph.nodes.generate_code",
+            "graph.nodes.qa",
+            "graph.nodes.rag_db_qa",
+            "graph.nodes.tool_routing",
+            "graph.nodes.clarification",
+        )
+    }
+    try:
+        called = {}
+
+        generate_code_mod = ModuleType("graph.nodes.generate_code")
+        generate_code_mod.generate_code_node = lambda state, llm, context, question_override=None: state
+        qa_mod = ModuleType("graph.nodes.qa")
+        qa_mod.qa_node = lambda state, llm, context="", question_override=None: state
+        rag_mod = ModuleType("graph.nodes.rag_db_qa")
+
+        def _rag_db_qa_node(state, llm, provider="", service=None, reranker_model=None, question_override=None):
+            called["question_override"] = question_override
+            return state
+
+        rag_mod.rag_db_qa_node = _rag_db_qa_node
+        tool_routing_mod = ModuleType("graph.nodes.tool_routing")
+        tool_routing_mod.latest_user_message = lambda state: "Use SUBJID_PSEUDO as the join key."
+
+        sys.modules["graph.nodes.generate_code"] = generate_code_mod
+        sys.modules["graph.nodes.qa"] = qa_mod
+        sys.modules["graph.nodes.rag_db_qa"] = rag_mod
+        sys.modules["graph.nodes.tool_routing"] = tool_routing_mod
+        sys.modules.pop("graph.nodes.clarification", None)
+        module = importlib.import_module("graph.nodes.clarification")
+
+        state = {
+            "messages": [],
+            "meta": {
+                "clarification_kind": "db_rag_recoverable_error",
+                "clarification_return_node": "rag_db_qa",
+                "pending_question": "How should DB-RAG recover?",
+            },
+        }
+        module.clarification_node(state, SimpleNamespace(), context={"provider": "openai", "db_rag_service": object()})
+
+        assert called["question_override"] == "Use SUBJID_PSEUDO as the join key."
+    finally:
+        for name, module in original.items():
+            if module is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = module

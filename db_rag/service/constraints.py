@@ -5,6 +5,7 @@ from typing import Any
 from db_rag.generation import DB_RAG_CONTEXT_FALLBACK_RATIONALE, default_selection_id
 
 from .models import ColumnSelectionCandidate, DbRagContext, DbRagIntent, FeedbackConstraintSet
+from .runtime_schema import duckdb_runtime_column_exists
 from .schema import _lookup_schema_column
 
 
@@ -57,6 +58,8 @@ def _filter_and_inject_context_columns(
         schema_entry = _lookup_schema_column(table, column)
         if schema_entry is None:
             continue
+        if not duckdb_runtime_column_exists(table, column):
+            continue
         filtered.append({"table": table, "column": column, "text": schema_entry.get("description", "")})
         seen_pairs.add(pair)
 
@@ -86,6 +89,8 @@ def _enforce_selection_constraints(
         schema_entry = _lookup_schema_column(table, column)
         if (table, column) not in valid_columns and schema_entry is None:
             continue
+        if not duckdb_runtime_column_exists(table, column):
+            continue
         description = str(entry.get("description") or "").strip()
         if not description and schema_entry is not None:
             description = schema_entry["description"]
@@ -104,6 +109,8 @@ def _enforce_selection_constraints(
             continue
         schema_entry = _lookup_schema_column(table, column)
         if (table, column) not in valid_columns and schema_entry is None:
+            continue
+        if not duckdb_runtime_column_exists(table, column):
             continue
         description = schema_entry["description"] if schema_entry is not None else ""
         columns.append({"table": table, "column": column, "description": description})

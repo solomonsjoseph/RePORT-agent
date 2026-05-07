@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from utils.llm_response import coerce_text_content
+from utils.performance import timing_stage
 
 from .vectorstore import OpenAIReranker
 
@@ -20,18 +21,19 @@ def decompose_query(llm: Any, question: str) -> list[str]:
     from langchain_core.messages import HumanMessage, SystemMessage
 
     try:
-        response = llm.invoke(
-            [
-                SystemMessage(
-                    content=(
-                        "You are a query decomposer for a clinical database. Extract the distinct concepts "
-                        "from the question and return each as a short search phrase (2-5 words). "
-                        "One per line. No numbering, no explanation, no commentary."
-                    )
-                ),
-                HumanMessage(content=question),
-            ]
-        )
+        with timing_stage("db_rag.retrieval.decompose_query"):
+            response = llm.invoke(
+                [
+                    SystemMessage(
+                        content=(
+                            "You are a query decomposer for a clinical database. Extract the distinct concepts "
+                            "from the question and return each as a short search phrase (2-5 words). "
+                            "One per line. No numbering, no explanation, no commentary."
+                        )
+                    ),
+                    HumanMessage(content=question),
+                ]
+            )
     except Exception:
         return []
 
@@ -52,11 +54,12 @@ def retrieve_single_query(
     column_k: int = 12,
     debug: bool = False,
 ) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
-    table_result = table_collection.query(
-        query_texts=[query],
-        n_results=table_k,
-        include=["documents", "metadatas"],
-    )
+    with timing_stage("db_rag.retrieval.table_query", query_count=1, n_results=table_k):
+        table_result = table_collection.query(
+            query_texts=[query],
+            n_results=table_k,
+            include=["documents", "metadatas"],
+        )
     tables: list[dict[str, str]] = []
     for document, metadata in zip(table_result["documents"][0], table_result["metadatas"][0]):
         tables.append({"table": metadata["table"], "text": document})
@@ -66,11 +69,12 @@ def retrieve_single_query(
             print(f"  {entry['table']}")
 
     selected_tables = {entry["table"] for entry in tables}
-    column_result = column_collection.query(
-        query_texts=[query],
-        n_results=column_k,
-        include=["documents", "metadatas"],
-    )
+    with timing_stage("db_rag.retrieval.column_query", query_count=1, n_results=column_k):
+        column_result = column_collection.query(
+            query_texts=[query],
+            n_results=column_k,
+            include=["documents", "metadatas"],
+        )
     columns: list[dict[str, str]] = []
     for document, metadata in zip(column_result["documents"][0], column_result["metadatas"][0]):
         if metadata["table"] not in selected_tables:
@@ -100,8 +104,9 @@ def rerank_columns(
             print("\nReranking disabled, using ChromaDB ordering")
         return column_hits[:top_k]
 
-    reranker = OpenAIReranker(model=reranker_model)
-    scores = reranker.rerank(query, [hit["text"] for hit in column_hits])
+    with timing_stage("db_rag.retrieval.rerank_columns", model=reranker_model, documents=len(column_hits)):
+        reranker = OpenAIReranker(model=reranker_model)
+        scores = reranker.rerank(query, [hit["text"] for hit in column_hits])
     scored_hits = sorted(zip(scores, column_hits), key=lambda item: item[0], reverse=True)
 
     if debug:
@@ -201,11 +206,12 @@ def retrieve_context_records(
 
     merged_tables: dict[str, dict[str, str]] = {}
     for sub_query in sub_queries:
-        table_result = table_collection.query(
-            query_texts=[sub_query],
-            n_results=table_k,
-            include=["documents", "metadatas"],
-        )
+        with timing_stage("db_rag.retrieval.table_query", query_count=1, n_results=table_k):
+            table_result = table_collection.query(
+                query_texts=[sub_query],
+                n_results=table_k,
+                include=["documents", "metadatas"],
+            )
         for document, metadata in zip(table_result["documents"][0], table_result["metadatas"][0]):
             merged_tables.setdefault(metadata["table"], {"table": metadata["table"], "text": document})
 
@@ -221,11 +227,12 @@ def retrieve_context_records(
     merged_columns: dict[tuple[str, str], dict[str, str]] = {}
     column_to_subquery: dict[tuple[str, str], str] = {}
     for sub_query in sub_queries:
-        column_result = column_collection.query(
-            query_texts=[sub_query],
-            n_results=column_k,
-            include=["documents", "metadatas"],
-        )
+        with timing_stage("db_rag.retrieval.column_query", query_count=1, n_results=column_k):
+            column_result = column_collection.query(
+                query_texts=[sub_query],
+                n_results=column_k,
+                include=["documents", "metadatas"],
+            )
         for document, metadata in zip(column_result["documents"][0], column_result["metadatas"][0]):
             if metadata["table"] not in selected_tables:
                 continue

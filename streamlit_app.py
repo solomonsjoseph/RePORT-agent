@@ -602,6 +602,11 @@ def render_interactive_area() -> None:
                 st.write(serialize_display_history(build_display_history(state)))
             with st.expander("Semantic conversation events", expanded=False):
                 st.write(get_conversation_events(state))
+            db_rag_timing = dict((state.get("meta") or {}).get("db_rag_timing") or {})
+            timing_stages = list(db_rag_timing.get("stages") or [])
+            if timing_stages:
+                with st.expander("DB-RAG timing", expanded=False):
+                    st.dataframe(timing_stages, use_container_width=True)
         st.write("Next nodes:", snapshot.next)
         st.write("interrupts:", snapshot.interrupts)
         if interrupt_event:

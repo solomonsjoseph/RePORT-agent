@@ -355,6 +355,27 @@ def test_workflow_status_uses_pending_sql_candidate_artifact_pointer() -> None:
     }
 
 
+def test_workflow_status_uses_pending_db_rag_recoverable_error() -> None:
+    from graph.nodes.orchestrator.workflow_status import derive_workflow_status
+
+    state = _state()
+    state["meta"].pop("awaiting_user_clarification", None)
+    state["agents"]["rag_db_qa"]["pending_column_review_artifact_id"] = None
+    state["agents"]["rag_db_qa"]["pending_sql_candidate_artifact_id"] = None
+    state["agents"]["rag_db_qa"]["pending_recoverable_error"] = {
+        "status": "awaiting_reply",
+        "stage": "sql_preparation",
+    }
+
+    status = derive_workflow_status(state)
+
+    assert status == {
+        "milestone": "awaiting_rag_db_recoverable_error_clarification",
+        "completion_status": "blocked_waiting",
+        "blocker_signature": "waiting_for_rag_db_recoverable_error:sql_preparation",
+    }
+
+
 def test_workflow_status_surfaces_db_rag_review_error_after_missing_artifact() -> None:
     from graph.nodes.orchestrator.workflow_status import derive_workflow_status
 

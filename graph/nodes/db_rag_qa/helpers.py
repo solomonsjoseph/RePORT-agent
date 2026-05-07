@@ -15,6 +15,7 @@ from utils.dataset_artifacts import (
 from utils.message_window import window_messages
 
 from ...state import AgentState, MetaKeys
+from ...state_views import get_conversation_events
 from ...workflow_config import DB_RAG_RECENT_TURNS
 from ...conversation_events import (
     append_conversation_event,
@@ -359,11 +360,17 @@ def _reset_active_workflow_for_new_question(
 
 
 def _build_pending_extraction_opt_in(intent: dict[str, Any]) -> dict[str, Any]:
+    goal_text = str(intent["goal_text"] or "").strip()
+    prompt = (
+        f'For your request: "{goal_text}"\n\n{_EXTRACTION_OPT_IN_PROMPT}'
+        if goal_text
+        else _EXTRACTION_OPT_IN_PROMPT
+    )
     return {
         "status": "awaiting_reply",
-        "prompt": _EXTRACTION_OPT_IN_PROMPT,
+        "prompt": prompt,
         "intent_id": intent["intent_id"],
-        "goal_text": intent["goal_text"],
+        "goal_text": goal_text,
     }
 
 
@@ -994,6 +1001,27 @@ def _is_non_informative_followup(text: str) -> bool:
 
 
 def _render_db_rag_recent_turns(state: AgentState, question: str) -> str:
+    events = get_conversation_events(state)
+    if events:
+        lines: list[str] = []
+        for event in events[-(DB_RAG_RECENT_TURNS * 4):]:
+            event_type = str(event.get("type") or "")
+            text = str(event.get("text") or "").strip()
+            if not text:
+                continue
+            if event_type == "user":
+                speaker = "User"
+            elif event_type in {"assistant", "clarification"}:
+                speaker = "Assistant"
+            elif event_type == "review_decision":
+                speaker = "User review"
+            else:
+                continue
+            lines.append(f"{speaker}: {text}")
+        if lines:
+            transcript = "\n".join(lines)
+            return f"Latest user request:\n{question}\n\nRecent conversation:\n{transcript}"
+
     messages = list(state.get("messages", []))
     windowed = window_messages(messages, max_turns=DB_RAG_RECENT_TURNS)
     lines: list[str] = []

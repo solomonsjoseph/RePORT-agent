@@ -214,3 +214,65 @@ def classify_sql_review_feedback(
         allowed_labels={"sql_only_revision", "selection_revision", "unknown"},
         resolve_model=resolve_model,
     )
+
+
+def build_recoverable_error_clarification(
+    *,
+    workflow: str,
+    error_payload: dict[str, Any],
+    context: dict[str, Any],
+    resolve_model=resolve_db_rag_reply_classifier_model,
+) -> dict[str, str]:
+    model = resolve_model()
+    if not model:
+        return {}
+
+    api_key = str(os.getenv("DB_RAG_REPLY_CLASSIFIER_API_KEY", "") or "").strip()
+    if not api_key:
+        api_key = str(os.getenv("OPENAI_API_KEY", "") or "").strip()
+    if not api_key:
+        return {}
+
+    openai_client = _resolve_openai_client()
+    if openai_client is None:
+        return {}
+
+    client_kwargs: dict[str, Any] = {"api_key": api_key}
+    base_url = str(os.getenv("DB_RAG_REPLY_CLASSIFIER_BASE_URL", "") or "").strip()
+    if base_url:
+        client_kwargs["base_url"] = base_url
+
+    try:
+        client = openai_client(**client_kwargs)
+        response = client.chat.completions.create(
+            model=model,
+            response_format={"type": "json_object"},
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You convert a recoverable DB-RAG workflow error into one concise user clarification. "
+                        "Return JSON only with key clarification_question. "
+                        "Ask for the missing decision or constraint needed to continue; do not apologize, "
+                        "do not expose stack traces, and do not tell the user to restart."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"Workflow:\n{workflow}\n\n"
+                        f"Error payload:\n{json.dumps(error_payload, indent=2, sort_keys=True)}\n\n"
+                        f"DB-RAG context:\n{json.dumps(context, indent=2, sort_keys=True)}"
+                    ),
+                },
+            ],
+        )
+        content = coerce_text_content(getattr(response.choices[0].message, "content", ""))
+        parsed = parse_json_object(content) or {}
+    except Exception:
+        return {}
+
+    question = str(parsed.get("clarification_question") or "").strip()
+    if not question:
+        return {}
+    return {"clarification_question": question}

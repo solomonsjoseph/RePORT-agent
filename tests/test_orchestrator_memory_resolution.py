@@ -21,8 +21,9 @@ class _HumanMessage:
 class _AIMessage:
     type = "ai"
 
-    def __init__(self, content: str):
+    def __init__(self, content: str, additional_kwargs: dict | None = None):
         self.content = content
+        self.additional_kwargs = dict(additional_kwargs or {})
 
 
 class _FormattedPrompt:
@@ -63,15 +64,83 @@ class _FewShotChatMessagePromptTemplate:
 
 
 class _LLM:
-    def __init__(self, action: str = "qa"):
+    def __init__(self, action: str = "qa", payload: dict[str, Any] | None = None):
         self.action = action
+        self.payload = payload
         self.calls = []
 
     def invoke(self, messages):
         self.calls.append(messages)
+        if self.payload is not None:
+            return SimpleNamespace(content=json.dumps(self.payload))
+        auto_payload = self._auto_payload(messages)
+        if auto_payload is not None:
+            return SimpleNamespace(content=json.dumps(auto_payload))
         return SimpleNamespace(
             content=json.dumps({"action": self.action, "thought": "test planner fallback"})
         )
+
+    def _auto_payload(self, messages):
+        rendered = "\n".join(
+            str(item.get("content") if isinstance(item, dict) else item)
+            for item in messages
+        )
+        marker = "PlannerEnvironment:\n"
+        if marker not in rendered:
+            return None
+        if "Recent conversation turns:\nnone" in rendered:
+            return None
+        start = rendered.index(marker) + len(marker)
+        end_marker = "\n\nPlanner memory:"
+        end = rendered.find(end_marker, start)
+        if end == -1:
+            return None
+        try:
+            env = json.loads(rendered[start:end])
+        except json.JSONDecodeError:
+            return None
+
+        latest = str(env.get("latest_user_message") or "").casefold()
+        tasks = list(env.get("candidate_tasks") or [])
+        task = tasks[0] if tasks else {}
+        task_id = task.get("task_id")
+        dataset_id = task.get("dataset_id")
+
+        def payload(action, relationship=None, *, needs_clarification=False):
+            return {
+                "thought": "test semantic planner",
+                "action": action,
+                "route_reason": "test semantic planner",
+                "referenced_task_id": task_id if relationship else None,
+                "relationship": relationship,
+                "dataset_id": dataset_id if action == "generate_code" else None,
+                "confidence": 0.9,
+                "needs_clarification": needs_clarification,
+                "clarification_question": (
+                    "Which prior task did you mean?" if needs_clarification else None
+                ),
+                "ranked_actions": [action, "qa", "end"],
+            }
+
+        if "relationship between" in latest or "find out the relationship" in latest:
+            return payload("generate_code", "compare")
+        if "analyze that subset" in latest:
+            return payload("generate_code", "use_as_input")
+        if "what sql" in latest:
+            return payload("rag_db_qa", "inspect_artifact")
+        if "add gender" in latest:
+            return payload("rag_db_qa", "revision")
+        if "rerun that" in latest or "do that again" in latest:
+            if len(tasks) > 1:
+                return payload("qa", "rerun", needs_clarification=True)
+            return payload("rag_db_qa", "rerun")
+        if "explain that" in latest:
+            return payload("rag_db_qa", "explain")
+        if "compare that" in latest:
+            return payload("generate_code", "compare")
+        if "query the rag database" in latest:
+            return payload("rag_db_qa")
+        return None
 
 
 def _install_stubs() -> None:
@@ -382,9 +451,9 @@ def test_resolved_db_rag_inspect_artifact_routes_to_rag_db_qa(monkeypatch) -> No
     assert result["meta"][MetaKeys.RESOLVED_TASK_RELATIONSHIP] == "inspect_artifact"
 
 
-def test_resolved_db_rag_unsupported_sql_relationships_route_to_db_rag_for_error(monkeypatch) -> None:
+def test_db_rag_rerun_and_explain_relationships_route_to_db_rag(monkeypatch) -> None:
     node = _fresh_node_module()
-    for relationship in ("rerun", "explain", "compare"):
+    for relationship in ("rerun", "explain"):
         state = _state_with_sql_task(f"{relationship} that")
         task_id = _task_id(state)
         monkeypatch.setattr(
@@ -398,6 +467,95 @@ def test_resolved_db_rag_unsupported_sql_relationships_route_to_db_rag_for_error
         assert result["next_action"] == "rag_db_qa"
         assert result["meta"][MetaKeys.RESOLVED_TASK_ID] == task_id
         assert result["meta"][MetaKeys.RESOLVED_TASK_RELATIONSHIP] == relationship
+
+
+def test_db_rag_compare_relationship_routes_to_generate_code_with_dataset(monkeypatch) -> None:
+    node = _fresh_node_module()
+    state = _state_with_sql_task("compare that")
+    task_id = _task_id(state)
+    monkeypatch.setattr(
+        node,
+        "resolve_reference_for_turn",
+        _resolver("resolved", task_id=task_id, relationship="compare"),
+    )
+
+    result = node.orchestrator_node(state, _LLM(), ["rag_db_qa", "generate_code", "qa", "end"])
+
+    assert result["next_action"] == "generate_code"
+    assert result["meta"][MetaKeys.RESOLVED_TASK_ID] == task_id
+    assert result["meta"][MetaKeys.RESOLVED_TASK_RELATIONSHIP] == "compare"
+    assert result["meta"][MetaKeys.ANALYSIS_DATASET_ID] == "dataset-1"
+
+
+def test_statistical_followup_after_db_rag_subset_routes_to_generate_code_when_not_resolved(monkeypatch) -> None:
+    node = _fresh_node_module()
+    state = _state_with_sql_task(
+        "now help me to find out the relationship between gender and tb outcomes: bacterialogic cure vs relapse"
+    )
+    monkeypatch.setattr(
+        node,
+        "resolve_reference_for_turn",
+        _resolver("new_task", relationship=None),
+    )
+
+    result = node.orchestrator_node(state, _LLM(), ["rag_db_qa", "generate_code", "qa", "end"])
+
+    assert result["next_action"] == "generate_code"
+
+
+def test_statistical_followup_after_db_rag_subset_routes_to_generate_code_when_resolved_as_compare(monkeypatch) -> None:
+    node = _fresh_node_module()
+    state = _state_with_sql_task(
+        "now help me to find out the relationship between gender and tb outcomes: bacterialogic cure vs relapse"
+    )
+    task_id = _task_id(state)
+    monkeypatch.setattr(
+        node,
+        "resolve_reference_for_turn",
+        _resolver("resolved", task_id=task_id, relationship="compare"),
+    )
+
+    result = node.orchestrator_node(state, _LLM(), ["rag_db_qa", "generate_code", "qa", "end"])
+
+    assert result["next_action"] == "generate_code"
+    assert result["meta"][MetaKeys.ANALYSIS_DATASET_ID] == "dataset-1"
+
+
+def test_semantic_planner_binds_db_rag_subset_for_statistical_followup(monkeypatch) -> None:
+    node = _fresh_node_module()
+    state = _state_with_sql_task(
+        "now help me to find out the relationship between gender and tb outcomes: bacterialogic cure vs relapse"
+    )
+    task_id = _task_id(state)
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("semantic planner routing should not call memory resolver")
+
+    monkeypatch.setattr(node, "resolve_reference_for_turn", fail_if_called)
+    llm = _LLM(
+        payload={
+            "thought": "The user asks for analysis using an existing saved subset.",
+            "action": "generate_code",
+            "route_reason": "The saved DB-RAG subset already contains gender and tb_outcome.",
+            "referenced_task_id": task_id,
+            "relationship": "compare",
+            "dataset_id": "dataset-1",
+            "confidence": 0.93,
+            "needs_clarification": False,
+            "ranked_actions": ["generate_code", "rag_db_qa", "qa"],
+        }
+    )
+
+    result = node.orchestrator_node(state, llm, ["rag_db_qa", "generate_code", "qa", "end"])
+
+    assert result["next_action"] == "generate_code"
+    assert result["meta"][MetaKeys.ANALYSIS_DATASET_ID] == "dataset-1"
+    assert result["meta"][MetaKeys.RESOLVED_TASK_ID] == task_id
+    assert result["meta"][MetaKeys.RESOLVED_TASK_RELATIONSHIP] == "compare"
+    assert (
+        f"task_id={task_id} relationship=compare routed_node=generate_code"
+        in result["observations"]
+    )
 
 
 def test_fresh_resolved_meta_does_not_reroute_after_action_consumes_it(monkeypatch) -> None:
@@ -502,7 +660,7 @@ def test_new_task_resolution_falls_through_to_normal_policy(monkeypatch) -> None
 
     result = node.orchestrator_node(state, _LLM(), ["rag_db_qa", "generate_code", "qa", "end"])
 
-    assert len(resolver.calls) == 1
+    assert len(resolver.calls) == 0
     assert result["next_action"] == "rag_db_qa"
     assert MetaKeys.RESOLVED_TASK_ID not in result["meta"]
     assert MetaKeys.RESOLVED_TASK_RELATIONSHIP not in result["meta"]
@@ -521,7 +679,7 @@ def test_unknown_without_reference_need_clears_meta_and_falls_through(monkeypatc
 
     result = node.orchestrator_node(state, _LLM(), ["rag_db_qa", "generate_code", "qa", "end"])
 
-    assert len(resolver.calls) == 1
+    assert len(resolver.calls) == 0
     assert result["next_action"] == "rag_db_qa"
     assert MetaKeys.RESOLVED_TASK_ID not in result["meta"]
     assert MetaKeys.RESOLVED_TASK_KIND not in result["meta"]
@@ -568,7 +726,7 @@ def test_ambiguous_reference_routes_to_memory_clarification(monkeypatch) -> None
 
 def test_memory_clarification_route_survives_stale_recurrence_state(monkeypatch) -> None:
     node = _fresh_node_module()
-    state = _state_with_sql_task("rerun that")
+    state = _state_with_two_sql_tasks("rerun that")
     state["meta"][MetaKeys.STAGNATION_COUNT] = 4
     resolver = _resolver("ambiguous")
     monkeypatch.setattr(node, "resolve_reference_for_turn", resolver)
@@ -581,7 +739,7 @@ def test_memory_clarification_route_survives_stale_recurrence_state(monkeypatch)
 
 def test_memory_clarification_appends_active_clarification_event(monkeypatch) -> None:
     node = _fresh_node_module()
-    state = _state_with_sql_task("rerun that")
+    state = _state_with_two_sql_tasks("rerun that")
     resolver = _resolver("ambiguous")
     monkeypatch.setattr(node, "resolve_reference_for_turn", resolver)
 
@@ -599,7 +757,7 @@ def test_memory_clarification_appends_active_clarification_event(monkeypatch) ->
 
 def test_unknown_with_reference_need_routes_to_memory_clarification(monkeypatch) -> None:
     node = _fresh_node_module()
-    state = _state_with_sql_task("do that again")
+    state = _state_with_two_sql_tasks("do that again")
     resolver = _resolver("unknown", needs_reference=True)
     monkeypatch.setattr(node, "resolve_reference_for_turn", resolver)
 
@@ -894,5 +1052,5 @@ def test_orchestrator_memory_clarification_pending_preserves_resolver_relationsh
     result = node.orchestrator_node(state, _LLM(), ["clarification", "rag_db_qa", "qa", "end"])
 
     pending = result["memory"]["pending_reference_clarification"]
-    assert pending["relationship"] == "revision"
-    assert pending["result"]["relationship"] == "revision"
+    assert pending["relationship"] == "rerun"
+    assert pending["result"]["relationship"] == "rerun"

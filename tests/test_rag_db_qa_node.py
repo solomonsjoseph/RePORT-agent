@@ -75,6 +75,8 @@ def _ensure_langchain_core_stubs() -> None:
 
 _ensure_langchain_core_stubs()
 
+from db_rag.service.errors import DbRagUnanswerableError
+from graph.nodes.db_rag_qa.helpers import _render_db_rag_recent_turns
 from graph.nodes.db_rag_qa.node import rag_db_qa_node
 
 _EXTRACTION_PROMPT = (
@@ -163,6 +165,13 @@ class _Service:
             status="prepared",
         )
 
+    def build_recoverable_error_clarification(self, *, workflow: str, error_payload, context):
+        del error_payload, context
+        self.calls.append(("build_recoverable_error_clarification", workflow))
+        return {
+            "clarification_question": "Please clarify how to revise the DB-RAG selection so SQL can be generated."
+        }
+
     def classify_extraction_gate_message(
         self,
         *,
@@ -220,9 +229,10 @@ def _state(message: str) -> dict:
 
 
 def _expected_extraction_opt_in(*, intent_id: str, goal_text: str) -> dict[str, str]:
+    prompt = f'For your request: "{goal_text}"\n\n{_EXTRACTION_PROMPT}'
     return {
         "status": "awaiting_reply",
-        "prompt": _EXTRACTION_PROMPT,
+        "prompt": prompt,
         "intent_id": intent_id,
         "goal_text": goal_text,
     }
@@ -776,11 +786,79 @@ def test_metadata_question_emits_clarification_event_and_no_selection_artifact()
 
     events = updated["artifacts"]["conversation_events"]
     assert events[-1]["type"] == "clarification"
-    assert events[-1]["text"] == _EXTRACTION_PROMPT
+    assert events[-1]["text"] == _expected_extraction_opt_in(
+        intent_id="intent:What tables contain age?",
+        goal_text="What tables contain age?",
+    )["prompt"]
     assert not any(
         artifact["kind"] == "db_rag_column_selection"
         for artifact in updated["artifacts"]["files"].values()
     )
+
+
+def test_metadata_question_stores_targeted_clarification_prompt_in_meta() -> None:
+    service = _Service()
+
+    updated = rag_db_qa_node(
+        _state("query my database, what variables related to tb outcome, hiv status, and diabetes status"),
+        llm=None,
+        provider="openai",
+        service=service,
+    )
+
+    expected_prompt = _expected_extraction_opt_in(
+        intent_id=(
+            "intent:query my database, what variables related to tb outcome, hiv status, and diabetes status"
+        ),
+        goal_text="query my database, what variables related to tb outcome, hiv status, and diabetes status",
+    )["prompt"]
+    assert expected_prompt in updated["output"]["qa_response"]
+    assert updated["meta"]["pending_question"] == expected_prompt
+    assert updated["agents"]["rag_db_qa"]["pending_extraction_opt_in"]["prompt"] == expected_prompt
+
+
+def test_db_rag_recent_turns_prefers_semantic_events_over_raw_messages() -> None:
+    state = _state("yes")
+    state["messages"].append(type(state["messages"][0])("stale raw message should not drive routing"))
+    state["artifacts"]["conversation_events"] = [
+        {
+            "event_id": "e1",
+            "seq": 1,
+            "created_at": "2026-05-01T00:00:00Z",
+            "type": "user",
+            "actor": "user",
+            "actor_role": "user",
+            "user_turn_hash": "u1",
+            "text": "query my database, what variables related to tb outcome, hiv status, and diabetes status",
+        },
+        {
+            "event_id": "e2",
+            "seq": 2,
+            "created_at": "2026-05-01T00:00:01Z",
+            "type": "clarification",
+            "actor": "rag_db_qa",
+            "actor_role": "assistant",
+            "user_turn_hash": "u1",
+            "text": 'For your request: "query my database, what variables related to tb outcome, hiv status, and diabetes status"',
+        },
+        {
+            "event_id": "e3",
+            "seq": 3,
+            "created_at": "2026-05-01T00:00:02Z",
+            "type": "review_decision",
+            "actor": "human_review_rag_db_column_selection",
+            "actor_role": "review",
+            "user_turn_hash": "u1",
+            "review_kind": "rag_db_column_selection",
+            "decision": "regenerate",
+            "text": "Use SUBJID_PSEUDO or FID_PSEUDO as join key.",
+        },
+    ]
+
+    transcript = _render_db_rag_recent_turns(state, "yes")
+
+    assert "Use SUBJID_PSEUDO or FID_PSEUDO as join key." in transcript
+    assert "stale raw message should not drive routing" not in transcript
 
 
 def test_query_word_only_does_not_force_extraction_flow() -> None:
@@ -829,6 +907,23 @@ def test_explicit_extraction_question_opens_column_review_without_opt_in() -> No
     events = updated["artifacts"]["conversation_events"]
     assert events[-1]["type"] == "review_request"
     assert events[-1]["artifact_id"] == rag_state["pending_column_review_artifact_id"]
+
+
+def test_rag_db_node_records_stage_timings() -> None:
+    service = _Service()
+
+    updated = rag_db_qa_node(
+        _state("Generate the SQL to subset index cases with diabetes."),
+        llm=None,
+        provider="openai",
+        service=service,
+    )
+
+    timing = updated["meta"]["db_rag_timing"]
+    stages = [record["stage"] for record in timing["stages"]]
+    assert timing["node"] == "rag_db_qa"
+    assert "rag_db_qa.total" in stages
+    assert all(record["elapsed_ms"] >= 0 for record in timing["stages"])
 
 
 def test_resolved_goal_text_is_preserved_separately_from_source_question() -> None:
@@ -954,6 +1049,73 @@ def test_approved_selection_pointer_resumes_sql_preparation_without_pending_revi
     assert events[-2]["artifact_id"] == rag_state["pending_sql_candidate_artifact_id"]
     assert events[-1]["type"] == "review_request"
     assert events[-1]["artifact_id"] == rag_state["pending_sql_candidate_artifact_id"]
+
+
+def test_missing_join_keys_reopens_column_review_instead_of_erroring() -> None:
+    service = _Service()
+
+    def fail_with_join_key_preflight(question: str, selection):
+        del selection
+        service.calls.append(("prepare_sql_candidate", question))
+        raise DbRagUnanswerableError(
+            "Multi-table extraction requires an approved join key column for every selected source table "
+            "before SQL generation. Missing approved subject/family ID join keys for: Form 2A, Form 5. "
+            "Include approved SUBJID or FID columns in the column selection, or use a single-table extraction."
+        )
+
+    service.prepare_sql_candidate = fail_with_join_key_preflight
+    state = _state("Continue")
+    state["artifacts"]["files"]["selection-artifact"] = {
+        "artifact_id": "selection-artifact",
+        "created_at": "2026-05-01T00:00:00+00:00",
+        "kind": "db_rag_column_selection",
+        "producer": "rag_db_qa",
+        "mime": "application/json",
+        "summary": "Approved DB-RAG column selection.",
+        "content": {
+            "selection_id": "sel-1",
+            "source_question": "Extract observations across forms.",
+            "goal_text": "Extract observations across forms.",
+            "intent_snapshot": {"intent_id": "intent:sql"},
+            "retrieval_summary": {"tables": ["Form 2A", "Form 5"], "columns": ["IC_DMDX", "CBC_HGAPCT"]},
+            "tables": ["Form 2A", "Form 5"],
+            "columns": [
+                {"table": "Form 2A", "column": "IC_DMDX", "description": "Diabetes status"},
+                {"table": "Form 5", "column": "CBC_HGAPCT", "description": "HbA1C"},
+            ],
+            "rationale": "Needed for extraction",
+            "feedback_history": [{"action": "approve", "feedback": "looks right"}],
+            "status": "approved",
+        },
+    }
+    state["agents"]["rag_db_qa"] = {
+        "active_intent": {
+            "intent_id": "intent:sql",
+            "source_question": "Extract observations across forms.",
+            "goal_text": "Extract observations across forms.",
+            "mode": "extraction",
+            "status": "active",
+        },
+        "approved_column_selection_artifact_id": "selection-artifact",
+        "pending_column_review_artifact_id": None,
+        "pending_sql_candidate_artifact_id": None,
+    }
+
+    updated = rag_db_qa_node(state, llm=None, provider="openai", service=service)
+
+    rag_state = updated["agents"]["rag_db_qa"]
+    reopened = updated["artifacts"]["files"]["selection-artifact"]["content"]
+    assert rag_state["thread_status"] == "awaiting_column_review"
+    assert rag_state["pending_column_review_artifact_id"] == "selection-artifact"
+    assert rag_state["approved_column_selection_artifact_id"] is None
+    assert rag_state["pending_sql_candidate_artifact_id"] is None
+    assert updated["output"].get("error") is None
+    assert "join-key clarification" in updated["output"]["qa_response"]
+    assert "SUBJID or FID" in updated["output"]["qa_response"]
+    assert "Please review the proposed column selection in the panel below." in updated["output"]["qa_response"]
+    assert reopened["status"] == "needs_revision"
+    assert reopened["feedback_history"][-1]["action"] == "sql_preflight_missing_join_keys"
+    assert "Include approved SUBJID or FID columns" in reopened["feedback_history"][-1]["feedback"]
 
 
 def test_pending_column_review_artifact_reprompts_instead_of_erroring() -> None:
@@ -1092,9 +1254,8 @@ def test_pending_extraction_boundary_unknown_reprompts_without_pending_reply_cla
         goal_text="Which forms contain age?",
     )
     assert rag_state["thread_status"] == "awaiting_extraction_opt_in"
-    assert updated["output"]["qa_response"] == (
-        "Please reply with 'yes' to proceed with table/column selection for extraction, or 'no' to skip it."
-    )
+    assert "Which forms contain age?" in updated["output"]["qa_response"]
+    assert "Please reply with 'yes'" in updated["output"]["qa_response"]
 
 
 def test_pending_extraction_without_service_classifiers_reprompts_conservatively() -> None:
@@ -1123,9 +1284,8 @@ def test_pending_extraction_without_service_classifiers_reprompts_conservatively
         goal_text="Which forms contain age?",
     )
     assert rag_state["thread_status"] == "awaiting_extraction_opt_in"
-    assert updated["output"]["qa_response"] == (
-        "Please reply with 'yes' to proceed with table/column selection for extraction, or 'no' to skip it."
-    )
+    assert "Which forms contain age?" in updated["output"]["qa_response"]
+    assert "Please reply with 'yes'" in updated["output"]["qa_response"]
 
 
 def test_active_routing_ignores_legacy_pending_sql_candidate_without_pointer() -> None:
@@ -1218,7 +1378,9 @@ def test_active_routing_ignores_legacy_approved_selection_without_pointer() -> N
     assert "Metadata answer for: What tables contain age?" in updated["output"]["qa_response"]
 
 
-def test_sql_preparation_failure_clears_approved_selection_resume_pointer() -> None:
+def test_sql_preparation_failure_asks_recoverable_clarification_instead_of_erroring() -> None:
+    from graph.state import MetaKeys
+
     service = _Service()
     service.sql_error_message = "bad sql generation"
     state = _state("continue")
@@ -1256,10 +1418,76 @@ def test_sql_preparation_failure_clears_approved_selection_resume_pointer() -> N
     updated = rag_db_qa_node(state, llm=None, provider="openai", service=service)
 
     rag_state = updated["agents"]["rag_db_qa"]
-    assert rag_state["thread_status"] == "error"
-    assert rag_state["approved_column_selection_artifact_id"] is None
+    assert ("build_recoverable_error_clarification", "db_rag_sql_preparation") in service.calls
+    assert rag_state["thread_status"] == "awaiting_recoverable_error_clarification"
+    assert rag_state["approved_column_selection_artifact_id"] == "sel-art-1"
     assert rag_state["pending_sql_candidate_artifact_id"] is None
-    assert updated["output"]["error"]["selection_artifact_id"] == "sel-art-1"
+    assert rag_state["pending_recoverable_error"]["status"] == "awaiting_reply"
+    assert rag_state["pending_recoverable_error"]["selection_artifact_id"] == "sel-art-1"
+    assert updated["output"].get("error") is None
+    assert updated["meta"][MetaKeys.AWAITING_USER_CLARIFICATION] is True
+    assert updated["meta"][MetaKeys.CLARIFICATION_KIND] == "db_rag_recoverable_error"
+    assert updated["meta"][MetaKeys.CLARIFICATION_RETURN_NODE] == "rag_db_qa"
+    assert "Please clarify how to revise" in updated["output"]["qa_response"]
+
+
+def test_recoverable_sql_preparation_reply_reopens_column_review_with_feedback() -> None:
+    service = _Service()
+    state = _state("Use SUBJID_PSEUDO as the join key.")
+    state["agents"]["rag_db_qa"] = {
+        "active_intent": {
+            "intent_id": "intent:sql",
+            "source_question": "Generate the SQL to subset index cases with diabetes.",
+            "goal_text": "Generate the SQL to subset index cases with diabetes.",
+            "mode": "extraction",
+            "status": "active",
+        },
+        "approved_column_selection_artifact_id": "sel-art-1",
+        "pending_recoverable_error": {
+            "status": "awaiting_reply",
+            "stage": "sql_preparation",
+            "selection_artifact_id": "sel-art-1",
+            "error_payload": {
+                "category": "db_rag_sql",
+                "type": "RuntimeError",
+                "message": "bad sql generation",
+                "selection_artifact_id": "sel-art-1",
+            },
+            "prompt": "Please clarify how to revise the DB-RAG selection so SQL can be generated.",
+        },
+    }
+    state["artifacts"]["files"]["sel-art-1"] = {
+        "artifact_id": "sel-art-1",
+        "created_at": "2026-05-01T00:00:00+00:00",
+        "kind": "db_rag_column_selection",
+        "producer": "rag_db_qa",
+        "mime": "application/json",
+        "summary": "Approved selection",
+        "content": {
+            "selection_id": "sel-1",
+            "source_question": "Generate the SQL to subset index cases with diabetes.",
+            "goal_text": "Generate the SQL to subset index cases with diabetes.",
+            "intent_snapshot": {"intent_id": "intent:sql"},
+            "retrieval_summary": {"tables": ["Form 2A"], "columns": ["IC_AGE"]},
+            "tables": ["Form 2A"],
+            "columns": [{"table": "Form 2A", "column": "IC_AGE", "description": "Age in years"}],
+            "rationale": "Needed for extraction",
+            "feedback_history": [],
+            "status": "approved",
+        },
+    }
+
+    updated = rag_db_qa_node(state, llm=None, provider="openai", service=service)
+
+    rag_state = updated["agents"]["rag_db_qa"]
+    assert rag_state.get("pending_recoverable_error") is None
+    assert rag_state["thread_status"] == "awaiting_column_review"
+    assert rag_state["pending_column_review_artifact_id"]
+    assert not rag_state.get("approved_column_selection_artifact_id")
+    assert ("prepare_column_selection", "Generate the SQL to subset index cases with diabetes.") in service.calls
+    reopened = rag_state["pending_column_review"]
+    assert reopened["feedback_history"][-1]["action"] == "sql_preparation_recovery_clarification"
+    assert "Use SUBJID_PSEUDO as the join key." in reopened["feedback_history"][-1]["feedback"]
 
 
 def test_missing_pending_sql_artifact_clears_pointer_and_legacy_mirror() -> None:

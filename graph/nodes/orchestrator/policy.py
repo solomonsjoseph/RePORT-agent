@@ -95,6 +95,11 @@ def _is_dataset_analysis_request(state: AgentState) -> bool:
         "compute",
         "run",
         "model",
+        "relationship",
+        "association",
+        "associat",
+        "correlat",
+        "find out",
     )
     analysis_domain_markers = (
         "survival analysis",
@@ -109,6 +114,14 @@ def _is_dataset_analysis_request(state: AgentState) -> bool:
         "csv",
         "cohort",
         "schema",
+        "outcome",
+        "tb outcome",
+        "gender",
+        "sex",
+        "bacteriologic",
+        "bacterialogic",
+        "relapse",
+        "cure",
     )
 
     return any(marker in latest for marker in action_markers) and any(

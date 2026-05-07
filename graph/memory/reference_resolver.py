@@ -23,7 +23,11 @@ RESOLVER_INSTRUCTIONS = (
     "Classify whether the latest user message references one completed task.\n"
     "Use only the task cards provided.\n"
     "Return JSON with label, task_id, relationship, intended_action, confidence, needs_reference, reason.\n"
-    "Allowed labels: resolved, new_task, ambiguous, unknown."
+    "Allowed labels: resolved, new_task, ambiguous, unknown.\n"
+    "Allowed relationships: revision, rerun, explain, inspect_artifact, use_as_input, compare.\n"
+    "Do not invent relationship names such as follow_up_to_completed_task.\n"
+    "If the user says a completed result is wrong, incomplete, needs different fields, "
+    "or should use the right dataset, use revision."
 )
 
 

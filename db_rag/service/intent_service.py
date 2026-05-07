@@ -4,6 +4,7 @@ import json
 from typing import Any
 
 from utils.llm_response import coerce_text_content
+from utils.performance import timing_stage
 
 from . import classifier
 from .models import DbRagContext, DbRagIntent, DbRagQaAnswer
@@ -64,6 +65,20 @@ class DbRagIntentMixin:
             resolve_model=resolve_db_rag_reply_classifier_model,
         )
 
+    def build_recoverable_error_clarification(
+        self,
+        *,
+        workflow: str,
+        error_payload: dict[str, Any],
+        context: dict[str, Any],
+    ) -> dict[str, str]:
+        return classifier.build_recoverable_error_clarification(
+            workflow=workflow,
+            error_payload=error_payload,
+            context=context,
+            resolve_model=resolve_db_rag_reply_classifier_model,
+        )
+
     def answer_question(self, question: str) -> dict[str, Any]:
         from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -99,31 +114,32 @@ class DbRagIntentMixin:
     def answer_from_context(self, question: str, context: DbRagContext) -> DbRagQaAnswer:
         from langchain_core.messages import HumanMessage, SystemMessage
 
-        response = self.llm.invoke(
-            [
-                SystemMessage(
-                    content=(
-                        "You are classifying whether a RePORT database question can be answered from retrieved "
-                        "metadata and schema context alone.\n"
-                        "Use the retrieved table and column descriptions to answer overview, schema, variable, and "
-                        "other metadata questions directly.\n"
-                        "Mark needs_sql true when the user asks for row-level records, subsets, counts, filters, "
-                        "aggregations, or any other request that depends on actual data values rather than schema.\n"
-                        "Return only a JSON object with exactly these keys: "
-                        '{"answer": string, "needs_sql": boolean, "rationale": string}.\n'
-                        "If the request can be answered from metadata/schema context, set needs_sql to false.\n"
-                        "If the request needs SQL for an exact answer, set needs_sql to true and explain why in rationale."
-                    )
-                ),
-                HumanMessage(
-                    content=(
-                        f"Question:\n{question}\n\n"
-                        f"Table context:\n{context.table_context or 'none'}\n\n"
-                        f"Column context:\n{context.column_context or 'none'}"
-                    )
-                ),
-            ]
-        )
+        with timing_stage("db_rag.intent.answer_from_context"):
+            response = self.llm.invoke(
+                [
+                    SystemMessage(
+                        content=(
+                            "You are classifying whether a RePORT database question can be answered from retrieved "
+                            "metadata and schema context alone.\n"
+                            "Use the retrieved table and column descriptions to answer overview, schema, variable, and "
+                            "other metadata questions directly.\n"
+                            "Mark needs_sql true when the user asks for row-level records, subsets, counts, filters, "
+                            "aggregations, or any other request that depends on actual data values rather than schema.\n"
+                            "Return only a JSON object with exactly these keys: "
+                            '{"answer": string, "needs_sql": boolean, "rationale": string}.\n'
+                            "If the request can be answered from metadata/schema context, set needs_sql to false.\n"
+                            "If the request needs SQL for an exact answer, set needs_sql to true and explain why in rationale."
+                        )
+                    ),
+                    HumanMessage(
+                        content=(
+                            f"Question:\n{question}\n\n"
+                            f"Table context:\n{context.table_context or 'none'}\n\n"
+                            f"Column context:\n{context.column_context or 'none'}"
+                        )
+                    ),
+                ]
+            )
         parsed = parse_json_object(coerce_text_content(getattr(response, "content", "")))
         needs_sql_value = parsed.get("needs_sql")
         if not parsed or not isinstance(needs_sql_value, bool):
@@ -153,24 +169,25 @@ class DbRagIntentMixin:
     ) -> DbRagIntent:
         from langchain_core.messages import HumanMessage, SystemMessage
 
-        response = self.llm.invoke(
-            [
-                SystemMessage(
-                    content=(
-                        "You are normalizing a RePORT DB-RAG request into a structured intent. "
-                        "Return only JSON with keys intent_id, goal_text, mode, population, requested_fields, filters."
-                    )
-                ),
-                HumanMessage(
-                    content=(
-                        f"Question:\n{question}\n\n"
-                        f"Table context:\n{context.table_context or 'none'}\n\n"
-                        f"Column context:\n{context.column_context or 'none'}\n\n"
-                        f"Prior intent:\n{json.dumps(prior_intent or {}, indent=2, sort_keys=True)}"
-                    )
-                ),
-            ]
-        )
+        with timing_stage("db_rag.intent.resolve_intent"):
+            response = self.llm.invoke(
+                [
+                    SystemMessage(
+                        content=(
+                            "You are normalizing a RePORT DB-RAG request into a structured intent. "
+                            "Return only JSON with keys intent_id, goal_text, mode, population, requested_fields, filters."
+                        )
+                    ),
+                    HumanMessage(
+                        content=(
+                            f"Question:\n{question}\n\n"
+                            f"Table context:\n{context.table_context or 'none'}\n\n"
+                            f"Column context:\n{context.column_context or 'none'}\n\n"
+                            f"Prior intent:\n{json.dumps(prior_intent or {}, indent=2, sort_keys=True)}"
+                        )
+                    ),
+                ]
+            )
         parsed = parse_json_object(coerce_text_content(getattr(response, "content", ""))) or {}
         return DbRagIntent(
             intent_id=str(parsed.get("intent_id") or default_selection_id(question, context.table_names, [], [])),

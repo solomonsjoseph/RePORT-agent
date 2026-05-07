@@ -10,6 +10,8 @@ from ...conversation_events import (
     has_conversation_event,
 )
 from ...memory import ensure_memory_state, resolve_reference_for_turn
+from ...memory.schema import ALLOWED_RELATIONSHIPS
+from ...memory.validation import ALLOWED_RELATIONSHIPS_BY_TASK_KIND
 from ...state import AgentState, MetaKeys
 from ...state_views import get_planner_state, merge_state_patch
 from ..node_registry import NODE_REGISTRY_MAP
@@ -18,7 +20,6 @@ from .action_mask import mask_actions
 from .planner import llm_plan_next_action
 from .policy import (
     DETERMINISTIC_CONTROL_ACTIONS,
-    _is_dataset_analysis_request,
     _next_tool_requester,
     _tool_request_queue,
     select_planner_fallback_action,
@@ -149,12 +150,12 @@ def _route_from_resolved_task_meta(
     routed_node: str | None = None
     updated_meta = dict(meta)
     if task.get("kind") == "db_rag_sql_extraction":
-        if relationship == "use_as_input" and "generate_code" in available_action_set:
-            dataset_id = dict(task.get("artifact_refs") or {}).get("dataset_artifact_id")
+        dataset_id = dict(task.get("artifact_refs") or {}).get("dataset_artifact_id")
+        if relationship in {"use_as_input", "compare"} and "generate_code" in available_action_set:
             if isinstance(dataset_id, str) and dataset_id:
                 updated_meta[MetaKeys.ANALYSIS_DATASET_ID] = dataset_id
                 routed_node = "generate_code"
-        elif "rag_db_qa" in available_action_set:
+        elif relationship in {"revision", "rerun", "explain", "inspect_artifact"} and "rag_db_qa" in available_action_set:
             routed_node = "rag_db_qa"
 
     if not routed_node:
@@ -173,9 +174,162 @@ def _route_from_resolved_task_meta(
     )
 
 
-def _completed_memory_task_count(state: AgentState) -> int:
+def _dataset_exists(state: AgentState, dataset_id: object) -> bool:
+    if not isinstance(dataset_id, str) or not dataset_id:
+        return False
+    datasets = (state.get("artifacts") or {}).get("datasets") or {}
+    return isinstance(datasets, dict) and dataset_id in datasets
+
+
+def _planner_binding_clarification(
+    state: AgentState,
+    meta: dict,
+    output: dict,
+    available_action_set: set[str],
+    question: str,
+    relationship: object = None,
+) -> tuple[str, dict, dict, list[str]]:
+    updated_meta = dict(meta)
+    updated_meta[MetaKeys.AWAITING_USER_CLARIFICATION] = True
     _state, memory = ensure_memory_state(state)
-    return len(dict(memory.get("completed_tasks") or {}))
+    completed_tasks = dict(memory.get("completed_tasks") or {})
+    if completed_tasks:
+        candidates = _task_candidates_for_clarification(
+            memory,
+            {"candidate_cards": list(completed_tasks.values())},
+        )
+        question = _memory_reference_clarification_question(candidates)
+        updated_meta[MetaKeys.CLARIFICATION_KIND] = "memory_reference_resolution"
+        updated_meta[MetaKeys.CLARIFICATION_RETURN_NODE] = "orchestrator"
+        memory["pending_reference_clarification"] = {
+            "status": "awaiting_reply",
+            "user_message_hash": _user_message_hash(state) or "",
+            "original_user_message": latest_user_message(state),
+            "relationship": relationship if isinstance(relationship, str) else None,
+            "intended_action": None,
+            "result": {
+                "label": "ambiguous",
+                "task_id": None,
+                "relationship": relationship if isinstance(relationship, str) else None,
+                "needs_reference": True,
+                "reason": question,
+            },
+            "candidates": candidates,
+        }
+    else:
+        updated_meta[MetaKeys.CLARIFICATION_KIND] = "planner_route_clarification"
+        updated_meta[MetaKeys.CLARIFICATION_RETURN_NODE] = "qa"
+    updated_meta[MetaKeys.PENDING_QUESTION] = question
+    updated_output = dict(output)
+    updated_output["qa_response"] = question
+    routed_node = (
+        "clarification"
+        if "clarification" in available_action_set
+        else ("qa" if "qa" in available_action_set else "end")
+    )
+    return routed_node, updated_meta, updated_output, [
+        f"task_id=None relationship=None routed_node={routed_node}",
+        f"planner_clarification={question}",
+    ]
+
+
+def _apply_planner_bindings(
+    routing_state: AgentState,
+    *,
+    action: str,
+    bindings: dict[str, object],
+    meta: dict,
+    output: dict,
+    available_action_set: set[str],
+    current_hash: str | None,
+    allow_bindings: bool,
+) -> tuple[str, dict, dict, list[str]]:
+    if not allow_bindings:
+        return action, _clear_resolved_task_meta(meta), output, []
+
+    if bindings.get("needs_clarification") is True:
+        question = str(
+            bindings.get("clarification_question")
+            or "Which prior task or dataset should I use for this request?"
+        ).strip()
+        return _planner_binding_clarification(
+            routing_state,
+            meta,
+            output,
+            available_action_set,
+            question,
+            bindings.get("relationship"),
+        )
+
+    updated_meta = dict(meta)
+    observations: list[str] = []
+    task: dict | None = None
+    task_id = bindings.get("referenced_task_id")
+    relationship = bindings.get("relationship")
+    dataset_id = bindings.get("dataset_id")
+
+    _state, memory = ensure_memory_state(routing_state)
+    completed_tasks = dict(memory.get("completed_tasks") or {})
+    if task_id is not None:
+        if not isinstance(task_id, str) or task_id not in completed_tasks:
+            return _planner_binding_clarification(
+                routing_state,
+                meta,
+                output,
+                available_action_set,
+                "Which prior task should I use for this request?",
+            )
+        task = completed_tasks[task_id]
+
+    if relationship is not None:
+        if not isinstance(relationship, str) or relationship not in ALLOWED_RELATIONSHIPS:
+            return _planner_binding_clarification(
+                routing_state,
+                meta,
+                output,
+                available_action_set,
+                "What relationship should this request have to the prior task?",
+            )
+        if task is not None:
+            allowed = ALLOWED_RELATIONSHIPS_BY_TASK_KIND.get(task.get("kind"), set())
+            if relationship not in allowed:
+                return _planner_binding_clarification(
+                    routing_state,
+                    meta,
+                    output,
+                    available_action_set,
+                    "What should I do with the referenced prior task?",
+                )
+
+    if action == "generate_code":
+        if not isinstance(dataset_id, str) and task is not None:
+            task_dataset_id = dict(task.get("artifact_refs") or {}).get("dataset_artifact_id")
+            if isinstance(task_dataset_id, str):
+                dataset_id = task_dataset_id
+        if isinstance(dataset_id, str):
+            if not _dataset_exists(routing_state, dataset_id):
+                return _planner_binding_clarification(
+                    routing_state,
+                    meta,
+                    output,
+                    available_action_set,
+                    "Which registered dataset should I use for this analysis?",
+                )
+            updated_meta[MetaKeys.ANALYSIS_DATASET_ID] = dataset_id
+
+    if task is not None and isinstance(relationship, str):
+        updated_meta[MetaKeys.RESOLVED_TASK_ID] = task.get("task_id")
+        updated_meta[MetaKeys.RESOLVED_TASK_KIND] = task.get("kind")
+        updated_meta[MetaKeys.RESOLVED_TASK_RELATIONSHIP] = relationship
+        updated_meta[MetaKeys.RESOLVED_TASK_INTENDED_ACTION] = bindings.get("route_reason")
+        if current_hash:
+            updated_meta[MetaKeys.RESOLVED_TASK_USER_MESSAGE_HASH] = current_hash
+            updated_meta[_RESOLVED_TASK_META_CONSUMED_KEY] = current_hash
+        observations.append(
+            f"task_id={task.get('task_id')} relationship={relationship} routed_node={action}"
+        )
+
+    return action, updated_meta, output, observations
 
 
 def _record_planner_decision(
@@ -388,16 +542,7 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
     if fresh_unanswered_user_turn:
         if was_awaiting_clarification:
             clarification_return_node = meta.get(MetaKeys.CLARIFICATION_RETURN_NODE)
-            if (
-                clarification_return_node == "qa"
-                and "generate_code" in available_action_set
-                and _is_dataset_analysis_request({**state, "output": output, "agents": agents, "meta": meta})
-            ):
-                meta = clear_clarification_meta(meta)
-                meta[MetaKeys.LAST_USER_MESSAGE_HASH] = current_hash
-                next_action = "generate_code"
-                orchestrator_state["next_action"] = next_action
-            elif _is_soft_qa_followup(meta):
+            if _is_soft_qa_followup(meta):
                 next_action = None
                 defer_qa_followup_clarification_to_planner = True
                 orchestrator_state.pop("next_action", None)
@@ -424,6 +569,7 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
                     next_action = "qa"
             orchestrator_state["next_action"] = next_action
         else:
+            meta = _clear_resolved_task_meta(meta)
             meta[MetaKeys.LAST_USER_MESSAGE_HASH] = current_hash
             next_action = None
             orchestrator_state.pop("next_action", None)
@@ -482,101 +628,34 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
             fresh_unanswered_user_turn=fresh_unanswered_user_turn,
         )
 
-    if (
-        not next_action
-        and fresh_unanswered_user_turn
-        and current_hash
-        and not meta.get(MetaKeys.AWAITING_USER_CLARIFICATION)
-        and _completed_memory_task_count(routing_state) > 0
-    ):
-        user_text = latest_user_message(routing_state)
-        resolution = resolve_reference_for_turn(routing_state, llm, user_text, current_hash)
-        _state, memory = ensure_memory_state(routing_state)
-        completed_tasks = dict(memory.get("completed_tasks") or {})
-        label = resolution.get("label")
-        relationship = resolution.get("relationship")
-        task_id = resolution.get("task_id")
-        task = completed_tasks.get(task_id) if isinstance(task_id, str) else None
-
-        if label == "resolved" and isinstance(task, dict):
-            routed_node: str | None = None
-            if task.get("kind") == "db_rag_sql_extraction":
-                if relationship == "use_as_input" and "generate_code" in available_action_set:
-                    dataset_id = dict(task.get("artifact_refs") or {}).get("dataset_artifact_id")
-                    if isinstance(dataset_id, str) and dataset_id:
-                        meta[MetaKeys.ANALYSIS_DATASET_ID] = dataset_id
-                        routed_node = "generate_code"
-                elif "rag_db_qa" in available_action_set:
-                    routed_node = "rag_db_qa"
-            if routed_node:
-                meta = _apply_resolved_task_meta(meta, resolution, task, current_hash)
-                next_action = routed_node
-                observations = list(routing_state.get("observations", []))
-                observations.append(
-                    f"task_id={task.get('task_id')} "
-                    f"relationship={relationship} "
-                    f"routed_node={routed_node}"
-                )
-                routing_state = {
-                    **routing_state,
-                    "meta": meta,
-                    "observations": observations,
-                }
-            else:
-                meta = _clear_resolved_task_meta(meta)
-                routing_state = {**routing_state, "meta": meta}
-        elif label == "ambiguous" or (label == "unknown" and resolution.get("needs_reference") is True):
-            meta = _clear_resolved_task_meta(meta)
-            meta[MetaKeys.AWAITING_USER_CLARIFICATION] = True
-            meta[MetaKeys.CLARIFICATION_KIND] = "memory_reference_resolution"
-            meta[MetaKeys.CLARIFICATION_RETURN_NODE] = "orchestrator"
-            candidates = _task_candidates_for_clarification(memory, resolution)
-            question = _memory_reference_clarification_question(candidates)
-            memory["pending_reference_clarification"] = {
-                "status": "awaiting_reply",
-                "user_message_hash": current_hash,
-                "original_user_message": user_text,
-                "relationship": relationship,
-                "intended_action": resolution.get("intended_action"),
-                "result": dict(resolution),
-                "candidates": candidates,
-            }
-            output["qa_response"] = question
-            next_action = (
-                "clarification"
-                if "clarification" in available_action_set
-                else ("qa" if "qa" in available_action_set else "end")
-            )
-            memory_clarification_selected = next_action == "clarification"
-            memory_clarification_question = question if memory_clarification_selected else None
-            observations = list(routing_state.get("observations", []))
-            observations.append(
-                f"task_id={task_id} "
-                f"relationship={relationship} "
-                f"routed_node={next_action}"
-            )
-            routing_state = {
-                **routing_state,
-                "meta": meta,
-                "memory": memory,
-                "output": output,
-                "observations": observations,
-            }
-        elif label == "new_task" or (label == "unknown" and resolution.get("needs_reference") is False):
-            meta = _clear_resolved_task_meta(meta)
-            memory["pending_reference_clarification"] = None
-            routing_state = {**routing_state, "meta": meta, "memory": memory}
-
-    if not next_action and "rag_db_qa" in available_action_set and should_prefer_rag_db_qa(routing_state):
-        next_action = "rag_db_qa"
-
     if not next_action:
-        llm_choice, thought, planner_action, diagnostics = llm_plan_next_action(
+        llm_choice, thought, planner_action, diagnostics, bindings = llm_plan_next_action(
             routing_state, llm, available_action_list
         )
         masked_actions, _blocked = mask_actions(routing_state, available_action_list)
         if llm_choice != "end" and llm_choice in masked_actions:
-            next_action = llm_choice
+            next_action, meta, output, planner_observations = _apply_planner_bindings(
+                routing_state,
+                action=llm_choice,
+                bindings=bindings,
+                meta=meta,
+                output=output,
+                available_action_set=available_action_set,
+                current_hash=current_hash,
+                allow_bindings=fresh_unanswered_user_turn,
+            )
+            observations = list(routing_state.get("observations", []))
+            observations.extend(planner_observations)
+            routing_state = {
+                **routing_state,
+                "meta": meta,
+                "output": output,
+                "observations": observations,
+            }
+            memory_clarification_selected = next_action == "clarification"
+            memory_clarification_question = (
+                output.get("qa_response") if memory_clarification_selected else None
+            )
         else:
             if (
                 _latest_user_message_is_explicit_code_request(routing_state)

@@ -22,8 +22,6 @@ deterministic_control_actions:
   - execute_code
   - human_review_before_output
 planner_fallback_rules:
-  - predicate: dataset_analysis_request
-    action: generate_code
   - predicate: explicit_code_request
     action: generate_code
   - predicate: prefer_rag_db_qa

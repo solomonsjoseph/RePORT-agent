@@ -84,6 +84,15 @@ def derive_workflow_status(state: dict) -> dict:
             "blocker_signature": f"waiting_for_rag_db_sql_review:{pending_sql_candidate_artifact_id}",
         }
 
+    pending_recoverable_error = dict(rag_db_qa.get("pending_recoverable_error") or {})
+    if pending_recoverable_error.get("status") == "awaiting_reply":
+        stage = str(pending_recoverable_error.get("stage") or "unknown")
+        return {
+            "milestone": "awaiting_rag_db_recoverable_error_clarification",
+            "completion_status": "blocked_waiting",
+            "blocker_signature": f"waiting_for_rag_db_recoverable_error:{stage}",
+        }
+
     if error.get("category") == "db_rag_sql" and effective_last_action in {
         "rag_db_qa",
         "human_review_rag_db_sql_execution",

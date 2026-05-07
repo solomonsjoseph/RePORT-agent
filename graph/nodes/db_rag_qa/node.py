@@ -3,10 +3,13 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
+from db_rag.service.errors import DbRagUnanswerableError
+
 from ...memory import complete_task
 from ...state import AgentState, MetaKeys
 from ..state_helpers import clear_clarification_meta, get_agent_state, set_clarification_meta
 from ..tool_routing import latest_user_message
+from utils.performance import collect_timings, timing_stage
 from .helpers import (
     _SUPPORTED_PROVIDERS,
     _append_ai_response,
@@ -78,6 +81,29 @@ def _artifact_content(state: AgentState, artifact_id: str | None) -> dict[str, A
     return dict(content) if isinstance(content, dict) else None
 
 
+def _replace_artifact_content(
+    state: AgentState,
+    *,
+    artifact_id: str | None,
+    content: dict[str, Any],
+) -> AgentState:
+    artifact_key = str(artifact_id or "").strip()
+    if not artifact_key:
+        return state
+    artifacts = dict(state.get("artifacts") or {})
+    files = dict(artifacts.get("files") or {})
+    artifact = dict(files.get(artifact_key) or {})
+    if not artifact:
+        return state
+    artifact["content"] = dict(content)
+    files[artifact_key] = artifact
+    artifacts["files"] = files
+    return {
+        **state,
+        "artifacts": artifacts,
+    }
+
+
 def _clear_resolved_task_meta(state: AgentState) -> AgentState:
     meta = dict(state.get("meta") or {})
     for key in _RESOLVED_TASK_META_KEYS:
@@ -144,6 +170,208 @@ def _retrieve_context_for_intent(service, intent: dict[str, Any], reranker_model
     if hasattr(service, "retrieve_context_for_intent"):
         return service.retrieve_context_for_intent(SimpleNamespace(**intent), reranker_model=reranker_model)
     return service.retrieve_context(str(intent.get("goal_text") or ""), reranker_model=reranker_model)
+
+
+def _is_missing_join_key_preflight_error(exc: Exception) -> bool:
+    if not isinstance(exc, DbRagUnanswerableError):
+        return False
+    message = str(exc)
+    return (
+        "Multi-table extraction requires an approved join key column" in message
+        and "Missing approved subject/family ID join keys" in message
+    )
+
+
+def _reopen_column_review_for_sql_preflight(
+    state: AgentState,
+    rag_state: dict[str, Any],
+    *,
+    selection_artifact_id: str,
+    selection_payload: dict[str, Any],
+    error_message: str,
+) -> AgentState:
+    review = dict(selection_payload)
+    review["status"] = "needs_revision"
+    feedback_history = list(review.get("feedback_history") or [])
+    feedback_history.append(
+        {
+            "action": "sql_preflight_missing_join_keys",
+            "feedback": (
+                "SQL preflight found a multi-table extraction without approved join keys for every selected table. "
+                f"{error_message}"
+            ),
+        }
+    )
+    review["feedback_history"] = feedback_history
+
+    updated = _replace_artifact_content(state, artifact_id=selection_artifact_id, content=review)
+    clarification_text = (
+        "SQL generation needs join-key clarification before it can proceed. "
+        "Please include approved SUBJID or FID columns for every selected table, "
+        "or revise the selection to a single-table extraction."
+    )
+    updated = _append_ai_response(updated, _format_column_review_response(clarification_text, review))
+    updated = _append_assistant_event(updated, updated["output"]["qa_response"])
+    updated = _append_column_review_request_event(
+        updated,
+        artifact_id=selection_artifact_id,
+        text="DB-RAG column selection needs join-key clarification before SQL generation.",
+    )
+    updated = _clear_output_error(updated)
+    updated["meta"] = clear_clarification_meta(updated.get("meta") or {})
+
+    rag_state["pending_column_review_artifact_id"] = selection_artifact_id
+    rag_state["approved_column_selection_artifact_id"] = None
+    rag_state["pending_sql_candidate_artifact_id"] = None
+    rag_state["pending_column_review"] = review
+    rag_state.pop("pending_sql_candidate", None)
+    rag_state["error"] = None
+    rag_state["thread_status"] = "awaiting_column_review"
+    return _finalize_rag_state(updated, rag_state, status="done", active_thread=True)
+
+
+def _build_sql_preparation_recovery_question(
+    service,
+    *,
+    error_payload: dict[str, Any],
+    selection_payload: dict[str, Any],
+) -> str:
+    fallback = (
+        "I could not prepare valid read-only SQL from the approved DB-RAG selection. "
+        "Please clarify what should change in the selected tables/columns, filters, or join keys so I can regenerate "
+        "the DB-RAG column selection and try again."
+    )
+    if not hasattr(service, "build_recoverable_error_clarification"):
+        return fallback
+
+    context = {
+        "goal_text": str(selection_payload.get("goal_text") or selection_payload.get("source_question") or ""),
+        "tables": list(selection_payload.get("tables") or []),
+        "columns": list(selection_payload.get("columns") or []),
+        "feedback_history": list(selection_payload.get("feedback_history") or []),
+    }
+    try:
+        result = service.build_recoverable_error_clarification(
+            workflow="db_rag_sql_preparation",
+            error_payload=error_payload,
+            context=context,
+        )
+    except Exception:
+        return fallback
+    if not isinstance(result, dict):
+        return fallback
+    question = str(result.get("clarification_question") or "").strip()
+    return question or fallback
+
+
+def _ask_sql_preparation_recovery_clarification(
+    state: AgentState,
+    rag_state: dict[str, Any],
+    *,
+    service,
+    selection_artifact_id: str,
+    selection_payload: dict[str, Any],
+    error_payload: dict[str, Any],
+) -> AgentState:
+    prompt = _build_sql_preparation_recovery_question(
+        service,
+        error_payload=error_payload,
+        selection_payload=selection_payload,
+    )
+    updated = _append_ai_response(state, prompt)
+    updated = _append_assistant_event(updated, updated["output"]["qa_response"])
+    updated = _append_clarification_event(updated, prompt)
+    updated = _clear_output_error(updated)
+    updated["meta"] = set_clarification_meta(
+        updated.get("meta", {}),
+        return_node="rag_db_qa",
+        kind="db_rag_recoverable_error",
+        pending_question=prompt,
+    )
+
+    rag_state["pending_recoverable_error"] = {
+        "status": "awaiting_reply",
+        "stage": "sql_preparation",
+        "selection_artifact_id": selection_artifact_id,
+        "error_payload": dict(error_payload),
+        "prompt": prompt,
+    }
+    rag_state["pending_sql_candidate_artifact_id"] = None
+    rag_state.pop("pending_sql_candidate", None)
+    rag_state["error"] = None
+    rag_state["thread_status"] = "awaiting_recoverable_error_clarification"
+    return _finalize_rag_state(updated, rag_state, status="done", active_thread=True)
+
+
+def _handle_pending_recoverable_error_reply(
+    state: AgentState,
+    rag_state: dict[str, Any],
+    *,
+    service,
+    reranker_model: str | None,
+    question: str,
+) -> AgentState:
+    pending = dict(rag_state.get("pending_recoverable_error") or {})
+    if pending.get("status") != "awaiting_reply":
+        return _finish_terminal_response(
+            state,
+            {**rag_state, "pending_recoverable_error": None},
+            text="The DB-RAG recovery state is incomplete. Please restate the database request.",
+            thread_status="answered_metadata",
+            active_thread=True,
+        )
+
+    stage = str(pending.get("stage") or "").strip()
+    if stage != "sql_preparation":
+        return _finish_terminal_response(
+            state,
+            {**rag_state, "pending_recoverable_error": None},
+            text="The DB-RAG recovery state is not supported. Please restate the database request.",
+            thread_status="answered_metadata",
+            active_thread=True,
+        )
+
+    selection_artifact_id = str(pending.get("selection_artifact_id") or "").strip()
+    selection_payload = _artifact_content(state, selection_artifact_id)
+    if not selection_artifact_id or not selection_payload:
+        return _finish_terminal_response(
+            state,
+            {**rag_state, "pending_recoverable_error": None},
+            text="I could not recover the DB-RAG column selection that needs revision. Please restate the database request.",
+            thread_status="answered_metadata",
+            active_thread=True,
+        )
+
+    error_payload = dict(pending.get("error_payload") or {})
+    error_text = str(error_payload.get("message") or "SQL preparation failed.").strip()
+    review = dict(selection_payload)
+    review["status"] = "needs_revision"
+    feedback_history = list(review.get("feedback_history") or [])
+    feedback_history.append(
+        {
+            "action": "sql_preparation_recovery_clarification",
+            "feedback": f"SQL preparation failed: {error_text}. User clarification: {question}",
+        }
+    )
+    review["feedback_history"] = feedback_history
+
+    updated = _replace_artifact_content(state, artifact_id=selection_artifact_id, content=review)
+    updated["meta"] = clear_clarification_meta(updated.get("meta") or {})
+    rag_state["pending_recoverable_error"] = None
+    rag_state["pending_column_review_artifact_id"] = selection_artifact_id
+    rag_state["approved_column_selection_artifact_id"] = None
+    rag_state["pending_sql_candidate_artifact_id"] = None
+    rag_state["pending_column_review"] = review
+    rag_state.pop("pending_sql_candidate", None)
+    rag_state["error"] = None
+    rag_state["thread_status"] = "awaiting_column_review"
+    return _handle_pending_column_review_resume(
+        updated,
+        rag_state,
+        service=service,
+        reranker_model=reranker_model,
+        question=question,
+    )
 
 
 def _finish_terminal_response(
@@ -251,27 +479,28 @@ def _start_sql_review(
     try:
         prepared_candidate = service.prepare_sql_candidate(approved_question, approved_selection)
     except Exception as exc:
+        if _is_missing_join_key_preflight_error(exc):
+            return _reopen_column_review_for_sql_preflight(
+                state,
+                rag_state,
+                selection_artifact_id=selection_artifact_id,
+                selection_payload=selection_payload,
+                error_message=str(exc),
+            )
         error_payload = {
             "category": "db_rag_sql",
             "type": type(exc).__name__,
             "message": str(exc),
             "selection_artifact_id": selection_artifact_id,
         }
-        response_text = (
-            "I could not prepare valid read-only SQL from the approved DB-RAG selection.\n\n"
-            f"Details: {error_payload['type']}: {error_payload['message']}"
+        return _ask_sql_preparation_recovery_clarification(
+            state,
+            rag_state,
+            service=service,
+            selection_artifact_id=selection_artifact_id,
+            selection_payload=selection_payload,
+            error_payload=error_payload,
         )
-        updated = _append_ai_response(state, response_text)
-        updated = _append_assistant_event(updated, updated["output"]["qa_response"])
-        output = dict(updated.get("output") or {})
-        output["error"] = error_payload
-        updated["output"] = output
-        updated["meta"] = clear_clarification_meta(updated.get("meta") or {})
-        rag_state["error"] = error_payload
-        rag_state["approved_column_selection_artifact_id"] = None
-        rag_state["pending_sql_candidate_artifact_id"] = None
-        rag_state["thread_status"] = "error"
-        return _finalize_rag_state(updated, rag_state, status="error", active_thread=True)
 
     candidate_payload = _serialize_prepared_sql_candidate(prepared_candidate)
     candidate_payload["question"] = approved_question
@@ -310,8 +539,10 @@ def _reprompt_pending_extraction(
     pending_extraction_opt_in: dict[str, Any],
 ) -> AgentState:
     prompt = str(pending_extraction_opt_in.get("prompt") or "").strip()
+    goal_text = str(pending_extraction_opt_in.get("goal_text") or "").strip()
     reprompt = (
-        "Please reply with 'yes' to proceed with table/column selection for extraction, or 'no' to skip it."
+        "Please reply with 'yes' to proceed with table/column selection for extraction, or 'no' to skip it"
+        + (f' for this request:\n\n"{goal_text}"' if goal_text else ".")
     )
     updated = _append_ai_response(state, reprompt)
     updated = _append_clarification_event(updated, prompt)
@@ -909,7 +1140,21 @@ def _handle_fresh_db_rag_question(
     return _finalize_rag_state(updated, rag_state, status="done", active_thread=True)
 
 
-def rag_db_qa_node(
+def _store_db_rag_timings(state: AgentState, records: list[dict[str, Any]]) -> AgentState:
+    if not records:
+        return state
+    meta = dict(state.get("meta") or {})
+    meta["db_rag_timing"] = {
+        "node": "rag_db_qa",
+        "stages": list(records)[-100:],
+    }
+    return {
+        **state,
+        "meta": meta,
+    }
+
+
+def _rag_db_qa_node_impl(
     state: AgentState,
     llm,
     *,
@@ -941,6 +1186,15 @@ def rag_db_qa_node(
             text=str(readiness.get("message") or "DB-RAG assets are not ready."),
             thread_status="done",
             active_thread=False,
+        )
+
+    if dict(rag_state.get("pending_recoverable_error") or {}).get("status") == "awaiting_reply":
+        return _handle_pending_recoverable_error_reply(
+            state,
+            rag_state,
+            service=service,
+            reranker_model=reranker_model,
+            question=question,
         )
 
     if rag_state.get("pending_sql_candidate_artifact_id"):
@@ -988,3 +1242,25 @@ def rag_db_qa_node(
         reranker_model=reranker_model,
         question=question,
     )
+
+
+def rag_db_qa_node(
+    state: AgentState,
+    llm,
+    *,
+    provider: str,
+    service,
+    reranker_model: str | None = None,
+    question_override: str | None = None,
+) -> AgentState:
+    with collect_timings() as records:
+        with timing_stage("rag_db_qa.total"):
+            updated = _rag_db_qa_node_impl(
+                state,
+                llm,
+                provider=provider,
+                service=service,
+                reranker_model=reranker_model,
+                question_override=question_override,
+            )
+    return _store_db_rag_timings(updated, records)

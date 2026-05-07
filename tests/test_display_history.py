@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 from types import ModuleType
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
 def _install_message_stubs() -> None:
@@ -91,6 +94,57 @@ def test_build_display_history_projects_user_visible_events_only() -> None:
     assert [message.type for message in history] == ["human", "ai"]
     assert history[0].content == "what's the weather?"
     assert history[1].content == "Boston is cool today."
+
+
+def test_build_display_history_includes_review_decisions_as_user_actions() -> None:
+    state = {
+        "messages": [],
+        "artifacts": {
+            "conversation_events": [
+                {
+                    "event_id": "e1",
+                    "seq": 1,
+                    "created_at": "2026-04-30T00:00:00Z",
+                    "type": "assistant",
+                    "actor": "rag_db_qa",
+                    "actor_role": "assistant",
+                    "user_turn_hash": "u1",
+                    "text": "Please review the proposed DB-RAG column selection in the panel below.",
+                },
+                {
+                    "event_id": "e2",
+                    "seq": 2,
+                    "created_at": "2026-04-30T00:00:01Z",
+                    "type": "review_decision",
+                    "actor": "human_review_rag_db_column_selection",
+                    "actor_role": "review",
+                    "user_turn_hash": "u1",
+                    "review_kind": "rag_db_column_selection",
+                    "decision": "approve",
+                    "text": "Approved DB-RAG column selection.",
+                },
+                {
+                    "event_id": "e3",
+                    "seq": 3,
+                    "created_at": "2026-04-30T00:00:02Z",
+                    "type": "assistant",
+                    "actor": "rag_db_qa",
+                    "actor_role": "assistant",
+                    "user_turn_hash": "u1",
+                    "text": "I prepared a read-only SQL candidate from the approved DB-RAG selection.",
+                },
+            ],
+            "conversation_events_version": 1,
+            "artifact_manifest_version": 1,
+            "files": {},
+        },
+        "meta": {"next_event_seq": 4},
+    }
+
+    history = build_display_history(state)
+
+    assert [message.type for message in history] == ["ai", "human", "ai"]
+    assert history[1].content == "Approved DB-RAG column selection."
 
 
 def test_build_display_history_attaches_figure_to_parent_assistant_event() -> None:

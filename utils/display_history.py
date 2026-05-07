@@ -39,6 +39,10 @@ def build_display_history(state: dict) -> list:
             if text:
                 display_messages.append(HumanMessage(content=text))
             continue
+        if event_type == "review_decision":
+            if text:
+                display_messages.append(HumanMessage(content=text))
+            continue
         if event_type not in {"assistant", "clarification"}:
             continue
         additional_kwargs = {}
