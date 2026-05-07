@@ -4,6 +4,7 @@ import importlib
 import json
 import sys
 from contextlib import contextmanager
+from copy import deepcopy
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
@@ -216,6 +217,61 @@ def _orchestrator_cancel_state(last_action: str, human_review: dict) -> dict:
     }
 
 
+def _task_memory_fixture() -> dict:
+    return {
+        "completed_tasks": {
+            "task_existing": {
+                "task_id": "task_existing",
+                "kind": "code_analysis",
+            }
+        },
+        "failed_tasks": {
+            "task_failed": {
+                "task_id": "task_failed",
+                "kind": "code_analysis",
+                "status": "failed",
+            }
+        },
+        "task_order": ["task_existing"],
+        "last_task_id": "task_existing",
+        "last_task_id_by_kind": {"code_analysis": "task_existing"},
+        "last_failed_task_id_by_kind": {"code_analysis": "task_failed"},
+        "last_reference_resolution": {
+            "user_message_hash": "old",
+            "result": {"label": "none"},
+        },
+        "pending_reference_clarification": None,
+    }
+
+
+def _assert_cancel_preserves_task_memory(
+    module_name: str,
+    node_name: str,
+    state: dict,
+    *,
+    extra_modules: tuple[str, ...] = (),
+    kwargs: dict | None = None,
+) -> dict:
+    _install_stubs(decision="cancel")
+    for mod in (
+        module_name,
+        "graph.nodes.human_review_cancel",
+        *extra_modules,
+        "graph.state",
+        "graph.nodes.state_helpers",
+    ):
+        sys.modules.pop(mod, None)
+    module = importlib.import_module(module_name)
+
+    state["memory"] = deepcopy(_task_memory_fixture())
+    expected_memory = deepcopy(state["memory"])
+
+    updated = getattr(module, node_name)(state, **(kwargs or {}))
+
+    assert updated["memory"] == expected_memory
+    return updated
+
+
 def test_human_review_before_run_emits_review_decision_event() -> None:
     _install_stubs(decision="approve")
     for mod in ("graph.nodes.human_review_before_run", "graph.state", "graph.nodes.state_helpers"):
@@ -348,18 +404,7 @@ def test_human_review_before_run_cancel_clears_live_code_state() -> None:
     assert updated["artifacts"]["conversation_events"][-1]["decision"] == "cancel"
 
 
-def test_cancelled_reviews_do_not_write_task_memory() -> None:
-    _install_stubs(decision="cancel")
-    for mod in (
-        "graph.nodes.human_review_before_run",
-        "graph.nodes.human_review_cancel",
-        "graph.state",
-        "graph.nodes.state_helpers",
-    ):
-        sys.modules.pop(mod, None)
-    module = importlib.import_module("graph.nodes.human_review_before_run")
-
-    completed_tasks = {"task_existing": {"task_id": "task_existing"}}
+def test_before_run_cancel_does_not_write_task_memory() -> None:
     state = {
         "messages": [],
         "output": {"generated_code": "print(1)"},
@@ -368,22 +413,165 @@ def test_cancelled_reviews_do_not_write_task_memory() -> None:
             "last_user_message_hash": "u-cancel-memory",
         },
         "agents": {"executor": {"run_status": "pending"}},
-        "memory": {
-            "completed_tasks": completed_tasks,
-            "failed_tasks": {},
-            "task_order": ["task_existing"],
-            "last_task_id": "task_existing",
-            "last_task_id_by_kind": {},
-            "last_failed_task_id_by_kind": {},
-            "last_reference_resolution": None,
-            "pending_reference_clarification": None,
+    }
+
+    _assert_cancel_preserves_task_memory(
+        "graph.nodes.human_review_before_run",
+        "human_review_before_run_node",
+        state,
+    )
+
+
+def test_after_error_cancel_does_not_write_task_memory() -> None:
+    state = {
+        "messages": [],
+        "output": {
+            "generated_code": "print(1)",
+            "error": {"category": "retryable_code", "type": "ValueError", "message": "bad column"},
+        },
+        "meta": {
+            "error_iterations": 5,
+            "current_code_hash": "hash-1",
+            "execution_ticket_hash": "hash-1",
+            "final_approved_code_hash": "hash-1",
+            "error_recovery_active": True,
+            "last_user_message_hash": "u-cancel-error-memory",
+        },
+        "agents": {"executor": {"run_status": "error"}},
+    }
+
+    _assert_cancel_preserves_task_memory(
+        "graph.nodes.human_review_after_error",
+        "human_review_after_error_node",
+        state,
+    )
+
+
+def test_final_review_cancel_does_not_write_task_memory() -> None:
+    state = {
+        "messages": [],
+        "output": {
+            "generated_code": "print(1)",
+            "text": "result text",
+        },
+        "meta": {
+            "current_code_hash": "hash-1",
+            "last_user_message_hash": "u-cancel-final-memory",
+        },
+        "agents": {"executor": {"run_status": "ok"}},
+        "artifacts": {"files": {}},
+    }
+
+    _assert_cancel_preserves_task_memory(
+        "graph.nodes.human_review_before_output",
+        "human_review_before_output_node",
+        state,
+    )
+
+
+def test_rag_db_column_review_cancel_does_not_write_task_memory() -> None:
+    state = {
+        "messages": [],
+        "output": {},
+        "meta": {"last_user_message_hash": "u-rag-col-cancel-memory"},
+        "artifacts": {
+            "files": {
+                "sel-1": {
+                    "kind": "db_rag_column_selection",
+                    "artifact_id": "sel-1",
+                    "created_at": "2026-05-07T00:00:00+00:00",
+                    "producer": "rag_db_qa",
+                    "mime": "application/json",
+                    "summary": "Column selection awaiting review",
+                    "content": {
+                        "status": "awaiting_review",
+                        "goal_text": "extract diabetes rows",
+                        "source_question": "extract diabetes rows",
+                    },
+                }
+            }
+        },
+        "agents": {
+            "rag_db_qa": {
+                "pending_column_review_artifact_id": "sel-1",
+                "approved_column_selection_artifact_id": "sel-1",
+                "pending_sql_candidate_artifact_id": "sql-1",
+                "pending_column_review": {"status": "awaiting_review"},
+                "pending_sql_candidate": {"status": "prepared"},
+                "sql_review_approved_artifact_id": "sql-1",
+                "thread_status": "awaiting_column_review",
+                "active_thread": True,
+            }
         },
     }
 
-    updated = module.human_review_before_run_node(state)
+    _assert_cancel_preserves_task_memory(
+        "graph.nodes.human_review_rag_db_column_selection",
+        "human_review_rag_db_column_selection_node",
+        state,
+    )
 
-    assert updated["memory"]["completed_tasks"] == completed_tasks
-    assert updated["memory"]["failed_tasks"] == {}
+
+def test_rag_db_sql_review_cancel_does_not_write_task_memory() -> None:
+    state = {
+        "messages": [],
+        "output": {},
+        "meta": {"last_user_message_hash": "u-rag-sql-cancel-memory"},
+        "artifacts": {
+            "files": {
+                "sel-1": {
+                    "kind": "db_rag_column_selection",
+                    "artifact_id": "sel-1",
+                    "created_at": "2026-05-07T00:00:00+00:00",
+                    "producer": "rag_db_qa",
+                    "mime": "application/json",
+                    "summary": "Approved column selection",
+                    "content": {
+                        "status": "approved",
+                        "selection_id": "selection-1",
+                        "tables": ["Form 2A"],
+                        "columns": [{"table": "Form 2A", "column": "IC_AGE"}],
+                    },
+                },
+                "sql-1": {
+                    "kind": "db_rag_sql_candidate",
+                    "artifact_id": "sql-1",
+                    "created_at": "2026-05-07T00:00:00+00:00",
+                    "producer": "rag_db_qa",
+                    "mime": "application/json",
+                    "summary": "Prepared SQL candidate",
+                    "content": {
+                        "status": "prepared",
+                        "selection_artifact_id": "sel-1",
+                        "selection_id": "selection-1",
+                        "tables": ["Form 2A"],
+                        "columns": [{"table": "Form 2A", "column": "IC_AGE"}],
+                        "sql": "select 1",
+                    },
+                },
+            }
+        },
+        "agents": {
+            "rag_db_qa": {
+                "pending_sql_candidate_artifact_id": "sql-1",
+                "pending_sql_candidate": {"status": "prepared"},
+                "approved_column_selection_artifact_id": "sel-1",
+                "pending_column_review_artifact_id": "sel-1",
+                "pending_column_review": {"status": "approved"},
+                "sql_review_approved_artifact_id": "sql-1",
+                "thread_status": "awaiting_sql_review",
+                "active_thread": True,
+            }
+        },
+    }
+
+    _assert_cancel_preserves_task_memory(
+        "graph.nodes.human_review_rag_db_sql_execution",
+        "human_review_rag_db_sql_execution_node",
+        state,
+        extra_modules=("graph.nodes.rag_db_qa",),
+        kwargs={"service": object()},
+    )
 
 
 def test_before_run_cancel_disables_before_run_readiness() -> None:
