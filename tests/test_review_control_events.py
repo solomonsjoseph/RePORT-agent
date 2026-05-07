@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import importlib
+import json
 import sys
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -44,6 +45,133 @@ def _install_stubs(decision: str, suggestion: str | None = None) -> None:
     sys.modules["langgraph.types"] = langgraph_types
     sys.modules["langgraph.graph.message"] = graph_message_mod
     sys.modules["langchain_core.messages"] = messages_mod
+
+
+class _FormattedPrompt:
+    def __init__(self, rendered):
+        self._rendered = rendered
+
+    def to_messages(self):
+        return self._rendered
+
+
+class _PromptTemplate:
+    def __init__(self, messages):
+        self._messages = [message for message in messages if isinstance(message, tuple)]
+
+    def format_prompt(self, **kwargs):
+        return _FormattedPrompt(
+            [
+                {"role": role, "content": template.format(**kwargs)}
+                for role, template in self._messages
+            ]
+        )
+
+
+class _ChatPromptTemplate:
+    @staticmethod
+    def from_messages(messages):
+        return _PromptTemplate(messages)
+
+
+class _MessagesPlaceholder:
+    def __init__(self, variable_name: str, optional: bool = False) -> None:
+        self.variable_name = variable_name
+        self.optional = optional
+
+
+class _FewShotChatMessagePromptTemplate:
+    def __init__(self, *args, **kwargs):
+        self.args = args
+        self.kwargs = kwargs
+
+
+class _OrchestratorHumanMessage:
+    type = "human"
+
+    def __init__(self, content: str, id: str | None = None):
+        self.content = content
+        self.id = id or ""
+
+
+class _StaticLLM:
+    def __init__(self, action: str = "end"):
+        self.action = action
+
+    def invoke(self, _messages):
+        return SimpleNamespace(
+            content=json.dumps({"action": self.action, "thought": "test route"})
+        )
+
+
+def _install_orchestrator_stubs() -> None:
+    messages_mod = ModuleType("langchain_core.messages")
+    messages_mod.BaseMessage = object
+    messages_mod.HumanMessage = _OrchestratorHumanMessage
+    messages_mod.AIMessage = object
+
+    prompts_mod = ModuleType("langchain_core.prompts")
+    prompts_mod.ChatPromptTemplate = _ChatPromptTemplate
+    prompts_mod.MessagesPlaceholder = _MessagesPlaceholder
+    prompts_mod.FewShotChatMessagePromptTemplate = _FewShotChatMessagePromptTemplate
+
+    langchain_core_mod = ModuleType("langchain_core")
+    langchain_core_mod.messages = messages_mod
+    langchain_core_mod.prompts = prompts_mod
+
+    graph_message_mod = ModuleType("langgraph.graph.message")
+    graph_message_mod.add_messages = lambda current, new: (current or []) + (new or [])
+
+    sys.modules["langchain_core"] = langchain_core_mod
+    sys.modules["langchain_core.messages"] = messages_mod
+    sys.modules["langchain_core.prompts"] = prompts_mod
+    sys.modules["langgraph.graph.message"] = graph_message_mod
+
+
+def _fresh_orchestrator_module():
+    _install_orchestrator_stubs()
+    for mod in (
+        "prompts.planner_prompt",
+        "graph.nodes.orchestrator",
+        "graph.nodes.orchestrator.node",
+        "graph.nodes.orchestrator.planner",
+        "graph.nodes.orchestrator.policy",
+        "graph.nodes.orchestrator.action_mask",
+        "graph.nodes.orchestrator.context_builder",
+        "graph.nodes.orchestrator.state_logic",
+        "graph.state",
+    ):
+        sys.modules.pop(mod, None)
+    return importlib.import_module("graph.nodes.orchestrator.node")
+
+
+def _orchestrator_cancel_state(last_action: str, human_review: dict) -> dict:
+    return {
+        "messages": [_OrchestratorHumanMessage("write python code for this analysis", id="turn-1")],
+        "output": {"generated_code": "print(1)"},
+        "artifacts": {
+            "conversation_events": [],
+            "conversation_events_version": 1,
+            "artifact_manifest_version": 1,
+        },
+        "next_action": None,
+        "last_action": last_action,
+        "observations": [],
+        "orchestrator": {},
+        "planner": {},
+        "agents": {
+            "executor": {"run_status": "idle"},
+            "human_review": human_review,
+        },
+        "node_data": {},
+        "meta": {
+            "execution_ticket_hash": "hash-1",
+            "final_approved_code_hash": "hash-1",
+            "error_recovery_active": True,
+            "workflow_trace": [last_action],
+        },
+        "memory": {},
+    }
 
 
 def test_human_review_before_run_emits_review_decision_event() -> None:
@@ -291,7 +419,7 @@ def test_consume_after_error_cancel_is_terminal_without_loop_guard_bypass() -> N
         meta,
     )
 
-    assert action is None
+    assert action == "end"
     assert updated_agents["human_review"]["after_error_decision"] is None
     assert updated_agents["human_review"]["before_run_decision"] is None
     assert updated_agents["human_review"]["approved_code_hash"] is None
@@ -323,3 +451,75 @@ def test_consume_after_error_feedback_routes_to_generate_code_with_loop_guard_by
     assert action == "generate_code"
     assert updated_agents["human_review"]["after_error_decision"] is None
     assert "generate_code" in updated_meta.get(meta_keys.LOOP_GUARD_BYPASS_ACTIONS, [])
+
+
+def test_orchestrator_before_run_cancel_routes_to_end_without_planner_fallback() -> None:
+    module = _fresh_orchestrator_module()
+    state = _orchestrator_cancel_state(
+        "human_review_before_run",
+        {
+            "before_run_decision": "cancel",
+            "approved_code_hash": None,
+        },
+    )
+
+    updated = module.orchestrator_node(
+        state,
+        _StaticLLM("end"),
+        ["generate_code", "execute_code", "qa", "end"],
+    )
+
+    assert updated["next_action"] == "end"
+    assert updated["orchestrator"]["next_action"] == "end"
+    assert "generated_code" not in updated["output"]
+    assert "execution_ticket_hash" not in updated["meta"]
+    assert "final_approved_code_hash" not in updated["meta"]
+    assert "error_recovery_active" not in updated["meta"]
+    assert any("before-run cancel" in item for item in updated["observations"])
+
+
+def test_orchestrator_after_error_cancel_routes_to_end_without_planner_fallback() -> None:
+    module = _fresh_orchestrator_module()
+    state = _orchestrator_cancel_state(
+        "human_review_after_error",
+        {
+            "after_error_decision": "cancel",
+            "before_run_decision": "approve",
+            "approved_code_hash": "hash-1",
+        },
+    )
+
+    updated = module.orchestrator_node(
+        state,
+        _StaticLLM("end"),
+        ["generate_code", "qa", "end"],
+    )
+
+    assert updated["next_action"] == "end"
+    assert updated["orchestrator"]["next_action"] == "end"
+    assert updated["agents"]["human_review"]["after_error_decision"] is None
+    assert "execution_ticket_hash" not in updated["meta"]
+    assert "error_recovery_active" not in updated["meta"]
+    assert "generate_code" not in updated["meta"].get("loop_guard_bypass_actions", [])
+    assert any("after-error cancel" in item for item in updated["observations"])
+
+
+def test_orchestrator_after_error_feedback_still_routes_to_generate_code() -> None:
+    module = _fresh_orchestrator_module()
+    state = _orchestrator_cancel_state(
+        "human_review_after_error",
+        {
+            "after_error_decision": "feedback",
+            "before_run_decision": None,
+            "approved_code_hash": None,
+        },
+    )
+
+    updated = module.orchestrator_node(
+        state,
+        _StaticLLM("end"),
+        ["generate_code", "qa", "end"],
+    )
+
+    assert updated["next_action"] == "generate_code"
+    assert "generate_code" in updated["meta"].get("loop_guard_bypass_actions", [])

@@ -168,6 +168,28 @@ def _consume_regenerate_before_run(output: dict, agents: dict, meta: dict) -> tu
     return updated_output, updated_agents, updated_meta, True
 
 
+def _consume_before_run_cancel(output: dict, agents: dict, meta: dict) -> tuple[dict, dict, dict, bool]:
+    review = (agents.get("human_review") or {}) if isinstance(agents, dict) else {}
+    if review.get("before_run_decision") != "cancel":
+        return output, agents, meta, False
+
+    updated_output = dict(output)
+    updated_output.pop("generated_code", None)
+
+    updated_meta = dict(meta)
+    updated_meta.pop(MetaKeys.EXECUTION_TICKET_HASH, None)
+    updated_meta.pop(MetaKeys.FINAL_APPROVED_CODE_HASH, None)
+    updated_meta.pop(MetaKeys.ERROR_RECOVERY_ACTIVE, None)
+
+    updated_agents = dict(agents)
+    executor = dict((updated_agents.get("executor") or {}))
+    if executor:
+        executor["run_status"] = "idle"
+        updated_agents["executor"] = executor
+
+    return updated_output, updated_agents, updated_meta, True
+
+
 def _consume_final_review_regenerate(
     output: dict,
     agents: dict,
@@ -253,6 +275,9 @@ def _consume_after_error_decision(
     updated_agents["human_review"] = updated_review
     updated_meta.pop(MetaKeys.EXECUTION_TICKET_HASH, None)
     updated_meta.pop(MetaKeys.ERROR_RECOVERY_ACTIVE, None)
+
+    if str(decision or "").strip().lower() == "cancel":
+        return output, updated_agents, updated_meta, "end"
 
     if str(decision or "").strip().lower() not in {"feedback", "regenerate"}:
         return output, updated_agents, updated_meta, None

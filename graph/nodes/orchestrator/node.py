@@ -29,6 +29,7 @@ from .progress_controller import apply_recurrence_guard, update_recurrence_state
 from .state_logic import (
     _consume_after_error_decision,
     _consume_before_run_approval,
+    _consume_before_run_cancel,
     _consume_final_review_regenerate,
     _consume_final_review_approval,
     _consume_regenerate_before_run,
@@ -488,25 +489,34 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
     output = dict(state.get("output") or {})
     agents = dict(state.get("agents") or {})
     if _resumed_from(state, "human_review_before_run"):
-        output, agents, meta, regenerated = _consume_regenerate_before_run(output, agents, meta)
-        if regenerated:
-            next_action = "generate_code"
+        output, agents, meta, before_run_cancelled = _consume_before_run_cancel(output, agents, meta)
+        if before_run_cancelled:
+            next_action = "end"
             transition_selected_from_resume = True
             orchestrator_state.pop("next_action", None)
             observations = list(state.get("observations", []))
-            observations.append(
-                "orchestrator: received regenerate request; routing back to generate_code"
-            )
+            observations.append("orchestrator: consumed before-run cancel; ending workflow")
             state = {**state, "observations": observations}
+        else:
+            output, agents, meta, regenerated = _consume_regenerate_before_run(output, agents, meta)
+            if regenerated:
+                next_action = "generate_code"
+                transition_selected_from_resume = True
+                orchestrator_state.pop("next_action", None)
+                observations = list(state.get("observations", []))
+                observations.append(
+                    "orchestrator: received regenerate request; routing back to generate_code"
+                )
+                state = {**state, "observations": observations}
 
-        output, agents, meta, approved_before_run = _consume_before_run_approval(output, agents, meta)
-        if approved_before_run:
-            next_action = "execute_code"
-            transition_selected_from_resume = True
-            orchestrator_state.pop("next_action", None)
-            observations = list(state.get("observations", []))
-            observations.append("orchestrator: consumed before-run approval; routing to execute_code")
-            state = {**state, "observations": observations}
+            output, agents, meta, approved_before_run = _consume_before_run_approval(output, agents, meta)
+            if approved_before_run:
+                next_action = "execute_code"
+                transition_selected_from_resume = True
+                orchestrator_state.pop("next_action", None)
+                observations = list(state.get("observations", []))
+                observations.append("orchestrator: consumed before-run approval; routing to execute_code")
+                state = {**state, "observations": observations}
 
     if _resumed_from(state, "human_review_after_error"):
         output, agents, meta, after_error_action = _consume_after_error_decision(output, agents, meta)
@@ -515,9 +525,12 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
             transition_selected_from_resume = True
             orchestrator_state.pop("next_action", None)
             observations = list(state.get("observations", []))
-            observations.append(
-                "orchestrator: consumed after-error review decision; routing to generate_code"
-            )
+            if after_error_action == "end":
+                observations.append("orchestrator: consumed after-error cancel; ending workflow")
+            else:
+                observations.append(
+                    "orchestrator: consumed after-error review decision; routing to generate_code"
+                )
             state = {**state, "observations": observations}
 
     if _resumed_from(state, "human_review_before_output"):
