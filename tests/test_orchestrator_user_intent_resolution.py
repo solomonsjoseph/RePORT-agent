@@ -240,6 +240,40 @@ def test_route_from_resolved_user_intent_meta_clears_missing_intent() -> None:
     assert observations == []
 
 
+def test_route_from_resolved_user_intent_meta_clears_unsupported_intent_kind() -> None:
+    node = _fresh_node_module()
+    state = _base_state()
+    state["memory"] = {
+        "user_intents": {
+            "intent-1": {
+                "intent_id": "intent-1",
+                "kind": "other_kind",
+                "source_question": "original database question",
+            }
+        },
+        "last_user_intent_id": "intent-1",
+    }
+    meta = {
+        MetaKeys.RESOLVED_USER_INTENT_ID: "intent-1",
+        MetaKeys.RESOLVED_USER_INTENT_KIND: "db_rag_query",
+        MetaKeys.RESOLVED_USER_INTENT_RELATIONSHIP: "continue",
+        MetaKeys.RESOLVED_USER_INTENT_SOURCE_QUESTION: "original database question",
+        MetaKeys.RESOLVED_USER_INTENT_USER_MESSAGE_HASH: "hash-1",
+        MetaKeys.RAG_DB_QUESTION_OVERRIDE: "original database question",
+        "keep": "value",
+    }
+
+    routed, updated_meta, observations = node._route_from_resolved_user_intent_meta(
+        state,
+        meta,
+        {"rag_db_qa"},
+    )
+
+    assert routed is None
+    assert updated_meta == {"keep": "value"}
+    assert observations == []
+
+
 def test_clear_consumed_resolved_user_intent_meta_removes_handoff_keys() -> None:
     node = _fresh_node_module()
     meta = {
