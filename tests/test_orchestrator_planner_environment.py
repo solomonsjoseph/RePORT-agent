@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from graph.memory import complete_task
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from graph.memory import complete_task, upsert_user_intent_from_db_rag_intent
 
 
 class _HumanMessage:
@@ -135,3 +140,81 @@ def test_planner_environment_includes_recent_user_messages_tasks_and_datasets() 
     assert env["candidate_tasks"][0]["kind"] == "db_rag_sql_extraction"
     assert env["candidate_tasks"][0]["dataset_id"] == "subset-1"
     assert env["available_actions"] == ["qa", "rag_db_qa", "generate_code"]
+
+
+def test_planner_environment_includes_compact_db_rag_user_intents() -> None:
+    from graph.nodes.orchestrator.context_builder import build_planner_environment
+
+    state = upsert_user_intent_from_db_rag_intent(
+        _state(),
+        active_intent={
+            "intent_id": "rag-1",
+            "source_question": "Query my database for age, gender, and TB outcome.",
+            "goal_text": "Subset index cases.",
+        },
+        source_message_hash="hash-1",
+        status="cancelled",
+    )
+    memory = state["memory"]
+    intent_id = memory["last_user_intent_id"]
+    intent = memory["user_intents"][intent_id]
+
+    env = build_planner_environment(state, ["rag_db_qa", "qa"])
+
+    assert env["candidate_user_intents"] == [
+        {
+            "intent_id": intent_id,
+            "display_ordinal": 1,
+            "kind": "db_rag_query",
+            "source_question": "Query my database for age, gender, and TB outcome.",
+            "goal_text": "Subset index cases.",
+            "status": "cancelled",
+            "created_at": intent["created_at"],
+            "completed_task_id": None,
+        }
+    ]
+
+
+def test_planner_environment_includes_validated_user_intent_reference() -> None:
+    from graph.nodes.orchestrator.context_builder import build_planner_environment
+    from graph.state import MetaKeys
+
+    state = upsert_user_intent_from_db_rag_intent(
+        _state(),
+        active_intent={
+            "intent_id": "rag-1",
+            "source_question": "Query my database for age, gender, and TB outcome.",
+            "goal_text": "Subset index cases.",
+        },
+        source_message_hash="hash-1",
+        status="cancelled",
+    )
+    intent_id = state["memory"]["last_user_intent_id"]
+    state["meta"][MetaKeys.RESOLVED_USER_INTENT_ID] = intent_id
+    state["meta"][MetaKeys.RESOLVED_USER_INTENT_RELATIONSHIP] = "continue"
+
+    env = build_planner_environment(state, ["rag_db_qa", "qa"])
+
+    assert env["validated_reference"] == {
+        "target": "existing_user_intent",
+        "target_id": intent_id,
+        "relationship": "continue",
+    }
+
+
+def test_planner_environment_includes_validated_completed_task_reference() -> None:
+    from graph.nodes.orchestrator.context_builder import build_planner_environment
+    from graph.state import MetaKeys
+
+    state = _state()
+    task_id = state["memory"]["last_task_id"]
+    state["meta"][MetaKeys.RESOLVED_TASK_ID] = task_id
+    state["meta"][MetaKeys.RESOLVED_TASK_RELATIONSHIP] = "use_as_input"
+
+    env = build_planner_environment(state, ["rag_db_qa", "qa"])
+
+    assert env["validated_reference"] == {
+        "target": "completed_task",
+        "target_id": task_id,
+        "relationship": "use_as_input",
+    }

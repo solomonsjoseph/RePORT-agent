@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+from ...memory import compact_user_intent_cards
 from ...memory.task_store import latest_task_cards
 from ...state import MetaKeys
 from ...state_views import get_artifacts, get_node_data, get_planner_state, merge_state_patch
@@ -18,6 +19,17 @@ from .state_logic import _latest_user_message, build_planner_recent_turns
 MAX_PLANNER_ENV_MESSAGES = 5
 MAX_PLANNER_ENV_EVENTS = 12
 MAX_PLANNER_ENV_TASKS = 12
+MAX_PLANNER_ENV_USER_INTENTS = 8
+PLANNER_USER_INTENT_FIELDS = (
+    "intent_id",
+    "display_ordinal",
+    "kind",
+    "source_question",
+    "goal_text",
+    "status",
+    "created_at",
+    "completed_task_id",
+)
 
 
 def build_planner_runtime_state(state: dict, available_actions: list[str]) -> dict:
@@ -117,6 +129,42 @@ def _compact_task_cards(state: dict, artifacts: dict) -> list[dict[str, object]]
     return compacted
 
 
+def _compact_user_intent_cards(state: dict) -> list[dict[str, object]]:
+    cards = compact_user_intent_cards(
+        state,
+        kind="db_rag_query",
+        limit=MAX_PLANNER_ENV_USER_INTENTS,
+    )
+    return [
+        {field: card.get(field) for field in PLANNER_USER_INTENT_FIELDS}
+        for card in cards
+        if isinstance(card, dict)
+    ]
+
+
+def _validated_reference_from_meta(state: dict) -> dict[str, object] | None:
+    meta = dict(state.get("meta") or {})
+    user_intent_id = meta.get(MetaKeys.RESOLVED_USER_INTENT_ID)
+    user_intent_relationship = meta.get(MetaKeys.RESOLVED_USER_INTENT_RELATIONSHIP)
+    if isinstance(user_intent_id, str) and isinstance(user_intent_relationship, str):
+        return {
+            "target": "existing_user_intent",
+            "target_id": user_intent_id,
+            "relationship": user_intent_relationship,
+        }
+
+    task_id = meta.get(MetaKeys.RESOLVED_TASK_ID)
+    task_relationship = meta.get(MetaKeys.RESOLVED_TASK_RELATIONSHIP)
+    if isinstance(task_id, str) and isinstance(task_relationship, str):
+        return {
+            "target": "completed_task",
+            "target_id": task_id,
+            "relationship": task_relationship,
+        }
+
+    return None
+
+
 def _compact_dataset_cards(artifacts: dict, tasks: list[dict[str, object]]) -> list[dict[str, object]]:
     source_task_ids = _dataset_source_task_ids(tasks)
     datasets = dict(artifacts.get("datasets") or {})
@@ -164,7 +212,9 @@ def build_planner_environment(state: dict, available_actions: list[str]) -> dict
         },
         "conversation_events": _compact_conversation_events(artifacts),
         "candidate_tasks": candidate_tasks,
+        "candidate_user_intents": _compact_user_intent_cards(state),
         "candidate_datasets": _compact_dataset_cards(artifacts, candidate_tasks),
+        "validated_reference": _validated_reference_from_meta(state),
         "available_actions": list(available_actions),
     }
 
