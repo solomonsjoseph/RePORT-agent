@@ -290,6 +290,15 @@ def test_orchestrator_asks_short_question_for_ambiguous_user_intent(monkeypatch)
     assert result["output"]["qa_response"] == (
         "Which previous database query did you want to continue?"
     )
+    clarification_events = [
+        event
+        for event in result["artifacts"]["conversation_events"]
+        if event["type"] == "clarification"
+    ]
+    assert len(clarification_events) == 1
+    assert clarification_events[0]["actor"] == "orchestrator"
+    assert clarification_events[0]["text"] == result["output"]["qa_response"]
+    assert clarification_events[0]["status"] == "active"
 
 
 def test_rag_db_dispatch_passes_and_clears_question_override() -> None:

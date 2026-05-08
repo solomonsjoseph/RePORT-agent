@@ -821,6 +821,7 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
             output = dict(output)
             output["qa_response"] = question
             next_action = "end"
+            memory_clarification_question = question
             observations = list(routing_state.get("observations", []))
             observations.append(f"user_intent_clarification={question}")
             routing_state = {
@@ -959,7 +960,6 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
     if (
         current_hash
         and memory_clarification_question
-        and next_action == "clarification"
         and not has_conversation_event(
             state,
             event_type="clarification",
