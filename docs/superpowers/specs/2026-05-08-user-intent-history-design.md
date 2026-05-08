@@ -37,7 +37,7 @@ The failure mode is:
 3. User clicks Cancel.
 4. User says: "continue previous query."
 
-The cancelled review should not resume automatically. However, "previous query" should resolve to the latest timestamped user DB-RAG intent and start a fresh DB-RAG workflow from that query.
+The cancelled review should not resume automatically. However, "previous query" should resolve to the latest user-originated DB-RAG intent and start a fresh DB-RAG workflow from that query.
 
 ## Design Principles
 
@@ -45,7 +45,7 @@ The cancelled review should not resume automatically. However, "previous query" 
 2. Keep DB-RAG `active_intent` as the canonical live DB-RAG semantic object.
 3. Keep `memory.completed_tasks` limited to completed reusable outputs.
 4. Add only a compact current-thread user intent registry.
-5. Resolve "previous query" by structured timestamps, not by planner summary text.
+5. Resolve "previous query" by structured intent pointers and creation order, not by planner summary text.
 6. Treat cancel as terminal for the pending workflow but reference-preserving for the originating intent.
 7. Do not let cancelled intent history suppress future routing.
 8. Avoid making an LLM responsible for task lifecycle truth.
@@ -86,11 +86,25 @@ memory = {
     "last_user_intent_id": "intent_3f8a9c21",
     "last_user_intent_id_by_kind": {
         "db_rag_query": "intent_3f8a9c21"
+    },
+    "last_user_intent_resolution": {
+        "user_message_hash": "...",
+        "result": {
+            "label": "resolved",
+            "intent_id": "intent_3f8a9c21",
+            "kind": "db_rag_query",
+            "relationship": "continue",
+            "confidence": "high",
+            "needs_reference": False,
+            "reason": "User asked to continue the latest database query."
+        }
     }
 }
 ```
 
 `intent_id` should be an opaque memory-layer ID. It may link to DB-RAG's `active_intent.intent_id` through `active_intent_id`, but the two IDs should not be required to match.
+
+`intent_order` is creation order for user-initiated intent records. Status-only updates such as review cancel must update `updated_at` but must not move an older record to the end of `intent_order`. This keeps "latest query" tied to the latest user-originated query, not the latest internal status mutation.
 
 ## Status Semantics
 
@@ -99,8 +113,14 @@ Allowed initial statuses:
 - `active`
   - user intent has a live workflow in progress
 
-- `awaiting_review`
-  - workflow is paused at a human review node
+- `awaiting_extraction_opt_in`
+  - DB-RAG answered a metadata question and is waiting for the extraction opt-in reply
+
+- `awaiting_column_review`
+  - DB-RAG is paused at the column-selection review node
+
+- `awaiting_sql_review`
+  - DB-RAG is paused at the SQL-execution review node
 
 - `cancelled`
   - user cancelled the pending workflow
@@ -143,6 +163,46 @@ Completed task memory remains the registry for completed reusable outputs.
 
 When a DB-RAG SQL extraction completes, the completed task should link back to the originating user intent, and the originating user intent should link forward to `completed_task_id`.
 
+## Schema And Helpers
+
+Extend the existing memory helpers rather than creating a second memory normalization path.
+
+`graph/memory/schema.py` should add a compact `UserIntentCard` shape and allowed user-intent constants:
+
+```python
+ALLOWED_USER_INTENT_KINDS = {"db_rag_query"}
+ALLOWED_USER_INTENT_STATUSES = {
+    "active",
+    "awaiting_extraction_opt_in",
+    "awaiting_column_review",
+    "awaiting_sql_review",
+    "cancelled",
+    "completed",
+    "superseded",
+    "declined",
+}
+```
+
+`graph/memory/task_store.py` should extend `EMPTY_MEMORY_STATE`, `MEMORY_KEY_TYPES`, and `ensure_memory_state` with:
+
+- `user_intents: dict`
+- `intent_order: list`
+- `last_user_intent_id: str | None`
+- `last_user_intent_id_by_kind: dict[str, str]`
+- `last_user_intent_resolution: dict | None`
+
+`ensure_memory_state` should prune `intent_order`, `last_user_intent_id`, and `last_user_intent_id_by_kind` against existing `user_intents`, mirroring the completed-task cleanup pattern.
+
+Add helper functions in `graph/memory/user_intent_store.py` or the existing memory package:
+
+- `upsert_user_intent_from_db_rag_intent(...)`
+- `update_user_intent_status(...)`
+- `link_user_intent_completed_task(...)`
+- `latest_user_intent(...)`
+- `resolve_user_intent_reference_for_turn(...)`
+
+All helper inputs must be JSON-safe and should deep-copy caller-provided dict/list values before storing them.
+
 ## Write Points
 
 ### Fresh DB-RAG Question
@@ -164,9 +224,17 @@ The record should include:
 
 This should happen for both metadata-style DB-RAG questions and extraction-oriented DB-RAG questions.
 
+If there is an older DB-RAG user intent in `active`, `awaiting_extraction_opt_in`, `awaiting_column_review`, or `awaiting_sql_review` status and the DB-RAG boundary classifier has determined the new message is a fresh question, mark the older intent `superseded` before creating the new record.
+
 ### DB-RAG Intent Refinement
 
 When a user refinement updates the current DB-RAG `active_intent`, the system should update the same user-intent record rather than create a new one, unless the boundary classifier has determined that the message is a fresh new question.
+
+The upsert lookup order should be:
+
+1. existing `memory.user_intents` record whose `active_intent_id` matches DB-RAG `active_intent.intent_id`
+2. `last_user_intent_id_by_kind["db_rag_query"]` when that record is still live and belongs to `rag_db_qa`
+3. create a new record
 
 The record should update:
 
@@ -189,6 +257,8 @@ When a DB-RAG column-selection or SQL-execution review is cancelled, the system 
 
 Cancel should not add planner suppression rules. Future DB-RAG requests should route normally.
 
+The cancel status update should find the user-intent record from DB-RAG `active_intent.intent_id` first. If that is unavailable, it may use the selection or SQL artifact `intent_snapshot.intent_id`. If no matching user-intent record exists, cancel should remain successful and audit-only; it should not create a brand-new cancelled intent from partial review state.
+
 ### SQL Execution Completion
 
 When reviewed DB-RAG SQL execution succeeds and writes a completed task:
@@ -196,23 +266,26 @@ When reviewed DB-RAG SQL execution succeeds and writes a completed task:
 - set the originating user intent `status="completed"`
 - set `completed_task_id`
 - set `updated_at`
+- add a reciprocal `originating_user_intent_id` field to the completed task's `provenance`
 - keep the completed task card as the reusable result record
 
 The completed task remains the source for result-focused references such as "summarize the output" or "what SQL did you use?"
 
 ## Reference Resolution
 
-The current task-memory resolver handles completed tasks. User-intent history adds an earlier reference surface for incomplete or cancelled user goals.
+The current task-memory resolver handles completed tasks. User-intent history adds a reference surface for incomplete or cancelled user goals.
 
 Recommended resolution order after higher-priority live workflows:
 
 1. Pending human review or interrupt
 2. Pending clarification or DB-RAG opt-in
 3. Pending deterministic workflow continuation
-4. User-intent reference resolver for incomplete/cancelled user goals
-5. Completed-task reference resolver
+4. Completed-task reference resolver for result, output, SQL, dataset, figure, or artifact references
+5. User-intent reference resolver for incomplete/cancelled user query references
 6. Normal deterministic routing predicates
 7. Planner fallback
+
+The completed-task resolver should run before the user-intent resolver when the text points to a result or artifact because "summarize the output above" and "what SQL did you use?" should bind to completed work, not the originating query intent.
 
 The user-intent resolver should be deterministic for common references:
 
@@ -222,9 +295,25 @@ The user-intent resolver should be deterministic for common references:
 - "continue that database query"
 - "retry that DB query"
 
-For these phrases, choose the latest `memory.user_intents` record by `created_at`, scoped to `kind="db_rag_query"` when the phrase says query or database.
+For these phrases, choose `last_user_intent_id_by_kind["db_rag_query"]` when the phrase says query or database. If that pointer is missing or invalid, fall back to the newest valid DB-RAG intent by `intent_order`, then `created_at`. Do not choose by `updated_at`, because cancel and completion are status updates rather than new user queries.
 
 If the user says "previous result", "last output", or asks to inspect SQL/dataset/output, use completed task memory instead.
+
+The deterministic resolver result should be compact and separate from completed-task resolution:
+
+```python
+{
+    "label": "resolved" | "new_intent" | "ambiguous" | "unknown",
+    "intent_id": "intent_3f8a9c21" | None,
+    "kind": "db_rag_query" | None,
+    "relationship": "continue" | "retry" | "edit" | "copy" | None,
+    "confidence": "high" | "medium" | "low",
+    "needs_reference": bool,
+    "reason": str,
+}
+```
+
+The first implementation should support `continue` and `retry`; `edit` and `copy` are reserved for later UI work.
 
 ## Continue Behavior
 
@@ -238,6 +327,10 @@ Instead it should:
 4. route into DB-RAG as a fresh workflow
 
 This preserves the user's intended query while respecting that Cancel ended the old pending review.
+
+Continuation should not reuse stale review artifacts, `pending_column_review`, `pending_sql_candidate`, approved selection IDs, or SQL approval IDs from the cancelled workflow. It should enter DB-RAG through the same fresh-question path used by a new extraction-oriented request.
+
+The new continued intent should get a new memory-layer `intent_id` and a new DB-RAG `active_intent.intent_id`. The prior cancelled intent should remain `cancelled`; it should not be mutated back to `active`.
 
 ## Future UI Fit
 
@@ -260,8 +353,11 @@ Add focused tests for:
 - DB-RAG column-review cancel marks the originating user intent `cancelled`
 - DB-RAG SQL-review cancel marks the originating user intent `cancelled`
 - cancel still does not create or mutate `memory.completed_tasks`
-- "continue previous query" resolves the latest timestamped DB-RAG user intent
+- "continue previous query" resolves the latest user-originated DB-RAG intent
 - continuing a cancelled query starts a fresh DB-RAG workflow instead of reopening the cancelled review
+- status-only cancel updates do not reorder `intent_order`
+- a fresh DB-RAG question supersedes the previous live DB-RAG user intent
+- output/result references continue to use completed-task memory before user-intent memory
 - completed SQL extraction links completed task memory and originating user-intent memory
 
 Existing tests for approve, regenerate, cancel audit events, and completed-task memory should continue to pass.
