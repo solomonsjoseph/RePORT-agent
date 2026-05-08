@@ -21,7 +21,7 @@ class _FakeColumn:
 
 
 class _FakeStreamlit:
-    def __init__(self, *, clicked_label: str = "✖️ Cancel", text_area_value: str = "ignore this feedback") -> None:
+    def __init__(self, *, clicked_label: str = "❌ Cancel", text_area_value: str = "ignore this feedback") -> None:
         self.clicked_label = clicked_label
         self.text_area_value = text_area_value
         self.session_state = {}
