@@ -2021,6 +2021,34 @@ def test_sql_execution_completion_writes_db_rag_sql_task(monkeypatch) -> None:
     assert "tables" not in memory_text
 
 
+def test_sql_execution_completion_links_originating_user_intent(monkeypatch) -> None:
+    from graph.memory import upsert_user_intent_from_db_rag_intent
+
+    state, rag_state, candidate = _successful_sql_execution_state()
+    candidate.intent_id = "intent:sql"
+    state = upsert_user_intent_from_db_rag_intent(
+        state,
+        active_intent={
+            "intent_id": "intent:sql",
+            "source_question": "Generate the SQL to subset index cases with diabetes.",
+            "goal_text": "Generate the SQL to subset index cases with diabetes.",
+        },
+        source_message_hash="hash-1",
+        status="awaiting_sql_review",
+    )
+    intent_id = state["memory"]["last_user_intent_id"]
+
+    updated = _execute_successful_sql(monkeypatch, state, rag_state, candidate)
+
+    task_id = updated["memory"]["last_task_id_by_kind"]["db_rag_sql_extraction"]
+    assert updated["memory"]["user_intents"][intent_id]["status"] == "completed"
+    assert updated["memory"]["user_intents"][intent_id]["completed_task_id"] == task_id
+    assert (
+        updated["memory"]["completed_tasks"][task_id]["provenance"]["originating_user_intent_id"]
+        == intent_id
+    )
+
+
 def test_successful_sql_execution_keeps_reviewed_sql_and_selection_in_display_history(monkeypatch) -> None:
     from utils.display_history import build_display_history
 

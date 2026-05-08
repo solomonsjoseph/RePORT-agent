@@ -6,6 +6,7 @@ from typing import Any
 from langgraph.types import interrupt
 
 from ..conversation_events import append_conversation_event, build_review_decision_event
+from ..memory import update_user_intent_status
 from ..state import MetaKeys
 from .human_review_cancel import append_review_cancel_audit
 from .rag_db_qa import _deserialize_prepared_sql_candidate, _execute_prepared_sql_candidate
@@ -177,6 +178,14 @@ def human_review_rag_db_sql_execution_node(state, service):
             **updated_state,
             "agents": agents,
         }
+        active_intent = dict(rag_state.get("active_intent") or {})
+        active_intent_id = str(active_intent.get("intent_id") or "").strip() or None
+        if active_intent_id:
+            updated_state = update_user_intent_status(
+                updated_state,
+                active_intent_id=active_intent_id,
+                status="cancelled",
+            )
         return update_agent_state(updated_state, "rag_db_qa", rag_state)
 
     if action == "approve":

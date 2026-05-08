@@ -12,6 +12,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from graph.memory import upsert_user_intent_from_db_rag_intent
+
 
 def _install_stubs(decision: str, suggestion: str | None = None) -> None:
     langgraph_types = ModuleType("langgraph.types")
@@ -512,6 +514,65 @@ def test_rag_db_column_review_cancel_does_not_write_task_memory() -> None:
     )
 
 
+def test_rag_db_column_review_cancel_marks_user_intent_cancelled() -> None:
+    _install_stubs(decision="cancel", suggestion="")
+    for mod in (
+        "graph.nodes.human_review_rag_db_column_selection",
+        "graph.nodes.human_review_cancel",
+        "graph.state",
+        "graph.nodes.state_helpers",
+    ):
+        sys.modules.pop(mod, None)
+    module = importlib.import_module("graph.nodes.human_review_rag_db_column_selection")
+    state = {
+        "messages": [],
+        "output": {},
+        "meta": {"last_user_message_hash": "u-rag-col-cancel-intent"},
+        "artifacts": {
+            "files": {
+                "sel-1": {
+                    "kind": "db_rag_column_selection",
+                    "artifact_id": "sel-1",
+                    "created_at": "2026-05-07T00:00:00+00:00",
+                    "producer": "rag_db_qa",
+                    "mime": "application/json",
+                    "summary": "Column selection awaiting review",
+                    "content": {
+                        "status": "awaiting_review",
+                        "goal_text": "extract diabetes rows",
+                        "source_question": "extract diabetes rows",
+                    },
+                }
+            }
+        },
+        "agents": {
+            "rag_db_qa": {
+                "active_intent": {
+                    "intent_id": "rag-intent-1",
+                    "source_question": "extract diabetes rows",
+                    "goal_text": "extract diabetes rows",
+                },
+                "pending_column_review_artifact_id": "sel-1",
+                "pending_column_review": {"status": "awaiting_review"},
+                "thread_status": "awaiting_column_review",
+                "active_thread": True,
+            }
+        },
+    }
+    state = upsert_user_intent_from_db_rag_intent(
+        state,
+        active_intent=state["agents"]["rag_db_qa"]["active_intent"],
+        source_message_hash="hash-1",
+        status="awaiting_column_review",
+    )
+    intent_id = state["memory"]["last_user_intent_id"]
+
+    updated = module.human_review_rag_db_column_selection_node(state)
+
+    assert updated["memory"]["user_intents"][intent_id]["status"] == "cancelled"
+    assert updated["memory"]["completed_tasks"] == {}
+
+
 def test_rag_db_sql_review_cancel_does_not_write_task_memory() -> None:
     state = {
         "messages": [],
@@ -572,6 +633,87 @@ def test_rag_db_sql_review_cancel_does_not_write_task_memory() -> None:
         extra_modules=("graph.nodes.rag_db_qa",),
         kwargs={"service": object()},
     )
+
+
+def test_rag_db_sql_review_cancel_marks_user_intent_cancelled() -> None:
+    _install_stubs(decision="cancel", suggestion="")
+    for mod in (
+        "graph.nodes.human_review_rag_db_sql_execution",
+        "graph.nodes.human_review_cancel",
+        "graph.nodes.rag_db_qa",
+        "graph.state",
+        "graph.nodes.state_helpers",
+    ):
+        sys.modules.pop(mod, None)
+    module = importlib.import_module("graph.nodes.human_review_rag_db_sql_execution")
+    state = {
+        "messages": [],
+        "output": {},
+        "meta": {"last_user_message_hash": "u-rag-sql-cancel-intent"},
+        "artifacts": {
+            "files": {
+                "sel-1": {
+                    "kind": "db_rag_column_selection",
+                    "artifact_id": "sel-1",
+                    "created_at": "2026-05-07T00:00:00+00:00",
+                    "producer": "rag_db_qa",
+                    "mime": "application/json",
+                    "summary": "Approved column selection",
+                    "content": {
+                        "status": "approved",
+                        "selection_id": "selection-1",
+                        "tables": ["Form 2A"],
+                        "columns": [{"table": "Form 2A", "column": "IC_AGE"}],
+                    },
+                },
+                "sql-1": {
+                    "kind": "db_rag_sql_candidate",
+                    "artifact_id": "sql-1",
+                    "created_at": "2026-05-07T00:00:00+00:00",
+                    "producer": "rag_db_qa",
+                    "mime": "application/json",
+                    "summary": "Prepared SQL candidate",
+                    "content": {
+                        "status": "prepared",
+                        "selection_artifact_id": "sel-1",
+                        "selection_id": "selection-1",
+                        "tables": ["Form 2A"],
+                        "columns": [{"table": "Form 2A", "column": "IC_AGE"}],
+                        "sql": "select 1",
+                    },
+                },
+            }
+        },
+        "agents": {
+            "rag_db_qa": {
+                "active_intent": {
+                    "intent_id": "rag-intent-1",
+                    "source_question": "extract diabetes rows",
+                    "goal_text": "extract diabetes rows",
+                },
+                "pending_sql_candidate_artifact_id": "sql-1",
+                "pending_sql_candidate": {"status": "prepared"},
+                "approved_column_selection_artifact_id": "sel-1",
+                "pending_column_review_artifact_id": "sel-1",
+                "pending_column_review": {"status": "approved"},
+                "sql_review_approved_artifact_id": "sql-1",
+                "thread_status": "awaiting_sql_review",
+                "active_thread": True,
+            }
+        },
+    }
+    state = upsert_user_intent_from_db_rag_intent(
+        state,
+        active_intent=state["agents"]["rag_db_qa"]["active_intent"],
+        source_message_hash="hash-1",
+        status="awaiting_sql_review",
+    )
+    intent_id = state["memory"]["last_user_intent_id"]
+
+    updated = module.human_review_rag_db_sql_execution_node(state, service=object())
+
+    assert updated["memory"]["user_intents"][intent_id]["status"] == "cancelled"
+    assert updated["memory"]["completed_tasks"] == {}
 
 
 def test_before_run_cancel_disables_before_run_readiness() -> None:

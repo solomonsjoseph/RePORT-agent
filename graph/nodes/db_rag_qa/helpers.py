@@ -27,7 +27,7 @@ from ...conversation_events import (
     build_sql_event,
     store_thread_artifact,
 )
-from ...memory import complete_task
+from ...memory import complete_task, latest_user_intent, link_user_intent_completed_task
 from ..state_helpers import clear_clarification_meta
 
 _SUPPORTED_PROVIDERS = {"openai", "anthropic"}
@@ -280,6 +280,37 @@ def _completed_sql_task_texts(
     source_question = candidate_source or candidate_question or sql_source or selection_source
     goal_text = candidate_goal or candidate_source or candidate_question or sql_goal or selection_goal or selection_source
     return source_question, goal_text
+
+
+def _intent_id_from_snapshot(payload: dict[str, Any]) -> str:
+    snapshot = payload.get("intent_snapshot")
+    if not isinstance(snapshot, dict):
+        return ""
+    return str(snapshot.get("intent_id") or "").strip()
+
+
+def _originating_user_intent_id(
+    state: AgentState,
+    candidate: Any,
+    *,
+    sql_candidate_artifact: dict[str, Any],
+    approved_selection: dict[str, Any],
+) -> str | None:
+    candidate_intent_id = (
+        str(_read_value(candidate, "intent_id", "") or "").strip()
+        or _intent_id_from_snapshot(sql_candidate_artifact)
+        or _intent_id_from_snapshot(approved_selection)
+    )
+    if not candidate_intent_id:
+        return None
+
+    originating_intent = latest_user_intent(state, kind="db_rag_query")
+    if not isinstance(originating_intent, dict):
+        return None
+    if originating_intent.get("active_intent_id") != candidate_intent_id:
+        return None
+    intent_id = originating_intent.get("intent_id")
+    return str(intent_id).strip() if isinstance(intent_id, str) and intent_id.strip() else None
 
 
 def _serialize_column_selection(selection: Any) -> dict[str, Any]:
@@ -975,6 +1006,18 @@ def _execute_prepared_sql_candidate(
         sql_candidate_artifact=sql_candidate_artifact,
         approved_selection=approved_selection,
     )
+    originating_user_intent_id = _originating_user_intent_id(
+        updated,
+        candidate,
+        sql_candidate_artifact=sql_candidate_artifact,
+        approved_selection=approved_selection,
+    )
+    provenance = {
+        "producer_node": "rag_db_qa",
+        "selection_id": str(getattr(candidate, "selection_id", "") or ""),
+    }
+    if originating_user_intent_id:
+        provenance["originating_user_intent_id"] = originating_user_intent_id
     updated = complete_task(
         updated,
         kind="db_rag_sql_extraction",
@@ -989,11 +1032,16 @@ def _execute_prepared_sql_candidate(
         },
         parent_task_id=active_task.get("parent_task_id"),
         relationship_to_parent=active_task.get("relationship_to_parent"),
-        provenance={
-            "producer_node": "rag_db_qa",
-            "selection_id": str(getattr(candidate, "selection_id", "") or ""),
-        },
+        provenance=provenance,
     )
+    if originating_user_intent_id:
+        task_id = updated["memory"]["last_task_id_by_kind"].get("db_rag_sql_extraction")
+        if isinstance(task_id, str):
+            updated = link_user_intent_completed_task(
+                updated,
+                intent_id=originating_user_intent_id,
+                task_id=task_id,
+            )
     rag_state.pop("pending_sql_candidate", None)
     rag_state.pop("pending_column_review", None)
     rag_state.pop("active_task", None)
