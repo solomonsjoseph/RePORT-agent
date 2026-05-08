@@ -599,6 +599,11 @@ def render_interactive_area() -> None:
             if timing_stages:
                 with st.expander("DB-RAG timing", expanded=False):
                     st.dataframe(timing_stages, use_container_width=True)
+            workflow_timing = dict((state.get("meta") or {}).get("workflow_timing") or {})
+            workflow_timing_stages = list(workflow_timing.get("stages") or [])
+            if workflow_timing_stages:
+                with st.expander("Workflow timing", expanded=False):
+                    st.dataframe(workflow_timing_stages, use_container_width=True)
         st.write("Next nodes:", snapshot.next)
         st.write("interrupts:", snapshot.interrupts)
         if interrupt_event:
