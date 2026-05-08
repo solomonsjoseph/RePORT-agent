@@ -59,6 +59,8 @@ def _validate_user_intent_status(status: str) -> None:
 def _validate_text(value: Any, field_name: str) -> None:
     if not isinstance(value, str):
         raise ValueError(f"{field_name} must be a string")
+    if not value.strip():
+        raise ValueError(f"{field_name} must not be blank")
     require_json_safe(value, field_name)
 
 
@@ -93,15 +95,17 @@ def _matching_intent_id(memory: dict[str, Any], active_intent_id: str | None) ->
 
 def _latest_live_intent_id(memory: dict[str, Any], *, kind: str) -> str | None:
     _validate_user_intent_kind(kind)
-    for intent_id in reversed(memory["intent_order"]):
-        card = memory["user_intents"].get(intent_id)
-        if (
-            isinstance(card, dict)
-            and card.get("kind") == kind
-            and card.get("agent") == "rag_db_qa"
-            and card.get("status") in LIVE_USER_INTENT_STATUSES
-        ):
-            return intent_id
+    intent_id = memory["last_user_intent_id_by_kind"].get(kind)
+    if not isinstance(intent_id, str):
+        return None
+    card = memory["user_intents"].get(intent_id)
+    if (
+        isinstance(card, dict)
+        and card.get("kind") == kind
+        and card.get("agent") == "rag_db_qa"
+        and card.get("status") in LIVE_USER_INTENT_STATUSES
+    ):
+        return intent_id
     return None
 
 
@@ -164,7 +168,10 @@ def upsert_user_intent_from_db_rag_intent(
     _validate_optional_text(source_message_hash, "source_message_hash")
     _validate_user_intent_status(status)
     _validate_optional_text(continued_from_intent_id, "continued_from_intent_id")
-    if continued_from_intent_id is not None and continued_from_intent_id not in memory["user_intents"]:
+    if (
+        continued_from_intent_id is not None
+        and continued_from_intent_id not in memory["user_intents"]
+    ):
         raise ValueError(f"Unknown continued_from_intent_id: {continued_from_intent_id}")
 
     active_intent_id = active_intent.get("intent_id")
@@ -240,6 +247,11 @@ def link_user_intent_completed_task(
     _validate_text(task_id, "task_id")
     if intent_id not in memory["user_intents"]:
         raise ValueError(f"Unknown user intent: {intent_id}")
+    task = memory["completed_tasks"].get(task_id)
+    if not isinstance(task, dict):
+        raise ValueError(f"Unknown task_id: {task_id}")
+    if task.get("kind") != "db_rag_sql_extraction":
+        raise ValueError("completed task kind must be db_rag_sql_extraction")
 
     card = memory["user_intents"][intent_id]
     card["status"] = "completed"
