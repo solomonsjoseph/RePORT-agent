@@ -251,6 +251,65 @@ def _expected_extraction_opt_in(*, intent_id: str, goal_text: str) -> dict[str, 
     }
 
 
+def _memory_with_db_rag_user_intent(
+    *,
+    intent_id: str = "user-intent-1",
+    active_intent_id: str = "intent:age",
+    source_question: str = "Which forms contain age?",
+    goal_text: str = "Which forms contain age?",
+    status: str = "awaiting_extraction_opt_in",
+) -> dict:
+    return {
+        "completed_tasks": {},
+        "failed_tasks": {},
+        "task_order": [],
+        "last_task_id": None,
+        "last_task_id_by_kind": {},
+        "last_failed_task_id_by_kind": {},
+        "last_reference_resolution": None,
+        "pending_reference_clarification": None,
+        "user_intents": {
+            intent_id: {
+                "intent_id": intent_id,
+                "display_ordinal": 1,
+                "kind": "db_rag_query",
+                "agent": "rag_db_qa",
+                "source_question": source_question,
+                "goal_text": goal_text,
+                "status": status,
+                "source_message_hash": "u0",
+                "active_intent_id": active_intent_id,
+                "completed_task_id": None,
+                "continued_from_intent_id": None,
+                "created_at": "2026-05-08T00:00:00+00:00",
+                "updated_at": "2026-05-08T00:00:00+00:00",
+            }
+        },
+        "intent_order": [intent_id],
+        "last_user_intent_id": intent_id,
+        "last_user_intent_id_by_kind": {"db_rag_query": intent_id},
+    }
+
+
+def _state_with_pending_extraction_reply(message: str) -> dict:
+    state = _state(message)
+    state["memory"] = _memory_with_db_rag_user_intent()
+    state["agents"]["rag_db_qa"] = {
+        "active_intent": {
+            "intent_id": "intent:age",
+            "goal_text": "Which forms contain age?",
+            "source_question": "Which forms contain age?",
+            "mode": "metadata",
+            "status": "active",
+        },
+        "pending_extraction_opt_in": _expected_extraction_opt_in(
+            intent_id="intent:age",
+            goal_text="Which forms contain age?",
+        ),
+    }
+    return state
+
+
 def _patch_successful_subset_persistence(monkeypatch, *, dataset_id: str = "dataset-art-1") -> None:
     from graph.nodes.db_rag_qa import helpers as rag_helpers
 
@@ -1039,7 +1098,7 @@ def test_fresh_db_rag_question_records_user_intent() -> None:
     service = _Service()
 
     updated = rag_db_qa_node(
-        _state("What tables contain age?"),
+        _state("Which forms contain age?"),
         llm=None,
         provider="openai",
         service=service,
@@ -1049,11 +1108,60 @@ def test_fresh_db_rag_question_records_user_intent() -> None:
     memory = updated["memory"]
     intent_id = memory["last_user_intent_id_by_kind"]["db_rag_query"]
     card = memory["user_intents"][intent_id]
-    assert card["source_question"] == "What tables contain age?"
+    assert card["source_question"] == "Which forms contain age?"
     assert card["kind"] == "db_rag_query"
-    assert card["status"] in {"awaiting_extraction_opt_in", "awaiting_column_review"}
+    assert card["status"] == "awaiting_extraction_opt_in"
     assert card["source_message_hash"] == "u1"
     assert card["active_intent_id"] == active_intent["intent_id"]
+
+
+def test_explicit_extraction_question_records_awaiting_column_review_user_intent() -> None:
+    service = _Service()
+
+    updated = rag_db_qa_node(
+        _state("Generate the SQL to subset index cases with diabetes."),
+        llm=None,
+        provider="openai",
+        service=service,
+    )
+
+    memory = updated["memory"]
+    intent_id = memory["last_user_intent_id_by_kind"]["db_rag_query"]
+    card = memory["user_intents"][intent_id]
+    assert card["source_question"] == "Generate the SQL to subset index cases with diabetes."
+    assert card["status"] == "awaiting_column_review"
+    assert card["active_intent_id"] == updated["agents"]["rag_db_qa"]["active_intent"]["intent_id"]
+
+
+def test_fresh_db_rag_question_creates_new_user_intent_when_live_intent_exists() -> None:
+    service = _Service()
+    state = _state("Which forms contain gender?")
+    state["memory"] = _memory_with_db_rag_user_intent(
+        source_question="Which forms contain age?",
+        goal_text="Which forms contain age?",
+        status="awaiting_extraction_opt_in",
+    )
+    state["agents"]["rag_db_qa"] = {
+        "active_intent": {
+            "intent_id": "intent:age",
+            "goal_text": "Which forms contain age?",
+            "source_question": "Which forms contain age?",
+            "mode": "metadata",
+            "status": "active",
+        }
+    }
+
+    updated = rag_db_qa_node(state, llm=None, provider="openai", service=service)
+
+    memory = updated["memory"]
+    assert len(memory["intent_order"]) == 2
+    first_id, second_id = memory["intent_order"]
+    first_card = memory["user_intents"][first_id]
+    second_card = memory["user_intents"][second_id]
+    assert first_card["source_question"] == "Which forms contain age?"
+    assert second_card["source_question"] == "Which forms contain gender?"
+    assert second_card["status"] == "awaiting_extraction_opt_in"
+    assert memory["last_user_intent_id_by_kind"]["db_rag_query"] == second_id
 
 
 def test_question_override_records_user_intent_source_question_and_is_consumed() -> None:
@@ -1345,24 +1453,12 @@ def test_pending_extraction_reply_uses_service_classifiers_for_substantive_follo
     service = _Service()
     service.extraction_gate_result = {"label": "reply_to_pending_gate", "confidence": 0.9}
     service.pending_reply_result = {"label": "substantive_followup", "confidence": 0.9}
-    state = _state("Use household contacts instead.")
-    state["agents"]["rag_db_qa"] = {
-        "active_intent": {
-            "intent_id": "intent:age",
-            "goal_text": "Which forms contain age?",
-            "source_question": "Which forms contain age?",
-            "mode": "metadata",
-            "status": "active",
-        },
-        "pending_extraction_opt_in": _expected_extraction_opt_in(
-            intent_id="intent:age",
-            goal_text="Which forms contain age?",
-        ),
-    }
+    state = _state_with_pending_extraction_reply("Use household contacts instead.")
 
     updated = rag_db_qa_node(state, llm=None, provider="openai", service=service)
 
     rag_state = updated["agents"]["rag_db_qa"]
+    card = updated["memory"]["user_intents"]["user-intent-1"]
     assert service.calls[:2] == [
         ("classify_extraction_gate_message", "Use household contacts instead."),
         ("classify_pending_reply", "Use household contacts instead."),
@@ -1371,6 +1467,37 @@ def test_pending_extraction_reply_uses_service_classifiers_for_substantive_follo
     assert rag_state["pending_extraction_opt_in"] is None
     assert rag_state["pending_column_review_artifact_id"]
     assert rag_state["active_intent"]["goal_text"] == "Use household contacts instead."
+    assert card["source_question"] == "Which forms contain age?"
+    assert card["goal_text"] == "Use household contacts instead."
+    assert card["status"] == "awaiting_column_review"
+
+
+def test_pending_extraction_yes_reply_updates_user_intent_to_awaiting_column_review() -> None:
+    service = _Service()
+    service.extraction_gate_result = {"label": "reply_to_pending_gate", "confidence": 0.9}
+    service.pending_reply_result = {"label": "yes", "confidence": 0.9}
+    state = _state_with_pending_extraction_reply("yes")
+
+    updated = rag_db_qa_node(state, llm=None, provider="openai", service=service)
+
+    card = updated["memory"]["user_intents"]["user-intent-1"]
+    assert updated["agents"]["rag_db_qa"]["pending_column_review_artifact_id"]
+    assert card["source_question"] == "Which forms contain age?"
+    assert card["status"] == "awaiting_column_review"
+
+
+def test_pending_extraction_no_reply_updates_user_intent_to_declined() -> None:
+    service = _Service()
+    service.extraction_gate_result = {"label": "reply_to_pending_gate", "confidence": 0.9}
+    service.pending_reply_result = {"label": "no", "confidence": 0.9}
+    state = _state_with_pending_extraction_reply("no")
+
+    updated = rag_db_qa_node(state, llm=None, provider="openai", service=service)
+
+    card = updated["memory"]["user_intents"]["user-intent-1"]
+    assert updated["agents"]["rag_db_qa"]["pending_extraction_opt_in"] is None
+    assert card["source_question"] == "Which forms contain age?"
+    assert card["status"] == "declined"
 
 
 def test_pending_extraction_boundary_classifier_can_route_fresh_question_without_pending_reply_classification() -> None:

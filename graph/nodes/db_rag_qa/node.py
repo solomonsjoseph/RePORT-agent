@@ -1158,7 +1158,7 @@ def _handle_fresh_db_rag_question(
     service,
     reranker_model: str | None,
     question: str,
-    force_new_intent: bool = False,
+    force_new_intent: bool = True,
 ) -> AgentState:
     explicit_extraction = _is_explicit_extraction_question(question)
     context = service.retrieve_context(question, reranker_model=reranker_model)
@@ -1337,7 +1337,7 @@ def _rag_db_qa_node_impl(
         service=service,
         reranker_model=reranker_model,
         question=question,
-        force_new_intent=bool(question_override),
+        force_new_intent=True,
     )
 
 
