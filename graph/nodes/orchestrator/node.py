@@ -9,7 +9,11 @@ from ...conversation_events import (
     build_user_event,
     has_conversation_event,
 )
-from ...memory import ensure_memory_state, resolve_reference_for_turn
+from ...memory import (
+    classify_user_intent_reference,
+    ensure_memory_state,
+    resolve_reference_for_turn,
+)
 from ...memory.schema import ALLOWED_RELATIONSHIPS
 from ...memory.validation import ALLOWED_RELATIONSHIPS_BY_TASK_KIND
 from ...state import AgentState, MetaKeys
@@ -52,6 +56,15 @@ _RESOLVED_TASK_META_KEYS = (
     MetaKeys.RESOLVED_TASK_USER_MESSAGE_HASH,
 )
 _RESOLVED_TASK_META_CONSUMED_KEY = "resolved_task_meta_consumed"
+_RESOLVED_USER_INTENT_META_KEYS = (
+    MetaKeys.RESOLVED_USER_INTENT_ID,
+    MetaKeys.RESOLVED_USER_INTENT_KIND,
+    MetaKeys.RESOLVED_USER_INTENT_RELATIONSHIP,
+    MetaKeys.RESOLVED_USER_INTENT_SOURCE_QUESTION,
+    MetaKeys.RESOLVED_USER_INTENT_USER_MESSAGE_HASH,
+    MetaKeys.RAG_DB_QUESTION_OVERRIDE,
+)
+_RESOLVED_USER_INTENT_META_CONSUMED_KEY = "resolved_user_intent_meta_consumed"
 
 
 def _clear_resolved_task_meta(meta: dict) -> dict:
@@ -62,11 +75,27 @@ def _clear_resolved_task_meta(meta: dict) -> dict:
     return updated
 
 
+def _clear_resolved_user_intent_meta(meta: dict) -> dict:
+    updated = dict(meta)
+    for key in _RESOLVED_USER_INTENT_META_KEYS:
+        updated.pop(key, None)
+    updated.pop(_RESOLVED_USER_INTENT_META_CONSUMED_KEY, None)
+    return updated
+
+
 def _clear_consumed_resolved_task_meta(meta: dict) -> dict:
     resolved_hash = meta.get(MetaKeys.RESOLVED_TASK_USER_MESSAGE_HASH)
     consumed_hash = meta.get(_RESOLVED_TASK_META_CONSUMED_KEY)
     if isinstance(resolved_hash, str) and consumed_hash == resolved_hash:
         return _clear_resolved_task_meta(meta)
+    return meta
+
+
+def _clear_consumed_resolved_user_intent_meta(meta: dict) -> dict:
+    resolved_hash = meta.get(MetaKeys.RESOLVED_USER_INTENT_USER_MESSAGE_HASH)
+    consumed_hash = meta.get(_RESOLVED_USER_INTENT_META_CONSUMED_KEY)
+    if isinstance(resolved_hash, str) and consumed_hash == resolved_hash:
+        return _clear_resolved_user_intent_meta(meta)
     return meta
 
 
@@ -83,6 +112,23 @@ def _apply_resolved_task_meta(
     updated[MetaKeys.RESOLVED_TASK_INTENDED_ACTION] = resolution.get("intended_action")
     updated[MetaKeys.RESOLVED_TASK_USER_MESSAGE_HASH] = current_hash
     updated[_RESOLVED_TASK_META_CONSUMED_KEY] = current_hash
+    return updated
+
+
+def _apply_resolved_user_intent_meta(
+    meta: dict,
+    resolution: dict,
+    intent: dict,
+    current_hash: str,
+) -> dict:
+    updated = dict(meta)
+    updated[MetaKeys.RESOLVED_USER_INTENT_ID] = intent.get("intent_id")
+    updated[MetaKeys.RESOLVED_USER_INTENT_KIND] = intent.get("kind")
+    updated[MetaKeys.RESOLVED_USER_INTENT_RELATIONSHIP] = resolution.get("relationship")
+    updated[MetaKeys.RESOLVED_USER_INTENT_SOURCE_QUESTION] = intent.get("source_question")
+    updated[MetaKeys.RESOLVED_USER_INTENT_USER_MESSAGE_HASH] = current_hash
+    updated.pop(_RESOLVED_USER_INTENT_META_CONSUMED_KEY, None)
+    updated.pop(MetaKeys.RAG_DB_QUESTION_OVERRIDE, None)
     return updated
 
 
@@ -174,6 +220,45 @@ def _route_from_resolved_task_meta(
             f"task_id={task.get('task_id')} "
             f"relationship={relationship} "
             f"routed_node={routed_node}"
+        ],
+    )
+
+
+def _route_from_resolved_user_intent_meta(
+    routing_state: AgentState,
+    meta: dict,
+    available_action_set: set[str],
+) -> tuple[str | None, dict, list[str]]:
+    del routing_state
+    intent_id = meta.get(MetaKeys.RESOLVED_USER_INTENT_ID)
+    kind = meta.get(MetaKeys.RESOLVED_USER_INTENT_KIND)
+    relationship = meta.get(MetaKeys.RESOLVED_USER_INTENT_RELATIONSHIP)
+    source_question = meta.get(MetaKeys.RESOLVED_USER_INTENT_SOURCE_QUESTION)
+    resolved_hash = meta.get(MetaKeys.RESOLVED_USER_INTENT_USER_MESSAGE_HASH)
+    consumed_hash = meta.get(_RESOLVED_USER_INTENT_META_CONSUMED_KEY)
+    if isinstance(resolved_hash, str) and consumed_hash == resolved_hash:
+        return None, _clear_resolved_user_intent_meta(meta), []
+    if (
+        "rag_db_qa" not in available_action_set
+        or not isinstance(intent_id, str)
+        or kind != "db_rag_query"
+        or relationship not in {"continue", "refine"}
+        or not isinstance(source_question, str)
+        or not source_question.strip()
+    ):
+        return None, _clear_resolved_user_intent_meta(meta), []
+
+    updated_meta = dict(meta)
+    updated_meta[MetaKeys.RAG_DB_QUESTION_OVERRIDE] = source_question.strip()
+    if isinstance(resolved_hash, str):
+        updated_meta[_RESOLVED_USER_INTENT_META_CONSUMED_KEY] = resolved_hash
+    return (
+        "rag_db_qa",
+        updated_meta,
+        [
+            f"user_intent_id={intent_id} "
+            f"relationship={relationship} "
+            "routed_node=rag_db_qa"
         ],
     )
 
@@ -645,6 +730,7 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
             orchestrator_state["next_action"] = next_action
         else:
             meta = _clear_resolved_task_meta(meta)
+            meta = _clear_resolved_user_intent_meta(meta)
             meta[MetaKeys.LAST_USER_MESSAGE_HASH] = current_hash
             next_action = None
             orchestrator_state.pop("next_action", None)
@@ -658,6 +744,7 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
 
     if not fresh_unanswered_user_turn:
         meta = _clear_consumed_resolved_task_meta(meta)
+        meta = _clear_consumed_resolved_user_intent_meta(meta)
         routing_state["meta"] = meta
 
     if not next_action:
@@ -689,6 +776,72 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
             next_action = routed_from_meta
             observations = list(routing_state.get("observations", []))
             observations.extend(resolved_observations)
+            routing_state = {
+                **routing_state,
+                "meta": meta,
+                "observations": observations,
+            }
+        else:
+            routing_state = {**routing_state, "meta": meta}
+
+    if (
+        not next_action
+        and fresh_unanswered_user_turn
+        and current_hash
+        and dict((routing_state.get("memory") or {}).get("user_intents") or {})
+    ):
+        classification = classify_user_intent_reference(
+            routing_state,
+            llm,
+            user_message=latest_user_message(routing_state),
+            user_message_hash=current_hash,
+        )
+        if (
+            classification.get("target") == "existing_user_intent"
+            and classification.get("needs_clarification") is not True
+        ):
+            _state, memory = ensure_memory_state(routing_state)
+            intent_id = classification.get("target_id")
+            intent = dict(memory.get("user_intents") or {}).get(intent_id)
+            if isinstance(intent, dict):
+                meta = _apply_resolved_user_intent_meta(
+                    meta,
+                    classification,
+                    intent,
+                    current_hash,
+                )
+                routing_state = {**routing_state, "meta": meta}
+        elif classification.get("target") == "ambiguous" or classification.get("needs_clarification") is True:
+            question = "Which previous database query did you want to continue?"
+            meta = dict(meta)
+            meta[MetaKeys.AWAITING_USER_CLARIFICATION] = True
+            meta[MetaKeys.CLARIFICATION_KIND] = "qa_followup"
+            meta[MetaKeys.CLARIFICATION_RETURN_NODE] = "qa"
+            meta[MetaKeys.PENDING_QUESTION] = question
+            output = dict(output)
+            output["qa_response"] = question
+            next_action = "end"
+            observations = list(routing_state.get("observations", []))
+            observations.append(f"user_intent_clarification={question}")
+            routing_state = {
+                **routing_state,
+                "meta": meta,
+                "output": output,
+                "observations": observations,
+            }
+
+    if not next_action:
+        routed_from_user_intent, meta, user_intent_observations = (
+            _route_from_resolved_user_intent_meta(
+                routing_state,
+                meta,
+                available_action_set,
+            )
+        )
+        if routed_from_user_intent:
+            next_action = routed_from_user_intent
+            observations = list(routing_state.get("observations", []))
+            observations.extend(user_intent_observations)
             routing_state = {
                 **routing_state,
                 "meta": meta,

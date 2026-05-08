@@ -3,7 +3,7 @@ import sqlite3
 from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.sqlite import SqliteSaver
 from utils.dataset_artifacts import get_active_dataset_artifact, load_dataset_artifact
-from .state import AgentState
+from .state import AgentState, MetaKeys
 from .routing import route_by_next_action
 from .nodes.node_registry import validate_registry
 
@@ -62,6 +62,32 @@ def _run_and_mark(node_name, fn):
     return _wrapped
 
 
+def _dispatch_rag_db_qa_with_override(
+    state,
+    *,
+    llm,
+    provider,
+    service,
+    reranker_model=None,
+    rag_db_qa_node_fn=rag_db_qa_node,
+):
+    meta = dict(state.get("meta") or {})
+    question_override = meta.get(MetaKeys.RAG_DB_QUESTION_OVERRIDE)
+    updated = rag_db_qa_node_fn(
+        state,
+        llm,
+        provider=provider,
+        service=service,
+        reranker_model=reranker_model,
+        question_override=question_override if isinstance(question_override, str) else None,
+    )
+    if not isinstance(updated, dict):
+        return updated
+    updated_meta = dict(updated.get("meta") or {})
+    updated_meta.pop(MetaKeys.RAG_DB_QUESTION_OVERRIDE, None)
+    return {**updated, "meta": updated_meta}
+
+
 def build_graph(llm, provider, db_path):
     workflow = StateGraph(AgentState)
     db_rag_service = DbRagService(llm=llm)
@@ -105,9 +131,9 @@ def build_graph(llm, provider, db_path):
         "qa": _run_and_mark("qa", lambda s: qa_node(s, llm, context_bundle)),
         "rag_db_qa": _run_and_mark(
             "rag_db_qa",
-            lambda s: rag_db_qa_node(
+            lambda s: _dispatch_rag_db_qa_with_override(
                 s,
-                llm,
+                llm=llm,
                 provider=provider,
                 service=db_rag_service,
                 reranker_model=db_rag_reranker_model,
