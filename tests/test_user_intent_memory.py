@@ -3,6 +3,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from graph.memory import (
@@ -107,6 +109,22 @@ def test_upsert_user_intent_from_db_rag_intent_creates_compact_card() -> None:
     assert compact_user_intent_cards(state) == [card]
 
 
+def test_upsert_user_intent_from_db_rag_intent_accepts_none_source_message_hash() -> None:
+    state = upsert_user_intent_from_db_rag_intent(
+        _old_state(),
+        active_intent={
+            "intent_id": "rag-1",
+            "source_question": "Which forms contain age?",
+            "goal_text": "Find forms that contain age fields.",
+        },
+        source_message_hash=None,
+        status="active",
+    )
+
+    intent_id = state["memory"]["last_user_intent_id"]
+    assert state["memory"]["user_intents"][intent_id]["source_message_hash"] is None
+
+
 def test_upsert_same_db_rag_active_intent_updates_without_reordering_or_source_change() -> None:
     state = upsert_user_intent_from_db_rag_intent(
         _old_state(),
@@ -145,6 +163,62 @@ def test_upsert_same_db_rag_active_intent_updates_without_reordering_or_source_c
     assert card["updated_at"] >= created_at
 
 
+def test_upsert_existing_db_rag_intent_updates_last_user_intent_pointers() -> None:
+    state = upsert_user_intent_from_db_rag_intent(
+        _old_state(),
+        active_intent={
+            "intent_id": "rag-1",
+            "source_question": "First question",
+            "goal_text": "Find first fields.",
+        },
+        source_message_hash="hash-1",
+        status="active",
+    )
+    first_id = state["memory"]["last_user_intent_id"]
+    state = upsert_user_intent_from_db_rag_intent(
+        state,
+        active_intent={
+            "intent_id": "rag-2",
+            "source_question": "Second question",
+            "goal_text": "Find second fields.",
+        },
+        source_message_hash="hash-2",
+        status="active",
+        force_new=True,
+    )
+
+    state = upsert_user_intent_from_db_rag_intent(
+        state,
+        active_intent={
+            "intent_id": "rag-1",
+            "source_question": "Ignored refinement question",
+            "goal_text": "Find updated first fields.",
+        },
+        source_message_hash="hash-3",
+        status="awaiting_column_review",
+    )
+
+    memory = state["memory"]
+    assert memory["intent_order"] != [first_id]
+    assert memory["last_user_intent_id"] == first_id
+    assert memory["last_user_intent_id_by_kind"] == {"db_rag_query": first_id}
+
+
+def test_upsert_rejects_missing_continued_from_intent_id() -> None:
+    with pytest.raises(ValueError, match="continued_from_intent_id"):
+        upsert_user_intent_from_db_rag_intent(
+            _old_state(),
+            active_intent={
+                "intent_id": "rag-1",
+                "source_question": "Which forms contain age?",
+                "goal_text": "Find forms that contain age fields.",
+            },
+            source_message_hash="hash-1",
+            status="active",
+            continued_from_intent_id="intent_missing",
+        )
+
+
 def test_update_user_intent_status_by_active_intent_id_does_not_reorder_or_move_last() -> None:
     state = upsert_user_intent_from_db_rag_intent(
         _old_state(),
@@ -177,6 +251,25 @@ def test_update_user_intent_status_by_active_intent_id_does_not_reorder_or_move_
     assert memory["last_user_intent_id"] == second_id
     assert memory["last_user_intent_id_by_kind"] == {"db_rag_query": second_id}
     assert memory["user_intents"][first_id]["status"] == "cancelled"
+
+
+def test_update_user_intent_status_returns_state_unchanged_when_no_match() -> None:
+    state = upsert_user_intent_from_db_rag_intent(
+        _old_state(),
+        active_intent={
+            "intent_id": "rag-1",
+            "source_question": "First question",
+            "goal_text": "Find first fields.",
+        },
+        source_message_hash="hash-1",
+        status="active",
+    )
+    before = dict(state["memory"]["user_intents"][state["memory"]["last_user_intent_id"]])
+
+    returned = update_user_intent_status(state, active_intent_id="rag-missing", status="cancelled")
+
+    assert returned is state
+    assert state["memory"]["user_intents"][state["memory"]["last_user_intent_id"]] == before
 
 
 def test_link_user_intent_completed_task_marks_completed_and_stores_task_id() -> None:
@@ -230,3 +323,36 @@ def test_latest_user_intent_returns_latest_card_by_kind() -> None:
     assert latest["intent_id"] == second_id
     assert state["memory"]["user_intents"][second_id]["goal_text"] == "Find second fields."
     assert first_id != second_id
+
+
+def test_latest_user_intent_uses_kind_pointer_before_order_and_returns_full_card() -> None:
+    state = upsert_user_intent_from_db_rag_intent(
+        _old_state(),
+        active_intent={
+            "intent_id": "rag-1",
+            "source_question": "First question",
+            "goal_text": "Find first fields.",
+        },
+        source_message_hash="hash-1",
+        status="active",
+    )
+    first_id = state["memory"]["last_user_intent_id"]
+    state = upsert_user_intent_from_db_rag_intent(
+        state,
+        active_intent={
+            "intent_id": "rag-2",
+            "source_question": "Second question",
+            "goal_text": "Find second fields.",
+        },
+        source_message_hash="hash-2",
+        status="active",
+        force_new=True,
+    )
+    state["memory"]["user_intents"][first_id]["extra_full_card_field"] = {"kept": True}
+    state["memory"]["last_user_intent_id_by_kind"]["db_rag_query"] = first_id
+
+    latest = latest_user_intent(state, kind="db_rag_query")
+    latest["extra_full_card_field"]["kept"] = False
+
+    assert latest["intent_id"] == first_id
+    assert state["memory"]["user_intents"][first_id]["extra_full_card_field"] == {"kept": True}

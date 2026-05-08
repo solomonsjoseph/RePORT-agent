@@ -135,24 +135,37 @@ def compact_user_intent_cards(
 
 
 def latest_user_intent(state: AgentState, *, kind: str) -> dict[str, Any] | None:
-    cards = compact_user_intent_cards(state, limit=1, kind=kind)
-    return deepcopy(cards[0]) if cards else None
+    _state, memory = ensure_memory_state(state)
+    _validate_user_intent_kind(kind)
+    intent_id = memory["last_user_intent_id_by_kind"].get(kind)
+    if isinstance(intent_id, str):
+        card = memory["user_intents"].get(intent_id)
+        if isinstance(card, dict) and card.get("kind") == kind:
+            return deepcopy(card)
+
+    for fallback_intent_id in reversed(memory["intent_order"]):
+        card = memory["user_intents"].get(fallback_intent_id)
+        if isinstance(card, dict) and card.get("kind") == kind:
+            return deepcopy(card)
+    return None
 
 
 def upsert_user_intent_from_db_rag_intent(
     state: AgentState,
     *,
     active_intent: dict[str, Any],
-    source_message_hash: str,
+    source_message_hash: str | None,
     status: str,
     continued_from_intent_id: str | None = None,
     force_new: bool = False,
 ) -> AgentState:
     state, memory = ensure_memory_state(state)
     active_intent = _validate_db_rag_active_intent(active_intent)
-    _validate_text(source_message_hash, "source_message_hash")
+    _validate_optional_text(source_message_hash, "source_message_hash")
     _validate_user_intent_status(status)
     _validate_optional_text(continued_from_intent_id, "continued_from_intent_id")
+    if continued_from_intent_id is not None and continued_from_intent_id not in memory["user_intents"]:
+        raise ValueError(f"Unknown continued_from_intent_id: {continued_from_intent_id}")
 
     active_intent_id = active_intent.get("intent_id")
     intent_id = None if force_new else _matching_intent_id(memory, active_intent_id)
@@ -167,6 +180,8 @@ def upsert_user_intent_from_db_rag_intent(
         card["source_message_hash"] = source_message_hash
         card["active_intent_id"] = active_intent_id
         card["updated_at"] = timestamp
+        memory["last_user_intent_id"] = intent_id
+        memory["last_user_intent_id_by_kind"]["db_rag_query"] = intent_id
         return state
 
     intent_id = _new_intent_id(memory)
@@ -206,7 +221,7 @@ def update_user_intent_status(
     if intent_id is None:
         intent_id = _matching_intent_id(memory, active_intent_id)
     if intent_id is None or intent_id not in memory["user_intents"]:
-        raise ValueError("Unknown user intent")
+        return state
 
     card = memory["user_intents"][intent_id]
     card["status"] = status
