@@ -21,11 +21,14 @@ from .task_store import (
     update_task_enrichment,
 )
 from .user_intent_store import (
+    build_user_intent_classifier_payload,
+    classify_user_intent_reference,
     compact_user_intent_cards,
     latest_user_intent,
     link_user_intent_completed_task,
     update_user_intent_status,
     upsert_user_intent_from_db_rag_intent,
+    validate_user_intent_reference,
 )
 from .reference_resolver import build_resolver_payload, resolve_reference_for_turn
 from .validation import REQUIRED_ARTIFACT_REFS, validate_reference_resolution
@@ -43,6 +46,8 @@ __all__ = [
     "UserIntentCard",
     "cache_reference_resolution",
     "build_resolver_payload",
+    "build_user_intent_classifier_payload",
+    "classify_user_intent_reference",
     "compact_user_intent_cards",
     "complete_task",
     "ensure_memory_state",
@@ -57,5 +62,6 @@ __all__ = [
     "update_task_enrichment",
     "update_user_intent_status",
     "upsert_user_intent_from_db_rag_intent",
+    "validate_user_intent_reference",
     "validate_reference_resolution",
 ]

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from copy import deepcopy
 from datetime import UTC, datetime
 from typing import Any
@@ -17,6 +18,27 @@ LIVE_USER_INTENT_STATUSES = {
     "awaiting_column_review",
     "awaiting_sql_review",
 }
+
+ALLOWED_USER_INTENT_REFERENCE_TARGETS = {
+    "new_user_intent",
+    "existing_user_intent",
+    "completed_task",
+    "ambiguous",
+}
+
+ALLOWED_USER_INTENT_RELATIONSHIPS = {
+    "continue",
+    "refine",
+    "inspect_result",
+    "new_request",
+}
+
+CLASSIFIER_INSTRUCTIONS = (
+    "Classify whether the latest user message refers to a prior DB-RAG user intent, "
+    "a completed task/result, a fresh request, or an ambiguous reference. "
+    "Choose only IDs present in candidate_user_intents or candidate_completed_tasks. "
+    "Return JSON with target, target_id, relationship, confidence, reason."
+)
 
 COMPACT_USER_INTENT_FIELDS = (
     "intent_id",
@@ -136,6 +158,172 @@ def compact_user_intent_cards(
         if len(selected) >= capped_limit:
             break
     return selected
+
+
+def build_user_intent_classifier_payload(
+    state: AgentState,
+    *,
+    user_message: str,
+    user_message_hash: str,
+    recent_turns: list[dict[str, str]] | None = None,
+    completed_task_cards: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    agents = dict(state.get("agents") or {})
+    rag_state = dict(agents.get("rag_db_qa") or {})
+    return {
+        "latest_user_message": str(user_message or ""),
+        "user_message_hash": user_message_hash,
+        "recent_turns": list(recent_turns or [])[-4:],
+        "active_workflow": {
+            "rag_db_thread_status": rag_state.get("thread_status"),
+            "rag_db_active_thread": bool(rag_state.get("active_thread")),
+            "pending_review": bool(agents.get("human_review")),
+            "pending_clarification": bool(
+                (state.get("meta") or {}).get("awaiting_user_clarification")
+            ),
+        },
+        "candidate_user_intents": compact_user_intent_cards(
+            state,
+            kind="db_rag_query",
+            limit=8,
+        ),
+        "candidate_completed_tasks": list(completed_task_cards or [])[:8],
+    }
+
+
+def _parse_classifier_response(response: Any) -> dict[str, Any]:
+    if isinstance(response, dict):
+        return response
+    content = getattr(response, "content", response)
+    if isinstance(content, dict):
+        return content
+    parsed = json.loads(str(content))
+    if not isinstance(parsed, dict):
+        raise ValueError("User-intent classifier response must be a JSON object")
+    return parsed
+
+
+def _confidence_is_low(value: Any) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() == "low"
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return value < 0.5
+    return value is None
+
+
+def _ambiguous_result(reason: str) -> dict[str, Any]:
+    return {
+        "target": "ambiguous",
+        "target_id": None,
+        "relationship": None,
+        "confidence": "low",
+        "needs_clarification": True,
+        "reason": reason,
+    }
+
+
+def validate_user_intent_reference(
+    state: AgentState,
+    raw_result: dict[str, Any],
+) -> dict[str, Any]:
+    if not isinstance(raw_result, dict):
+        raise ValueError("User-intent reference result must be a dict")
+    require_json_safe(raw_result, "user_intent_reference")
+
+    target = raw_result.get("target")
+    relationship = raw_result.get("relationship")
+    if target not in ALLOWED_USER_INTENT_REFERENCE_TARGETS:
+        raise ValueError(f"Unknown user-intent reference target: {target}")
+    if relationship is not None and relationship not in ALLOWED_USER_INTENT_RELATIONSHIPS:
+        raise ValueError(f"Unknown user-intent relationship: {relationship}")
+    if target == "ambiguous" or _confidence_is_low(raw_result.get("confidence")):
+        return _ambiguous_result(str(raw_result.get("reason") or "The reference is ambiguous."))
+    if target == "new_user_intent":
+        return {
+            "target": "new_user_intent",
+            "target_id": None,
+            "relationship": "new_request",
+            "confidence": raw_result.get("confidence"),
+            "needs_clarification": False,
+            "reason": str(raw_result.get("reason") or ""),
+        }
+
+    _state, memory = ensure_memory_state(state)
+    target_id = raw_result.get("target_id")
+    if not isinstance(target_id, str) or not target_id:
+        return _ambiguous_result("The classifier did not select a target ID.")
+
+    if target == "existing_user_intent":
+        card = memory["user_intents"].get(target_id)
+        if not isinstance(card, dict):
+            raise ValueError(f"Resolved user intent does not exist: {target_id}")
+        if card.get("kind") != "db_rag_query":
+            raise ValueError(f"Resolved user intent has unsupported kind: {card.get('kind')}")
+        source_question = str(card.get("source_question") or "").strip()
+        if not source_question:
+            raise ValueError("Resolved user intent has no source_question")
+        if relationship not in {"continue", "refine"}:
+            return _ambiguous_result(
+                "The requested relationship is not supported for user intents."
+            )
+        return {
+            "target": "existing_user_intent",
+            "target_id": target_id,
+            "kind": "db_rag_query",
+            "relationship": relationship,
+            "source_question": source_question,
+            "goal_text": str(card.get("goal_text") or source_question),
+            "confidence": raw_result.get("confidence"),
+            "needs_clarification": False,
+            "reason": str(raw_result.get("reason") or ""),
+        }
+
+    if target == "completed_task":
+        completed = memory["completed_tasks"]
+        if target_id not in completed:
+            raise ValueError(f"Resolved completed task does not exist: {target_id}")
+        return {
+            "target": "completed_task",
+            "target_id": target_id,
+            "relationship": relationship,
+            "confidence": raw_result.get("confidence"),
+            "needs_clarification": False,
+            "reason": str(raw_result.get("reason") or ""),
+        }
+
+    return _ambiguous_result("The classifier result is ambiguous.")
+
+
+def classify_user_intent_reference(
+    state: AgentState,
+    classifier: Any,
+    *,
+    user_message: str,
+    user_message_hash: str,
+    recent_turns: list[dict[str, str]] | None = None,
+    completed_task_cards: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    payload = build_user_intent_classifier_payload(
+        state,
+        user_message=user_message,
+        user_message_hash=user_message_hash,
+        recent_turns=recent_turns,
+        completed_task_cards=completed_task_cards,
+    )
+    if not payload["candidate_user_intents"]:
+        return {
+            "target": "new_user_intent",
+            "target_id": None,
+            "relationship": "new_request",
+            "confidence": "high",
+            "needs_clarification": False,
+            "reason": "No user intents exist.",
+        }
+    if not hasattr(classifier, "invoke"):
+        raise ValueError("User-intent classifier must expose invoke")
+    prompt = f"{CLASSIFIER_INSTRUCTIONS}\n\nPayload:\n{json.dumps(payload, sort_keys=True)}"
+    raw_result = _parse_classifier_response(classifier.invoke(prompt))
+    return validate_user_intent_reference(state, raw_result)
 
 
 def latest_user_intent(state: AgentState, *, kind: str) -> dict[str, Any] | None:
