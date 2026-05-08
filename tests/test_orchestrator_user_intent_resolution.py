@@ -190,7 +190,7 @@ def test_route_from_resolved_user_intent_meta_routes_db_rag_once() -> None:
         MetaKeys.RESOLVED_USER_INTENT_ID: intent_id,
         MetaKeys.RESOLVED_USER_INTENT_KIND: "db_rag_query",
         MetaKeys.RESOLVED_USER_INTENT_RELATIONSHIP: "refine",
-        MetaKeys.RESOLVED_USER_INTENT_SOURCE_QUESTION: "original database question",
+        MetaKeys.RESOLVED_USER_INTENT_SOURCE_QUESTION: "BAD",
         MetaKeys.RESOLVED_USER_INTENT_USER_MESSAGE_HASH: "hash-1",
     }
 
@@ -206,7 +206,9 @@ def test_route_from_resolved_user_intent_meta_routes_db_rag_once() -> None:
     )
 
     assert routed == "rag_db_qa"
-    assert updated_meta[MetaKeys.RAG_DB_QUESTION_OVERRIDE] == "original database question"
+    assert updated_meta[MetaKeys.RAG_DB_QUESTION_OVERRIDE] == (
+        "Which diagnoses have the highest average age?"
+    )
     assert updated_meta["resolved_user_intent_meta_consumed"] == "hash-1"
     assert observations == [
         f"user_intent_id={intent_id} relationship=refine routed_node=rag_db_qa"
@@ -215,6 +217,32 @@ def test_route_from_resolved_user_intent_meta_routes_db_rag_once() -> None:
     assert MetaKeys.RESOLVED_USER_INTENT_ID not in cleared_meta
     assert MetaKeys.RAG_DB_QUESTION_OVERRIDE not in cleared_meta
     assert second_observations == []
+
+
+def test_route_from_resolved_user_intent_meta_clears_blank_memory_source_question() -> None:
+    node = _fresh_node_module()
+    state = _state_with_cancelled_db_rag_intent()
+    intent_id = state["memory"]["last_user_intent_id"]
+    state["memory"]["user_intents"][intent_id]["source_question"] = " "
+    meta = {
+        MetaKeys.RESOLVED_USER_INTENT_ID: intent_id,
+        MetaKeys.RESOLVED_USER_INTENT_KIND: "db_rag_query",
+        MetaKeys.RESOLVED_USER_INTENT_RELATIONSHIP: "continue",
+        MetaKeys.RESOLVED_USER_INTENT_SOURCE_QUESTION: "meta should not win",
+        MetaKeys.RESOLVED_USER_INTENT_USER_MESSAGE_HASH: "hash-1",
+        MetaKeys.RAG_DB_QUESTION_OVERRIDE: "stale override",
+        "keep": "value",
+    }
+
+    routed, updated_meta, observations = node._route_from_resolved_user_intent_meta(
+        state,
+        meta,
+        {"rag_db_qa", "qa", "end"},
+    )
+
+    assert routed is None
+    assert updated_meta == {"keep": "value"}
+    assert observations == []
 
 
 def test_route_from_resolved_user_intent_meta_clears_missing_intent() -> None:
@@ -318,6 +346,60 @@ def test_orchestrator_routes_existing_user_intent_reference_to_db_rag(monkeypatc
     assert result["meta"][MetaKeys.RESOLVED_USER_INTENT_ID] == intent_id
     assert result["meta"][MetaKeys.RAG_DB_QUESTION_OVERRIDE] == (
         "Which diagnoses have the highest average age?"
+    )
+
+
+def test_orchestrator_new_user_intent_classification_does_not_set_db_rag_override(
+    monkeypatch,
+) -> None:
+    node = _fresh_node_module()
+    state = _state_with_cancelled_db_rag_intent("query the database for a new cohort")
+
+    def classify(_state, _classifier, *, user_message, user_message_hash, **_kwargs):
+        return {
+            "target": "new_user_intent",
+            "target_id": None,
+            "kind": "db_rag_query",
+            "relationship": None,
+            "needs_clarification": False,
+        }
+
+    monkeypatch.setattr(node, "classify_user_intent_reference", classify)
+
+    result = node.orchestrator_node(state, _LLM(), ["rag_db_qa", "qa", "end"])
+
+    assert MetaKeys.RAG_DB_QUESTION_OVERRIDE not in result["meta"]
+    assert MetaKeys.RESOLVED_USER_INTENT_ID not in result["meta"]
+    assert not any(
+        str(observation).startswith("user_intent_id=")
+        for observation in result.get("observations", [])
+    )
+
+
+def test_orchestrator_completed_task_classification_does_not_hijack_user_intent(
+    monkeypatch,
+) -> None:
+    node = _fresh_node_module()
+    state = _state_with_cancelled_db_rag_intent("explain the completed extraction")
+
+    def classify(_state, _classifier, *, user_message, user_message_hash, **_kwargs):
+        return {
+            "target": "completed_task",
+            "target_id": "task-1",
+            "kind": "db_rag_sql_extraction",
+            "relationship": "explain",
+            "needs_clarification": False,
+        }
+
+    monkeypatch.setattr(node, "classify_user_intent_reference", classify)
+
+    result = node.orchestrator_node(state, _LLM(), ["rag_db_qa", "qa", "end"])
+
+    assert MetaKeys.RAG_DB_QUESTION_OVERRIDE not in result["meta"]
+    assert MetaKeys.RESOLVED_USER_INTENT_ID not in result["meta"]
+    assert not any(
+        str(observation).startswith("user_intent_id=")
+        for observation in result.get("observations", [])
     )
 
 

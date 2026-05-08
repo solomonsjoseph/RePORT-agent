@@ -232,7 +232,6 @@ def _route_from_resolved_user_intent_meta(
     intent_id = meta.get(MetaKeys.RESOLVED_USER_INTENT_ID)
     kind = meta.get(MetaKeys.RESOLVED_USER_INTENT_KIND)
     relationship = meta.get(MetaKeys.RESOLVED_USER_INTENT_RELATIONSHIP)
-    source_question = meta.get(MetaKeys.RESOLVED_USER_INTENT_SOURCE_QUESTION)
     resolved_hash = meta.get(MetaKeys.RESOLVED_USER_INTENT_USER_MESSAGE_HASH)
     consumed_hash = meta.get(_RESOLVED_USER_INTENT_META_CONSUMED_KEY)
     if isinstance(resolved_hash, str) and consumed_hash == resolved_hash:
@@ -242,8 +241,6 @@ def _route_from_resolved_user_intent_meta(
         or not isinstance(intent_id, str)
         or kind != "db_rag_query"
         or relationship not in {"continue", "refine"}
-        or not isinstance(source_question, str)
-        or not source_question.strip()
     ):
         return None, _clear_resolved_user_intent_meta(meta), []
 
@@ -251,9 +248,12 @@ def _route_from_resolved_user_intent_meta(
     intent = dict(memory.get("user_intents") or {}).get(intent_id)
     if not isinstance(intent, dict) or intent.get("kind") != "db_rag_query":
         return None, _clear_resolved_user_intent_meta(meta), []
+    source_question = str(intent.get("source_question") or "").strip()
+    if not source_question:
+        return None, _clear_resolved_user_intent_meta(meta), []
 
     updated_meta = dict(meta)
-    updated_meta[MetaKeys.RAG_DB_QUESTION_OVERRIDE] = source_question.strip()
+    updated_meta[MetaKeys.RAG_DB_QUESTION_OVERRIDE] = source_question
     if isinstance(resolved_hash, str):
         updated_meta[_RESOLVED_USER_INTENT_META_CONSUMED_KEY] = resolved_hash
     return (
