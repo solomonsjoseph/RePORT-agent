@@ -25,6 +25,10 @@ EMPTY_MEMORY_STATE: MemoryState = {
     "last_failed_task_id_by_kind": {},
     "last_reference_resolution": None,
     "pending_reference_clarification": None,
+    "user_intents": {},
+    "intent_order": [],
+    "last_user_intent_id": None,
+    "last_user_intent_id_by_kind": {},
 }
 
 MEMORY_KEY_TYPES = {
@@ -36,6 +40,10 @@ MEMORY_KEY_TYPES = {
     "last_failed_task_id_by_kind": dict,
     "last_reference_resolution": (dict, type(None)),
     "pending_reference_clarification": (dict, type(None)),
+    "user_intents": dict,
+    "intent_order": list,
+    "last_user_intent_id": (str, type(None)),
+    "last_user_intent_id_by_kind": dict,
 }
 
 COMPACT_CARD_FIELDS = (
@@ -87,6 +95,20 @@ def ensure_memory_state(state: AgentState) -> tuple[AgentState, dict[str, Any]]:
         kind: task_id
         for kind, task_id in memory["last_task_id_by_kind"].items()
         if isinstance(kind, str) and isinstance(task_id, str) and task_id in completed_tasks
+    }
+    user_intents = memory["user_intents"]
+    intent_order = [
+        intent_id
+        for intent_id in memory["intent_order"]
+        if isinstance(intent_id, str) and intent_id in user_intents
+    ]
+    memory["intent_order"] = intent_order
+    if memory["last_user_intent_id"] not in user_intents:
+        memory["last_user_intent_id"] = intent_order[-1] if intent_order else None
+    memory["last_user_intent_id_by_kind"] = {
+        kind: intent_id
+        for kind, intent_id in memory["last_user_intent_id_by_kind"].items()
+        if isinstance(kind, str) and isinstance(intent_id, str) and intent_id in user_intents
     }
     return state, memory
 

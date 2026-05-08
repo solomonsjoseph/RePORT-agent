@@ -12,6 +12,17 @@ ALLOWED_TASK_KINDS = {
 ALLOWED_REFERENCE_LABELS = {"resolved", "new_task", "ambiguous", "unknown"}
 ALLOWED_RELATIONSHIPS = {"revision", "rerun", "explain", "inspect_artifact", "use_as_input", "compare"}
 EDITABLE_TASK_FIELDS = {"label", "summary", "tags", "last_enriched_at"}
+ALLOWED_USER_INTENT_KINDS = {"db_rag_query"}
+ALLOWED_USER_INTENT_STATUSES = {
+    "active",
+    "awaiting_extraction_opt_in",
+    "awaiting_column_review",
+    "awaiting_sql_review",
+    "cancelled",
+    "completed",
+    "superseded",
+    "declined",
+}
 
 
 class TaskCard(TypedDict, total=False):
@@ -34,6 +45,22 @@ class TaskCard(TypedDict, total=False):
     last_enriched_at: str | None
 
 
+class UserIntentCard(TypedDict, total=False):
+    intent_id: str
+    display_ordinal: int
+    kind: str
+    agent: str
+    source_question: str
+    goal_text: str
+    status: str
+    source_message_hash: str | None
+    active_intent_id: str | None
+    completed_task_id: str | None
+    continued_from_intent_id: str | None
+    created_at: str
+    updated_at: str
+
+
 class ReferenceResolution(TypedDict, total=False):
     label: str
     task_id: str | None
@@ -53,6 +80,10 @@ class MemoryState(TypedDict):
     last_failed_task_id_by_kind: dict[str, str]
     last_reference_resolution: dict[str, Any] | None
     pending_reference_clarification: dict[str, Any] | None
+    user_intents: dict[str, UserIntentCard]
+    intent_order: list[str]
+    last_user_intent_id: str | None
+    last_user_intent_id_by_kind: dict[str, str]
 
 
 def is_json_safe(value: Any) -> bool:

@@ -33,6 +33,10 @@ EXPECTED_EMPTY_MEMORY = {
     "last_failed_task_id_by_kind": {},
     "last_reference_resolution": None,
     "pending_reference_clarification": None,
+    "user_intents": {},
+    "intent_order": [],
+    "last_user_intent_id": None,
+    "last_user_intent_id_by_kind": {},
 }
 
 
