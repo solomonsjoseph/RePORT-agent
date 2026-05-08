@@ -1284,6 +1284,16 @@ def _rag_db_qa_node_impl(
             active_thread=False,
         )
 
+    if question_override is not None:
+        return _handle_fresh_db_rag_question(
+            state,
+            rag_state,
+            service=service,
+            reranker_model=reranker_model,
+            question=question,
+            force_new_intent=True,
+        )
+
     if dict(rag_state.get("pending_recoverable_error") or {}).get("status") == "awaiting_reply":
         return _handle_pending_recoverable_error_reply(
             state,

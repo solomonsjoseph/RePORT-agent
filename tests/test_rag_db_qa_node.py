@@ -1191,6 +1191,84 @@ def test_question_override_records_user_intent_source_question_and_is_consumed()
     assert MetaKeys.RAG_DB_QUESTION_OVERRIDE not in updated["meta"]
 
 
+def test_question_override_bypasses_pending_extraction_opt_in_and_creates_new_intent() -> None:
+    from graph.state import MetaKeys
+
+    override = "Query my database for age"
+    service = _Service()
+    state = _state_with_pending_extraction_reply("yes")
+    state["meta"][MetaKeys.RAG_DB_QUESTION_OVERRIDE] = override
+
+    updated = rag_db_qa_node(
+        state,
+        llm=None,
+        provider="openai",
+        service=service,
+        question_override=override,
+    )
+
+    rag_state = updated["agents"]["rag_db_qa"]
+    memory = updated["memory"]
+    assert len(memory["intent_order"]) == 2
+    last_intent_id = memory["intent_order"][-1]
+    card = memory["user_intents"][last_intent_id]
+    assert card["source_question"] == override
+    assert card["status"] == "awaiting_extraction_opt_in"
+    assert card["active_intent_id"] == rag_state["active_intent"]["intent_id"]
+    assert rag_state["pending_extraction_opt_in"]["goal_text"] == override
+    assert ("answer_from_context", override) in service.calls
+    assert not any(call[0] == "classify_extraction_gate_message" for call in service.calls)
+    assert MetaKeys.RAG_DB_QUESTION_OVERRIDE not in updated["meta"]
+
+
+def test_question_override_bypasses_pending_column_review_pointer_and_creates_new_intent() -> None:
+    from graph.state import MetaKeys
+
+    override = "Query my database for age"
+    service = _Service()
+    state = _state("continue")
+    state["meta"][MetaKeys.RAG_DB_QUESTION_OVERRIDE] = override
+    state["memory"] = _memory_with_db_rag_user_intent(
+        active_intent_id="intent:old",
+        source_question="Generate the SQL to subset index cases with diabetes.",
+        goal_text="Generate the SQL to subset index cases with diabetes.",
+        status="awaiting_column_review",
+    )
+    state["agents"]["rag_db_qa"] = {
+        "active_intent": {
+            "intent_id": "intent:old",
+            "source_question": "Generate the SQL to subset index cases with diabetes.",
+            "goal_text": "Generate the SQL to subset index cases with diabetes.",
+            "mode": "extraction",
+            "status": "active",
+        },
+        "pending_column_review_artifact_id": "selection-artifact",
+        "pending_column_review": {"status": "awaiting_review"},
+    }
+
+    updated = rag_db_qa_node(
+        state,
+        llm=None,
+        provider="openai",
+        service=service,
+        question_override=override,
+    )
+
+    rag_state = updated["agents"]["rag_db_qa"]
+    memory = updated["memory"]
+    assert len(memory["intent_order"]) == 2
+    last_intent_id = memory["intent_order"][-1]
+    card = memory["user_intents"][last_intent_id]
+    assert card["source_question"] == override
+    assert card["status"] == "awaiting_extraction_opt_in"
+    assert card["active_intent_id"] == rag_state["active_intent"]["intent_id"]
+    assert rag_state["pending_column_review_artifact_id"] is None
+    assert rag_state["pending_extraction_opt_in"]["goal_text"] == override
+    assert ("answer_from_context", override) in service.calls
+    assert "pending column review state is incomplete" not in updated["output"]["qa_response"]
+    assert MetaKeys.RAG_DB_QUESTION_OVERRIDE not in updated["meta"]
+
+
 def test_active_intent_uses_required_columns_without_requested_fields() -> None:
     service = _Service()
 
