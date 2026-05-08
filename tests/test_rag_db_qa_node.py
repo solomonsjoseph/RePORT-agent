@@ -1035,6 +1035,54 @@ def test_resolved_goal_text_is_preserved_separately_from_source_question() -> No
     )
 
 
+def test_fresh_db_rag_question_records_user_intent() -> None:
+    service = _Service()
+
+    updated = rag_db_qa_node(
+        _state("What tables contain age?"),
+        llm=None,
+        provider="openai",
+        service=service,
+    )
+
+    active_intent = updated["agents"]["rag_db_qa"]["active_intent"]
+    memory = updated["memory"]
+    intent_id = memory["last_user_intent_id_by_kind"]["db_rag_query"]
+    card = memory["user_intents"][intent_id]
+    assert card["source_question"] == "What tables contain age?"
+    assert card["kind"] == "db_rag_query"
+    assert card["status"] in {"awaiting_extraction_opt_in", "awaiting_column_review"}
+    assert card["source_message_hash"] == "u1"
+    assert card["active_intent_id"] == active_intent["intent_id"]
+
+
+def test_question_override_records_user_intent_source_question_and_is_consumed() -> None:
+    from graph.state import MetaKeys
+
+    service = _Service()
+    state = _state("continue the previous query")
+    state["meta"][MetaKeys.RAG_DB_QUESTION_OVERRIDE] = "Query my database for age"
+
+    updated = rag_db_qa_node(
+        state,
+        llm=None,
+        provider="openai",
+        service=service,
+        question_override="Query my database for age",
+    )
+
+    active_intent = updated["agents"]["rag_db_qa"]["active_intent"]
+    memory = updated["memory"]
+    intent_id = memory["last_user_intent_id_by_kind"]["db_rag_query"]
+    card = memory["user_intents"][intent_id]
+    assert card["source_question"] == "Query my database for age"
+    assert card["source_question"] != "continue the previous query"
+    assert card["kind"] == "db_rag_query"
+    assert card["status"] in {"awaiting_extraction_opt_in", "awaiting_column_review"}
+    assert card["active_intent_id"] == active_intent["intent_id"]
+    assert MetaKeys.RAG_DB_QUESTION_OVERRIDE not in updated["meta"]
+
+
 def test_active_intent_uses_required_columns_without_requested_fields() -> None:
     service = _Service()
 

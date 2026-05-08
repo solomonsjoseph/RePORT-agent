@@ -5,7 +5,7 @@ from typing import Any
 
 from db_rag.service.errors import DbRagUnanswerableError
 
-from ...memory import complete_task
+from ...memory import complete_task, upsert_user_intent_from_db_rag_intent
 from ...state import AgentState, MetaKeys
 from ..state_helpers import clear_clarification_meta, get_agent_state, set_clarification_meta
 from ..tool_routing import latest_user_message
@@ -189,6 +189,29 @@ def _fallback_extraction_intent(*, intent_id: str, goal_text: str) -> dict[str, 
         "feedback_history": [],
         "status": "active",
     }
+
+
+def _source_message_hash(state: AgentState) -> str | None:
+    value = (state.get("meta") or {}).get(MetaKeys.LAST_USER_MESSAGE_HASH)
+    if value is None:
+        return None
+    return str(value).strip() or None
+
+
+def _upsert_db_rag_user_intent(
+    state: AgentState,
+    *,
+    active_intent: dict[str, Any],
+    status: str,
+    force_new: bool = False,
+) -> AgentState:
+    return upsert_user_intent_from_db_rag_intent(
+        state,
+        active_intent=active_intent,
+        source_message_hash=_source_message_hash(state),
+        status=status,
+        force_new=force_new,
+    )
 
 
 def _retrieve_context_for_intent(service, intent: dict[str, Any], reranker_model: str | None) -> Any:
@@ -808,6 +831,11 @@ def _handle_pending_extraction_reply(
                 goal_text=goal_text,
             )
         active_intent["mode"] = "extraction"
+        state = _upsert_db_rag_user_intent(
+            state,
+            active_intent=active_intent,
+            status="awaiting_column_review",
+        )
         context = _retrieve_context_for_intent(service, active_intent, reranker_model)
         return _start_column_review(
             state,
@@ -823,6 +851,11 @@ def _handle_pending_extraction_reply(
         if active_intent:
             active_intent["status"] = "extraction_declined"
             rag_state["active_intent"] = active_intent
+            state = _upsert_db_rag_user_intent(
+                state,
+                active_intent=active_intent,
+                status="declined",
+            )
         rag_state["pending_extraction_opt_in"] = None
         rag_state["pending_column_review_artifact_id"] = None
         rag_state["pending_sql_candidate_artifact_id"] = None
@@ -844,6 +877,11 @@ def _handle_pending_extraction_reply(
             context=context,
             prior_intent=active_intent,
             force_extraction=True,
+        )
+        state = _upsert_db_rag_user_intent(
+            state,
+            active_intent=intent,
+            status="awaiting_column_review",
         )
         rag_state = _reset_active_workflow_for_new_question(
             rag_state,
@@ -1120,6 +1158,7 @@ def _handle_fresh_db_rag_question(
     service,
     reranker_model: str | None,
     question: str,
+    force_new_intent: bool = False,
 ) -> AgentState:
     explicit_extraction = _is_explicit_extraction_question(question)
     context = service.retrieve_context(question, reranker_model=reranker_model)
@@ -1145,6 +1184,12 @@ def _handle_fresh_db_rag_question(
         context_summary=context_summary,
     )
     rag_state["population_scope"] = population_scope
+    state = _upsert_db_rag_user_intent(
+        state,
+        active_intent=intent,
+        status="awaiting_column_review" if explicit_extraction else "awaiting_extraction_opt_in",
+        force_new=force_new_intent,
+    )
 
     if explicit_extraction:
         return _start_column_review(
@@ -1212,6 +1257,13 @@ def _rag_db_qa_node_impl(
     rag_state = dict(get_agent_state(state, "rag_db_qa"))
     latest_question = latest_user_message(state)
     question = str(question_override or _question_from_stale_qa_followup(state, latest_question) or latest_question)
+    if question_override is not None:
+        meta = dict(state.get("meta") or {})
+        meta.pop(MetaKeys.RAG_DB_QUESTION_OVERRIDE, None)
+        state = {
+            **state,
+            "meta": meta,
+        }
 
     if provider not in _SUPPORTED_PROVIDERS:
         return _finish_terminal_response(
@@ -1285,6 +1337,7 @@ def _rag_db_qa_node_impl(
         service=service,
         reranker_model=reranker_model,
         question=question,
+        force_new_intent=bool(question_override),
     )
 
 
