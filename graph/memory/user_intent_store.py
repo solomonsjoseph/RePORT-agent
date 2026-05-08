@@ -253,6 +253,18 @@ def link_user_intent_completed_task(
     if task.get("kind") != "db_rag_sql_extraction":
         raise ValueError("completed task kind must be db_rag_sql_extraction")
 
+    provenance = task.get("provenance")
+    if not isinstance(provenance, dict):
+        provenance = {}
+        task["provenance"] = provenance
+    try:
+        require_json_safe(provenance, "provenance")
+    except ValueError:
+        provenance = {}
+        task["provenance"] = provenance
+    provenance["originating_user_intent_id"] = intent_id
+    require_json_safe(provenance, "provenance")
+
     card = memory["user_intents"][intent_id]
     card["status"] = "completed"
     card["completed_task_id"] = task_id

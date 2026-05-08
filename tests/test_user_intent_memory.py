@@ -389,6 +389,12 @@ def test_link_user_intent_completed_task_marks_completed_and_stores_task_id() ->
     card = state["memory"]["user_intents"][intent_id]
     assert card["status"] == "completed"
     assert card["completed_task_id"] == task_id
+    assert (
+        state["memory"]["completed_tasks"][task_id]["provenance"][
+            "originating_user_intent_id"
+        ]
+        == intent_id
+    )
 
 
 def test_link_user_intent_completed_task_rejects_missing_task_id() -> None:
