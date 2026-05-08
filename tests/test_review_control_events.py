@@ -1170,6 +1170,7 @@ def test_orchestrator_rag_column_cancel_routes_to_end_without_planner_fallback()
 
     assert updated["next_action"] == "end"
     assert updated["orchestrator"]["next_action"] == "end"
+    assert updated["agents"]["rag_db_qa"]["thread_status"] == "done"
     assert any("DB-RAG column-review cancel" in item for item in updated["observations"])
 
 
@@ -1184,4 +1185,57 @@ def test_orchestrator_rag_sql_cancel_routes_to_end_without_planner_fallback() ->
 
     assert updated["next_action"] == "end"
     assert updated["orchestrator"]["next_action"] == "end"
+    assert updated["agents"]["rag_db_qa"]["thread_status"] == "done"
     assert any("DB-RAG SQL-review cancel" in item for item in updated["observations"])
+
+
+def test_orchestrator_rag_column_cancel_does_not_swallow_next_user_turn() -> None:
+    with _isolated_orchestrator_stubs():
+        module = _fresh_orchestrator_module()
+        first = module.orchestrator_node(
+            _orchestrator_rag_cancel_state("human_review_rag_db_column_selection"),
+            _StaticLLM("qa"),
+            ["rag_db_qa", "qa", "end"],
+        )
+        second_state = {
+            **first,
+            "messages": [
+                *list(first["messages"]),
+                _OrchestratorHumanMessage("what tables are available?", id="turn-rag-2"),
+            ],
+        }
+        second = module.orchestrator_node(
+            second_state,
+            _StaticLLM("qa"),
+            ["rag_db_qa", "qa", "end"],
+        )
+
+    assert first["next_action"] == "end"
+    assert second["next_action"] == "qa"
+    assert second["observations"].count("orchestrator: consumed DB-RAG column-review cancel; ending workflow") == 1
+
+
+def test_orchestrator_rag_sql_cancel_does_not_swallow_next_user_turn() -> None:
+    with _isolated_orchestrator_stubs():
+        module = _fresh_orchestrator_module()
+        first = module.orchestrator_node(
+            _orchestrator_rag_cancel_state("human_review_rag_db_sql_execution"),
+            _StaticLLM("rag_db_qa"),
+            ["rag_db_qa", "qa", "end"],
+        )
+        second_state = {
+            **first,
+            "messages": [
+                *list(first["messages"]),
+                _OrchestratorHumanMessage("query the database again", id="turn-rag-2"),
+            ],
+        }
+        second = module.orchestrator_node(
+            second_state,
+            _StaticLLM("rag_db_qa"),
+            ["rag_db_qa", "qa", "end"],
+        )
+
+    assert first["next_action"] == "end"
+    assert second["next_action"] == "rag_db_qa"
+    assert second["observations"].count("orchestrator: consumed DB-RAG SQL-review cancel; ending workflow") == 1

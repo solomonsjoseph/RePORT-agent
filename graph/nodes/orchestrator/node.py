@@ -567,6 +567,12 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
     if _resumed_from(state, "human_review_rag_db_column_selection"):
         rag_state = dict(agents.get("rag_db_qa") or {})
         if rag_state.get("thread_status") == "cancelled":
+            rag_state["thread_status"] = "done"
+            rag_state["active_thread"] = False
+            agents = {
+                **agents,
+                "rag_db_qa": rag_state,
+            }
             next_action = "end"
             transition_selected_from_resume = True
             orchestrator_state.pop("next_action", None)
@@ -577,6 +583,12 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
     if _resumed_from(state, "human_review_rag_db_sql_execution"):
         rag_state = dict(agents.get("rag_db_qa") or {})
         if rag_state.get("thread_status") == "cancelled":
+            rag_state["thread_status"] = "done"
+            rag_state["active_thread"] = False
+            agents = {
+                **agents,
+                "rag_db_qa": rag_state,
+            }
             next_action = "end"
             transition_selected_from_resume = True
             orchestrator_state.pop("next_action", None)
