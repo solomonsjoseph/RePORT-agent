@@ -3,6 +3,7 @@ import sqlite3
 from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.sqlite import SqliteSaver
 from utils.dataset_artifacts import get_active_dataset_artifact, load_dataset_artifact
+from utils.performance import append_workflow_timings, collect_timings, timing_stage
 from .state import AgentState, MetaKeys
 from .routing import route_by_next_action
 from .nodes.node_registry import validate_registry
@@ -26,7 +27,9 @@ from db_rag.service import DbRagService
 
 def _run_and_mark(node_name, fn):
     def _wrapped(state):
-        updated_state = fn(state)
+        with collect_timings() as records:
+            with timing_stage(f"node.{node_name}"):
+                updated_state = fn(state)
         if not isinstance(updated_state, dict):
             updated_state = {}
         merged_state = {**state, **updated_state}
@@ -50,7 +53,7 @@ def _run_and_mark(node_name, fn):
         else:
             meta.pop("loop_guard_bypass_actions", None)
 
-        return {
+        marked_state = {
             **merged_state,
             "next_action": None,
             "last_action": node_name,
@@ -58,6 +61,20 @@ def _run_and_mark(node_name, fn):
             "planner": dict(merged_state.get("planner", {})),
             "meta": meta,
         }
+        return append_workflow_timings(marked_state, records)
+
+    return _wrapped
+
+
+def _run_orchestrator_with_timing(fn):
+    def _wrapped(state):
+        with collect_timings() as records:
+            with timing_stage("node.orchestrator"):
+                updated_state = fn(state)
+        if not isinstance(updated_state, dict):
+            updated_state = {}
+        merged_state = {**state, **updated_state}
+        return append_workflow_timings(merged_state, records)
 
     return _wrapped
 
@@ -153,7 +170,7 @@ def build_graph(llm, provider, db_path):
 
     workflow.add_node(
         "orchestrator",
-        lambda s: orchestrator_node(s, llm, available_actions)
+        _run_orchestrator_with_timing(lambda s: orchestrator_node(s, llm, available_actions)),
     )
     
     for node_name, node_fn in action_nodes.items():
