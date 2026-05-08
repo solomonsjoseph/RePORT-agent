@@ -40,6 +40,18 @@ CLASSIFIER_INSTRUCTIONS = (
     "Return JSON with target, target_id, relationship, confidence, reason."
 )
 
+COMPACT_COMPLETED_TASK_CLASSIFIER_FIELDS = (
+    "task_id",
+    "kind",
+    "source_question",
+    "goal_text",
+    "label",
+    "summary",
+    "dataset_id",
+    "created_at",
+    "updated_at",
+)
+
 COMPACT_USER_INTENT_FIELDS = (
     "intent_id",
     "display_ordinal",
@@ -55,6 +67,13 @@ COMPACT_USER_INTENT_FIELDS = (
     "created_at",
     "updated_at",
 )
+
+INSPECTABLE_COMPLETED_TASK_ARTIFACT_KEYS = {
+    "dataset_artifact_id",
+    "dataset_id",
+    "sql_candidate_artifact_id",
+    "selection_artifact_id",
+}
 
 
 def _now_iso() -> str:
@@ -135,6 +154,13 @@ def _compact_card(card: dict[str, Any]) -> dict[str, Any]:
     return {field: deepcopy(card.get(field)) for field in COMPACT_USER_INTENT_FIELDS}
 
 
+def _compact_completed_task_classifier_card(card: dict[str, Any]) -> dict[str, Any]:
+    return {
+        field: deepcopy(card.get(field))
+        for field in COMPACT_COMPLETED_TASK_CLASSIFIER_FIELDS
+    }
+
+
 def compact_user_intent_cards(
     state: AgentState,
     *,
@@ -170,6 +196,11 @@ def build_user_intent_classifier_payload(
 ) -> dict[str, Any]:
     agents = dict(state.get("agents") or {})
     rag_state = dict(agents.get("rag_db_qa") or {})
+    candidate_completed_tasks = [
+        _compact_completed_task_classifier_card(card)
+        for card in list(completed_task_cards or [])[:8]
+        if isinstance(card, dict)
+    ]
     return {
         "latest_user_message": str(user_message or ""),
         "user_message_hash": user_message_hash,
@@ -187,8 +218,29 @@ def build_user_intent_classifier_payload(
             kind="db_rag_query",
             limit=8,
         ),
-        "candidate_completed_tasks": list(completed_task_cards or [])[:8],
+        "candidate_completed_tasks": candidate_completed_tasks,
     }
+
+
+def _content_blocks_to_text(blocks: list[Any]) -> str:
+    text_parts: list[str] = []
+    for block in blocks:
+        if isinstance(block, str):
+            text_parts.append(block)
+            continue
+        if isinstance(block, dict):
+            text = block.get("text")
+            if isinstance(text, str):
+                text_parts.append(text)
+                continue
+            content = block.get("content")
+            if isinstance(content, str):
+                text_parts.append(content)
+                continue
+        text = getattr(block, "text", None)
+        if isinstance(text, str):
+            text_parts.append(text)
+    return "".join(text_parts)
 
 
 def _parse_classifier_response(response: Any) -> dict[str, Any]:
@@ -197,7 +249,11 @@ def _parse_classifier_response(response: Any) -> dict[str, Any]:
     content = getattr(response, "content", response)
     if isinstance(content, dict):
         return content
-    parsed = json.loads(str(content))
+    text = _content_blocks_to_text(content) if isinstance(content, list) else str(content)
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError("User-intent classifier response must be valid JSON") from exc
     if not isinstance(parsed, dict):
         raise ValueError("User-intent classifier response must be a JSON object")
     return parsed
@@ -225,6 +281,9 @@ def _ambiguous_result(reason: str) -> dict[str, Any]:
 def validate_user_intent_reference(
     state: AgentState,
     raw_result: dict[str, Any],
+    *,
+    candidate_user_intent_ids: set[str] | None = None,
+    candidate_completed_task_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     if not isinstance(raw_result, dict):
         raise ValueError("User-intent reference result must be a dict")
@@ -254,6 +313,8 @@ def validate_user_intent_reference(
         return _ambiguous_result("The classifier did not select a target ID.")
 
     if target == "existing_user_intent":
+        if candidate_user_intent_ids is not None and target_id not in candidate_user_intent_ids:
+            return _ambiguous_result("The classifier selected an unavailable user intent.")
         card = memory["user_intents"].get(target_id)
         if not isinstance(card, dict):
             raise ValueError(f"Resolved user intent does not exist: {target_id}")
@@ -279,9 +340,22 @@ def validate_user_intent_reference(
         }
 
     if target == "completed_task":
+        if (
+            candidate_completed_task_ids is not None
+            and target_id not in candidate_completed_task_ids
+        ):
+            return _ambiguous_result("The classifier selected an unavailable completed task.")
+        if relationship != "inspect_result":
+            raise ValueError("completed task target has unsupported relationship")
         completed = memory["completed_tasks"]
-        if target_id not in completed:
+        task = completed.get(target_id)
+        if not isinstance(task, dict):
             raise ValueError(f"Resolved completed task does not exist: {target_id}")
+        artifact_refs = task.get("artifact_refs")
+        if not isinstance(artifact_refs, dict) or not any(
+            artifact_refs.get(key) for key in INSPECTABLE_COMPLETED_TASK_ARTIFACT_KEYS
+        ):
+            raise ValueError("Resolved completed task has no inspectable artifact ref")
         return {
             "target": "completed_task",
             "target_id": target_id,
@@ -323,7 +397,22 @@ def classify_user_intent_reference(
         raise ValueError("User-intent classifier must expose invoke")
     prompt = f"{CLASSIFIER_INSTRUCTIONS}\n\nPayload:\n{json.dumps(payload, sort_keys=True)}"
     raw_result = _parse_classifier_response(classifier.invoke(prompt))
-    return validate_user_intent_reference(state, raw_result)
+    candidate_user_intent_ids = {
+        card["intent_id"]
+        for card in payload["candidate_user_intents"]
+        if isinstance(card.get("intent_id"), str)
+    }
+    candidate_completed_task_ids = {
+        card["task_id"]
+        for card in payload["candidate_completed_tasks"]
+        if isinstance(card.get("task_id"), str)
+    }
+    return validate_user_intent_reference(
+        state,
+        raw_result,
+        candidate_user_intent_ids=candidate_user_intent_ids,
+        candidate_completed_task_ids=candidate_completed_task_ids,
+    )
 
 
 def latest_user_intent(state: AgentState, *, kind: str) -> dict[str, Any] | None:
