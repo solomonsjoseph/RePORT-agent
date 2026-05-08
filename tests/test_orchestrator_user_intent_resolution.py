@@ -403,6 +403,25 @@ def test_orchestrator_completed_task_classification_does_not_hijack_user_intent(
     )
 
 
+def test_orchestrator_classifier_error_falls_through_to_normal_routing(
+    monkeypatch,
+) -> None:
+    node = _fresh_node_module()
+    state = _state_with_cancelled_db_rag_intent("query the database for a new cohort")
+
+    def classify(_state, _classifier, *, user_message, user_message_hash, **_kwargs):
+        raise ValueError("bad classifier json")
+
+    monkeypatch.setattr(node, "classify_user_intent_reference", classify)
+
+    result = node.orchestrator_node(state, _LLM(), ["rag_db_qa", "qa", "end"])
+
+    assert MetaKeys.RAG_DB_QUESTION_OVERRIDE not in result["meta"]
+    assert MetaKeys.RESOLVED_USER_INTENT_ID not in result["meta"]
+    assert result["next_action"] == "qa"
+    assert "user_intent_classifier_error=bad classifier json" in result["observations"]
+
+
 def test_orchestrator_asks_short_question_for_ambiguous_user_intent(monkeypatch) -> None:
     node = _fresh_node_module()
     state = _state_with_cancelled_db_rag_intent("do that previous thing")

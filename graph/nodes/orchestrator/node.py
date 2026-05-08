@@ -794,13 +794,21 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
         and current_hash
         and dict((routing_state.get("memory") or {}).get("user_intents") or {})
     ):
-        classification = classify_user_intent_reference(
-            routing_state,
-            llm,
-            user_message=latest_user_message(routing_state),
-            user_message_hash=current_hash,
-        )
+        try:
+            classification = classify_user_intent_reference(
+                routing_state,
+                llm,
+                user_message=latest_user_message(routing_state),
+                user_message_hash=current_hash,
+            )
+        except ValueError as exc:
+            classification = None
+            observations = list(routing_state.get("observations", []))
+            observations.append(f"user_intent_classifier_error={exc}")
+            routing_state = {**routing_state, "observations": observations}
         if (
+            isinstance(classification, dict)
+            and
             classification.get("target") == "existing_user_intent"
             and classification.get("needs_clarification") is not True
         ):
@@ -815,7 +823,10 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
                     current_hash,
                 )
                 routing_state = {**routing_state, "meta": meta}
-        elif classification.get("target") == "ambiguous" or classification.get("needs_clarification") is True:
+        elif isinstance(classification, dict) and (
+            classification.get("target") == "ambiguous"
+            or classification.get("needs_clarification") is True
+        ):
             question = "Which previous database query did you want to continue?"
             meta = dict(meta)
             meta[MetaKeys.AWAITING_USER_CLARIFICATION] = True
