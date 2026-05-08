@@ -188,6 +188,35 @@ All helper inputs must be JSON-safe and should deep-copy caller-provided dict/li
 
 Do not add a separate cached user-intent resolver in the first slice. The semantic classifier should stay narrow: it classifies the latest turn against compact candidate cards, but it does not own routing, lifecycle, task completion, candidate ranking across large history, or state mutation. Do not add a second resolution cache.
 
+## Orchestrator Integration Point
+
+The semantic classifier should run only for a fresh unanswered user turn after higher-priority live workflow checks and before planner fallback.
+
+Recommended order:
+
+1. pending human review or interrupt
+2. pending clarification or DB-RAG opt-in
+3. pending deterministic workflow continuation
+4. completed-task reference resolver for completed results/artifacts
+5. user-intent semantic classifier for incomplete or cancelled DB-RAG query intents
+6. normal deterministic routing predicates
+7. planner fallback
+
+The classifier should not run while a human review interrupt is pending, while a clarification answer must be consumed, or while deterministic workflow continuation already has priority.
+
+Validated classifier output should be written as compact derived routing metadata, similar to existing resolved-task metadata. The first slice should use stable meta keys for this handoff:
+
+```python
+meta["resolved_user_intent_id"] = "intent_..."
+meta["resolved_user_intent_kind"] = "db_rag_query"
+meta["resolved_user_intent_relationship"] = "continue"
+meta["resolved_user_intent_source_question"] = "..."
+meta["resolved_user_intent_user_message_hash"] = "..."
+meta["resolved_user_intent_meta_consumed"] = "..."
+```
+
+These meta values are one-turn routing hints. They must be cleared when the user message hash changes or after the relationship has been consumed. The consumed marker should mirror the existing resolved-task pattern so stale validated intent references cannot leak into later turns. The source of truth remains `memory.user_intents`.
+
 ## Write Points
 
 ### Fresh DB-RAG Question
@@ -296,6 +325,47 @@ Use a lightweight classifier that receives compact context only:
 - recent user-intent cards
 - recent completed-task cards
 
+Suggested payload:
+
+```python
+{
+    "latest_user_message": "...",
+    "recent_turns": [
+        {"role": "user", "text": "..."},
+        {"role": "assistant", "text": "..."},
+    ],
+    "active_workflow": {
+        "rag_db_thread_status": "done",
+        "rag_db_active_thread": False,
+        "pending_review": False,
+        "pending_clarification": False,
+    },
+    "candidate_user_intents": [
+        {
+            "intent_id": "intent_...",
+            "kind": "db_rag_query",
+            "source_question": "...",
+            "goal_text": "...",
+            "status": "cancelled",
+            "created_at": "...",
+            "completed_task_id": None,
+        }
+    ],
+    "candidate_completed_tasks": [
+        {
+            "task_id": "task_...",
+            "kind": "db_rag_sql_extraction",
+            "label": "...",
+            "source_question": "...",
+            "summary": "...",
+            "status": "completed",
+        }
+    ],
+}
+```
+
+Candidate lists should stay capped. The first slice can pass the latest DB-RAG user intents and the latest completed task cards already used by task-memory resolution. Full artifacts, SQL, schema context, dataframe contents, and long transcripts must not be included.
+
 The classifier returns:
 
 ```python
@@ -321,7 +391,8 @@ If the classifier selects `existing_user_intent`:
 - `target_id` must exist in `memory.user_intents`
 - intent kind must be `db_rag_query`
 - `source_question` must be non-empty
-- continuation creates a new live DB-RAG intent
+- `resolved_user_intent_source_question` must be copied from the validated card, not from classifier free text
+- continuation creates a new live DB-RAG intent from the validated `source_question`
 - old cancelled review pointers are not reused
 
 If the classifier selects `completed_task`:
@@ -333,6 +404,10 @@ If the classifier selects `completed_task`:
 If the classifier selects `new_user_intent`, the latest user message should be treated as the new source question.
 
 If the classifier result has low confidence, missing target, invalid target, unsupported relationship, or unclear relationship, route to clarification.
+
+The classifier must not invent target IDs. It may choose only IDs supplied in the candidate lists.
+
+Clarification should be short and should distinguish query intent from completed output when that is the ambiguity. Example: "Do you want to continue the earlier database request, or inspect the completed result?"
 
 ## Continue Behavior
 
@@ -350,6 +425,8 @@ This preserves the user's intended query while respecting that Cancel ended the 
 Continuation should not reuse stale review artifacts, `pending_column_review`, `pending_sql_candidate`, approved selection IDs, or SQL approval IDs from the cancelled workflow. It should enter DB-RAG through the same fresh-question path used by a new extraction-oriented request.
 
 The new continued intent should get a new memory-layer `intent_id` and a new DB-RAG `active_intent.intent_id`. The prior cancelled intent should remain `cancelled`; it should not be mutated back to `active`.
+
+Implementation should enter DB-RAG through the existing fresh-question path using a question override or equivalent handoff. It should not rewrite the latest human message and should not depend on planner text reconstruction.
 
 ## Planner Context
 
@@ -380,6 +457,19 @@ Suggested planner-facing context:
 
 The planner must not re-decide a validated reference from raw transcript. If a reference has been validated, routing should follow the validated target and relationship subject to action masks and workflow readiness.
 
+`recent_user_intents` should be capped, similar to `candidate_tasks`. It should include enough information for routing context but no payloads:
+
+- `intent_id`
+- `display_ordinal`
+- `kind`
+- `source_question`
+- `goal_text`
+- `status`
+- `created_at`
+- `completed_task_id`
+
+The planner context may include `validated_reference`, but the planner should treat it as a routing fact rather than a new natural-language instruction.
+
 ## Future UI Fit
 
 This design supports future modern chat actions without requiring a separate model later:
@@ -403,6 +493,9 @@ Add focused tests for:
 - cancel still does not create or mutate `memory.completed_tasks`
 - semantic classifier resolves "continue previous query" to the latest user-originated DB-RAG intent when valid
 - continuing a cancelled query starts a fresh DB-RAG workflow instead of reopening the cancelled review
+- validated user-intent meta is consumed once and cleared on a new user message
+- classifier does not run while human review, clarification, or deterministic workflow continuation has priority
+- classifier receives compact candidate cards and does not receive SQL/schema/dataframe payloads
 - status-only cancel updates do not reorder `intent_order`
 - a fresh DB-RAG question supersedes the previous live DB-RAG user intent
 - output/result references continue to use completed-task memory before user-intent memory
