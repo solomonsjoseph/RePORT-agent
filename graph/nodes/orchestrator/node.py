@@ -229,7 +229,6 @@ def _route_from_resolved_user_intent_meta(
     meta: dict,
     available_action_set: set[str],
 ) -> tuple[str | None, dict, list[str]]:
-    del routing_state
     intent_id = meta.get(MetaKeys.RESOLVED_USER_INTENT_ID)
     kind = meta.get(MetaKeys.RESOLVED_USER_INTENT_KIND)
     relationship = meta.get(MetaKeys.RESOLVED_USER_INTENT_RELATIONSHIP)
@@ -246,6 +245,11 @@ def _route_from_resolved_user_intent_meta(
         or not isinstance(source_question, str)
         or not source_question.strip()
     ):
+        return None, _clear_resolved_user_intent_meta(meta), []
+
+    _state, memory = ensure_memory_state(routing_state)
+    intent = dict(memory.get("user_intents") or {}).get(intent_id)
+    if not isinstance(intent, dict) or intent.get("kind") != "db_rag_query":
         return None, _clear_resolved_user_intent_meta(meta), []
 
     updated_meta = dict(meta)

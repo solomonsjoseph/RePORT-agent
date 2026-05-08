@@ -184,8 +184,10 @@ def test_apply_resolved_user_intent_meta_uses_stored_source_question() -> None:
 
 def test_route_from_resolved_user_intent_meta_routes_db_rag_once() -> None:
     node = _fresh_node_module()
+    state = _state_with_cancelled_db_rag_intent()
+    intent_id = state["memory"]["last_user_intent_id"]
     meta = {
-        MetaKeys.RESOLVED_USER_INTENT_ID: "intent-1",
+        MetaKeys.RESOLVED_USER_INTENT_ID: intent_id,
         MetaKeys.RESOLVED_USER_INTENT_KIND: "db_rag_query",
         MetaKeys.RESOLVED_USER_INTENT_RELATIONSHIP: "refine",
         MetaKeys.RESOLVED_USER_INTENT_SOURCE_QUESTION: "original database question",
@@ -193,12 +195,12 @@ def test_route_from_resolved_user_intent_meta_routes_db_rag_once() -> None:
     }
 
     routed, updated_meta, observations = node._route_from_resolved_user_intent_meta(
-        _base_state(),
+        state,
         meta,
         {"rag_db_qa", "qa", "end"},
     )
     routed_again, cleared_meta, second_observations = node._route_from_resolved_user_intent_meta(
-        _base_state(),
+        state,
         updated_meta,
         {"rag_db_qa", "qa", "end"},
     )
@@ -207,12 +209,35 @@ def test_route_from_resolved_user_intent_meta_routes_db_rag_once() -> None:
     assert updated_meta[MetaKeys.RAG_DB_QUESTION_OVERRIDE] == "original database question"
     assert updated_meta["resolved_user_intent_meta_consumed"] == "hash-1"
     assert observations == [
-        "user_intent_id=intent-1 relationship=refine routed_node=rag_db_qa"
+        f"user_intent_id={intent_id} relationship=refine routed_node=rag_db_qa"
     ]
     assert routed_again is None
     assert MetaKeys.RESOLVED_USER_INTENT_ID not in cleared_meta
     assert MetaKeys.RAG_DB_QUESTION_OVERRIDE not in cleared_meta
     assert second_observations == []
+
+
+def test_route_from_resolved_user_intent_meta_clears_missing_intent() -> None:
+    node = _fresh_node_module()
+    meta = {
+        MetaKeys.RESOLVED_USER_INTENT_ID: "intent-missing",
+        MetaKeys.RESOLVED_USER_INTENT_KIND: "db_rag_query",
+        MetaKeys.RESOLVED_USER_INTENT_RELATIONSHIP: "continue",
+        MetaKeys.RESOLVED_USER_INTENT_SOURCE_QUESTION: "original database question",
+        MetaKeys.RESOLVED_USER_INTENT_USER_MESSAGE_HASH: "hash-1",
+        MetaKeys.RAG_DB_QUESTION_OVERRIDE: "original database question",
+        "keep": "value",
+    }
+
+    routed, updated_meta, observations = node._route_from_resolved_user_intent_meta(
+        _base_state(),
+        meta,
+        {"rag_db_qa", "qa", "end"},
+    )
+
+    assert routed is None
+    assert updated_meta == {"keep": "value"}
+    assert observations == []
 
 
 def test_clear_consumed_resolved_user_intent_meta_removes_handoff_keys() -> None:
