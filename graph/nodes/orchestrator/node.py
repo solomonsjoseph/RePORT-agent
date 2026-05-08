@@ -564,6 +564,26 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
                 observations.append("orchestrator: consumed final approval; routing to end")
                 state = {**state, "observations": observations}
 
+    if _resumed_from(state, "human_review_rag_db_column_selection"):
+        rag_state = dict(agents.get("rag_db_qa") or {})
+        if rag_state.get("thread_status") == "cancelled":
+            next_action = "end"
+            transition_selected_from_resume = True
+            orchestrator_state.pop("next_action", None)
+            observations = list(state.get("observations", []))
+            observations.append("orchestrator: consumed DB-RAG column-review cancel; ending workflow")
+            state = {**state, "observations": observations}
+
+    if _resumed_from(state, "human_review_rag_db_sql_execution"):
+        rag_state = dict(agents.get("rag_db_qa") or {})
+        if rag_state.get("thread_status") == "cancelled":
+            next_action = "end"
+            transition_selected_from_resume = True
+            orchestrator_state.pop("next_action", None)
+            observations = list(state.get("observations", []))
+            observations.append("orchestrator: consumed DB-RAG SQL-review cancel; ending workflow")
+            state = {**state, "observations": observations}
+
     current_hash = _user_message_hash(state)
     if current_hash and transition_selected_from_resume and next_action in {"generate_code", "execute_code", "end"}:
         meta[MetaKeys.LAST_USER_MESSAGE_HASH] = current_hash

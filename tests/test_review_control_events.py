@@ -1126,3 +1126,62 @@ def test_orchestrator_final_review_cancel_routes_to_end_with_live_generated_code
     assert "final_approved_code_hash" not in updated["meta"]
     assert "error_recovery_active" not in updated["meta"]
     assert any("final-review cancel" in item for item in updated["observations"])
+
+
+def _orchestrator_rag_cancel_state(last_action: str) -> dict:
+    return {
+        "messages": [_OrchestratorHumanMessage("extract diabetes rows from the database", id="turn-rag")],
+        "output": {},
+        "artifacts": {
+            "conversation_events": [],
+            "conversation_events_version": 1,
+            "artifact_manifest_version": 1,
+        },
+        "next_action": None,
+        "last_action": last_action,
+        "observations": [],
+        "orchestrator": {},
+        "planner": {},
+        "agents": {
+            "rag_db_qa": {
+                "thread_status": "cancelled",
+                "active_thread": False,
+                "pending_column_review_artifact_id": None,
+                "approved_column_selection_artifact_id": None,
+                "pending_sql_candidate_artifact_id": None,
+                "pending_column_review": None,
+                "pending_sql_candidate": None,
+            }
+        },
+        "node_data": {},
+        "meta": {"workflow_trace": [last_action]},
+        "memory": {},
+    }
+
+
+def test_orchestrator_rag_column_cancel_routes_to_end_without_planner_fallback() -> None:
+    with _isolated_orchestrator_stubs():
+        module = _fresh_orchestrator_module()
+        updated = module.orchestrator_node(
+            _orchestrator_rag_cancel_state("human_review_rag_db_column_selection"),
+            _StaticLLM("qa"),
+            ["rag_db_qa", "qa", "end"],
+        )
+
+    assert updated["next_action"] == "end"
+    assert updated["orchestrator"]["next_action"] == "end"
+    assert any("DB-RAG column-review cancel" in item for item in updated["observations"])
+
+
+def test_orchestrator_rag_sql_cancel_routes_to_end_without_planner_fallback() -> None:
+    with _isolated_orchestrator_stubs():
+        module = _fresh_orchestrator_module()
+        updated = module.orchestrator_node(
+            _orchestrator_rag_cancel_state("human_review_rag_db_sql_execution"),
+            _StaticLLM("rag_db_qa"),
+            ["rag_db_qa", "qa", "end"],
+        )
+
+    assert updated["next_action"] == "end"
+    assert updated["orchestrator"]["next_action"] == "end"
+    assert any("DB-RAG SQL-review cancel" in item for item in updated["observations"])
