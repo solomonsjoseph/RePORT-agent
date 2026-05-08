@@ -384,7 +384,7 @@ def classify_user_intent_reference(
         recent_turns=recent_turns,
         completed_task_cards=completed_task_cards,
     )
-    if not payload["candidate_user_intents"]:
+    if not payload["candidate_user_intents"] and not payload["candidate_completed_tasks"]:
         return {
             "target": "new_user_intent",
             "target_id": None,

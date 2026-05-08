@@ -27,8 +27,8 @@ class StubClassifier:
         return self.result
 
 
-def _state_with_intent() -> dict:
-    state = {
+def _empty_state() -> dict:
+    return {
         "messages": [],
         "output": {},
         "artifacts": {"files": {}, "datasets": {}},
@@ -41,6 +41,10 @@ def _state_with_intent() -> dict:
         "node_data": {},
         "meta": {},
     }
+
+
+def _state_with_intent() -> dict:
+    state = _empty_state()
     return upsert_user_intent_from_db_rag_intent(
         state,
         active_intent={
@@ -369,3 +373,49 @@ def test_classifier_wraps_invalid_json_response() -> None:
             user_message="continue previous query",
             user_message_hash="hash-2",
         )
+
+
+def test_classifier_uses_completed_task_candidates_without_user_intents() -> None:
+    state = complete_task(
+        _empty_state(),
+        kind="db_rag_sql_extraction",
+        source_question="Query my database for age",
+        goal_text="Query age among index cases",
+        label="Age query",
+        summary="Age query completed.",
+        artifact_refs={"dataset_artifact_id": "dataset-1"},
+        event_refs={"user_event_id": "evt-user-1", "completion_event_id": "evt-done-1"},
+    )
+    task_id = state["memory"]["last_task_id"]
+    classifier = StubClassifier(
+        {
+            "target": "completed_task",
+            "target_id": task_id,
+            "relationship": "inspect_result",
+            "confidence": "high",
+            "reason": "User asks to inspect the completed result.",
+        }
+    )
+
+    result = classify_user_intent_reference(
+        state,
+        classifier,
+        user_message="inspect that result",
+        user_message_hash="hash-2",
+        completed_task_cards=[
+            {
+                "task_id": task_id,
+                "kind": "db_rag_sql_extraction",
+                "source_question": "Query my database for age",
+                "goal_text": "Query age among index cases",
+                "label": "Age query",
+                "summary": "Age query completed.",
+                "artifact_refs": {"dataset_artifact_id": "dataset-1"},
+            }
+        ],
+    )
+
+    assert result["target"] == "completed_task"
+    assert result["target_id"] == task_id
+    assert result["relationship"] == "inspect_result"
+    assert classifier.prompt is not None
