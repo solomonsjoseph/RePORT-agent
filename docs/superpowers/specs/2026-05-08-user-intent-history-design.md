@@ -9,6 +9,8 @@ Add a small current-thread intent history so the system can resolve references s
 
 The first implementation slice should focus on DB-RAG query intents, especially cancelled or incomplete extraction workflows. Cancel should stop the pending workflow, but it should not make the original user query disappear as a referenceable intent.
 
+The implementation must stay lean: this is not a second task-memory system and not a second LLM resolver. It is a compact address book for user-originated DB-RAG intents.
+
 ## Problem
 
 The app currently has three related but different state surfaces:
@@ -67,15 +69,8 @@ memory = {
             "source_question": "Query my database, help me to subset age, gender, diabetes status, and TB outcome among index case.",
             "goal_text": "Subset age, gender, diabetes status, and TB outcome among index cases.",
             "status": "cancelled",
-            "source_event_id": "evt_...",
             "source_message_hash": "...",
             "active_intent_id": "intent:...",
-            "artifact_refs": {
-                "selection_artifact_id": "sel-art-..."
-            },
-            "review_refs": {
-                "cancel_event_id": "evt_..."
-            },
             "completed_task_id": None,
             "continued_from_intent_id": None,
             "created_at": "2026-05-08T00:00:00+00:00",
@@ -86,18 +81,6 @@ memory = {
     "last_user_intent_id": "intent_3f8a9c21",
     "last_user_intent_id_by_kind": {
         "db_rag_query": "intent_3f8a9c21"
-    },
-    "last_user_intent_resolution": {
-        "user_message_hash": "...",
-        "result": {
-            "label": "resolved",
-            "intent_id": "intent_3f8a9c21",
-            "kind": "db_rag_query",
-            "relationship": "continue",
-            "confidence": "high",
-            "needs_reference": False,
-            "reason": "User asked to continue the latest database query."
-        }
     }
 }
 ```
@@ -189,7 +172,6 @@ ALLOWED_USER_INTENT_STATUSES = {
 - `intent_order: list`
 - `last_user_intent_id: str | None`
 - `last_user_intent_id_by_kind: dict[str, str]`
-- `last_user_intent_resolution: dict | None`
 
 `ensure_memory_state` should prune `intent_order`, `last_user_intent_id`, and `last_user_intent_id_by_kind` against existing `user_intents`, mirroring the completed-task cleanup pattern.
 
@@ -199,9 +181,10 @@ Add helper functions in `graph/memory/user_intent_store.py` or the existing memo
 - `update_user_intent_status(...)`
 - `link_user_intent_completed_task(...)`
 - `latest_user_intent(...)`
-- `resolve_user_intent_reference_for_turn(...)`
 
 All helper inputs must be JSON-safe and should deep-copy caller-provided dict/list values before storing them.
+
+Do not add a separate cached user-intent resolver in the first slice. If a deterministic helper is useful for "continue previous query", keep it as a small phrase matcher near the existing reference-resolution path and do not introduce LLM prompting, candidate ranking, ambiguity handling, or a second resolution cache.
 
 ## Write Points
 
@@ -216,7 +199,6 @@ The record should include:
 - `kind="db_rag_query"`
 - `agent="rag_db_qa"`
 - `status="active"`
-- `source_event_id` when available
 - `source_message_hash`
 - `active_intent_id`
 - `created_at`
@@ -241,7 +223,6 @@ The record should update:
 - `goal_text`
 - `status`
 - `updated_at`
-- compact artifact or review references when created
 
 The original `source_question` should remain the initiating user message. Later refinement text can be represented by review feedback, event refs, or a future compact `revision_history` if needed.
 
@@ -252,7 +233,6 @@ When a DB-RAG column-selection or SQL-execution review is cancelled, the system 
 - keep the existing cancel behavior that clears live workflow pointers
 - mark the related `memory.user_intents[...]` record `status="cancelled"`
 - set `updated_at`
-- record the cancel event reference when available
 - avoid creating or mutating `memory.completed_tasks`
 
 Cancel should not add planner suppression rules. Future DB-RAG requests should route normally.
@@ -293,27 +273,20 @@ The user-intent resolver should be deterministic for common references:
 - "last query"
 - "continue previous query"
 - "continue that database query"
-- "retry that DB query"
 
 For these phrases, choose `last_user_intent_id_by_kind["db_rag_query"]` when the phrase says query or database. If that pointer is missing or invalid, fall back to the newest valid DB-RAG intent by `intent_order`, then `created_at`. Do not choose by `updated_at`, because cancel and completion are status updates rather than new user queries.
 
 If the user says "previous result", "last output", or asks to inspect SQL/dataset/output, use completed task memory instead.
 
-The deterministic resolver result should be compact and separate from completed-task resolution:
+The first implementation should not add a general user-intent resolver result model. It only needs one deterministic branch:
 
 ```python
-{
-    "label": "resolved" | "new_intent" | "ambiguous" | "unknown",
-    "intent_id": "intent_3f8a9c21" | None,
-    "kind": "db_rag_query" | None,
-    "relationship": "continue" | "retry" | "edit" | "copy" | None,
-    "confidence": "high" | "medium" | "low",
-    "needs_reference": bool,
-    "reason": str,
-}
+intent = latest_user_intent(state, kind="db_rag_query")
+if intent and user_text_means_continue_previous_query(user_text):
+    route_to_db_rag_with_question_override(intent["source_question"])
 ```
 
-The first implementation should support `continue` and `retry`; `edit` and `copy` are reserved for later UI work.
+This keeps completed-task reference resolution as the only full reference resolver. `retry`, `edit`, `copy`, ambiguity handling, and LLM-backed intent resolution are reserved for later work.
 
 ## Continue Behavior
 
@@ -341,7 +314,7 @@ This design supports future modern chat actions without requiring a separate mod
 - Retry cancelled query: create a new active DB-RAG intent linked to the cancelled intent
 - Show intent history: render compact records ordered by `intent_order`
 
-No UI work is required in the first implementation slice.
+No UI work is required in the first implementation slice. The first slice should not add `edited_from_intent_id`, copy actions, edit actions, or retry actions until the UI needs them.
 
 ## Testing
 
@@ -378,4 +351,4 @@ The helper code should live under `graph/memory/`, next to task memory helpers, 
 
 DB-RAG should call the helper at its natural intent write points rather than duplicating memory mutation logic in review nodes. Review nodes may call a small status-update helper on cancel if they have the originating active intent ID.
 
-The reference resolver should keep exact phrase handling deterministic first. An LLM resolver can be added later only if deterministic intent-reference handling proves insufficient.
+The only first-slice reference behavior should be exact deterministic phrase handling for "continue previous query" style requests. An LLM resolver can be added later only if deterministic intent-reference handling proves insufficient.
