@@ -43,7 +43,7 @@ def ui_after_error_review(app, config, payload, interrupt_id, queue_resume):
 
     submit_col, cancel_col = st.columns(2)
     submit = submit_col.button("Submit feedback", key=f"{ui_type}_submit")
-    cancel = cancel_col.button("Cancel", key=f"{ui_type}_cancel")
+    cancel = cancel_col.button("✖️ Cancel", key=f"{ui_type}_cancel")
 
     if cancel:
         _dismiss_interrupt(interrupt_id)

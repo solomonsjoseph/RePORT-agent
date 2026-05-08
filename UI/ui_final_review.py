@@ -57,7 +57,7 @@ def ui_final_review(app, config, payload, interrupt_id, queue_resume):
     col1, col2, col3 = st.columns(3)
     approve = col1.button("✅ Finish", key = f"{ui_type}_approve")
     regenerate = col2.button("♻️ Regenerate Code", key = f"{ui_type}_regenerate")
-    cancel = col3.button("Cancel", key=f"{ui_type}_cancel")
+    cancel = col3.button("✖️ Cancel", key=f"{ui_type}_cancel")
 
     if cancel:
         _dismiss_interrupt(interrupt_id)
