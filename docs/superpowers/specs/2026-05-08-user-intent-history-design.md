@@ -9,7 +9,9 @@ Add a small current-thread intent history so the system can resolve references s
 
 The first implementation slice should focus on DB-RAG query intents, especially cancelled or incomplete extraction workflows. Cancel should stop the pending workflow, but it should not make the original user query disappear as a referenceable intent.
 
-The implementation must stay lean: this is not a second task-memory system and not a second LLM resolver. It is a compact address book for user-originated DB-RAG intents.
+The implementation must stay lean: this is not a second task-memory system and not a second full reference resolver. It is a compact address book for user-originated DB-RAG intents plus a narrow semantic classifier whose output is validated by code.
+
+The first slice only creates and updates `memory.user_intents` for DB-RAG query intents. It only links intents to completed tasks for `db_rag_sql_extraction`, because that completion gate is concrete and already implemented.
 
 ## Problem
 
@@ -184,7 +186,7 @@ Add helper functions in `graph/memory/user_intent_store.py` or the existing memo
 
 All helper inputs must be JSON-safe and should deep-copy caller-provided dict/list values before storing them.
 
-Do not add a separate cached user-intent resolver in the first slice. If a deterministic helper is useful for "continue previous query", keep it as a small phrase matcher near the existing reference-resolution path and do not introduce LLM prompting, candidate ranking, ambiguity handling, or a second resolution cache.
+Do not add a separate cached user-intent resolver in the first slice. The semantic classifier should stay narrow: it classifies the latest turn against compact candidate cards, but it does not own routing, lifecycle, task completion, candidate ranking across large history, or state mutation. Do not add a second resolution cache.
 
 ## Write Points
 
@@ -251,6 +253,21 @@ When reviewed DB-RAG SQL execution succeeds and writes a completed task:
 
 The completed task remains the source for result-focused references such as "summarize the output" or "what SQL did you use?"
 
+## Task Completion Gates
+
+User intents do not become completed tasks by classifier decision.
+
+A completed task is written only by the node that owns the workflow completion gate. For the first slice, only `db_rag_sql_extraction` is linked to user intents.
+
+The `db_rag_sql_extraction` completion gate is:
+
+- prepared SQL was human-approved
+- SQL execution succeeded
+- subset dataset artifact was saved
+- completed task card includes selection, SQL candidate, and dataset artifact refs
+
+Cancel, decline, regenerate, pending review, pending clarification, SQL preparation error, SQL execution error, or missing artifacts must not create or link a completed task.
+
 ## Reference Resolution
 
 The current task-memory resolver handles completed tasks. User-intent history adds a reference surface for incomplete or cancelled user goals.
@@ -267,26 +284,55 @@ Recommended resolution order after higher-priority live workflows:
 
 The completed-task resolver should run before the user-intent resolver when the text points to a result or artifact because "summarize the output above" and "what SQL did you use?" should bind to completed work, not the originating query intent.
 
-The user-intent resolver should be deterministic for common references:
+## Semantic Reference Classifier
 
-- "previous query"
-- "last query"
-- "continue previous query"
-- "continue that database query"
+User-intent reference resolution should be semantic, not phrase-list based.
 
-For these phrases, choose `last_user_intent_id_by_kind["db_rag_query"]` when the phrase says query or database. If that pointer is missing or invalid, fall back to the newest valid DB-RAG intent by `intent_order`, then `created_at`. Do not choose by `updated_at`, because cancel and completion are status updates rather than new user queries.
+Use a lightweight classifier that receives compact context only:
 
-If the user says "previous result", "last output", or asks to inspect SQL/dataset/output, use completed task memory instead.
+- latest user message
+- capped recent turns
+- active workflow status
+- recent user-intent cards
+- recent completed-task cards
 
-The first implementation should not add a general user-intent resolver result model. It only needs one deterministic branch:
+The classifier returns:
 
 ```python
-intent = latest_user_intent(state, kind="db_rag_query")
-if intent and user_text_means_continue_previous_query(user_text):
-    route_to_db_rag_with_question_override(intent["source_question"])
+{
+    "target": "new_user_intent" | "existing_user_intent" | "completed_task" | "ambiguous",
+    "target_id": str | None,
+    "relationship": "continue" | "refine" | "inspect_result" | "new_request",
+    "confidence": "high" | "medium" | "low",
+    "reason": str,
+}
 ```
 
-This keeps completed-task reference resolution as the only full reference resolver. `retry`, `edit`, `copy`, ambiguity handling, and LLM-backed intent resolution are reserved for later work.
+The classifier is advisory. Code validates IDs, required fields, task or intent kind, artifacts, and allowed transitions before routing.
+
+If the user says "previous result", "last output", or asks to inspect SQL, dataset, output, table, figure, or answer content, the system should prefer completed task memory over user intent memory.
+
+The classifier should use `last_user_intent_id_by_kind["db_rag_query"]`, `intent_order`, and compact candidate cards to understand recency. It must not use `updated_at` as the meaning of "latest query", because cancel and completion are status updates rather than new user queries.
+
+## Classifier Validation Rules
+
+If the classifier selects `existing_user_intent`:
+
+- `target_id` must exist in `memory.user_intents`
+- intent kind must be `db_rag_query`
+- `source_question` must be non-empty
+- continuation creates a new live DB-RAG intent
+- old cancelled review pointers are not reused
+
+If the classifier selects `completed_task`:
+
+- `target_id` must exist in `memory.completed_tasks`
+- requested relationship must be allowed for the task kind
+- required artifacts must exist
+
+If the classifier selects `new_user_intent`, the latest user message should be treated as the new source question.
+
+If the classifier result has low confidence, missing target, invalid target, unsupported relationship, or unclear relationship, route to clarification.
 
 ## Continue Behavior
 
@@ -304,6 +350,35 @@ This preserves the user's intended query while respecting that Cancel ended the 
 Continuation should not reuse stale review artifacts, `pending_column_review`, `pending_sql_candidate`, approved selection IDs, or SQL approval IDs from the cancelled workflow. It should enter DB-RAG through the same fresh-question path used by a new extraction-oriented request.
 
 The new continued intent should get a new memory-layer `intent_id` and a new DB-RAG `active_intent.intent_id`. The prior cancelled intent should remain `cancelled`; it should not be mutated back to `active`.
+
+## Planner Context
+
+The planner should not receive full intent history. It should receive compact recent intent cards and any validated reference result.
+
+Suggested planner-facing context:
+
+```python
+{
+    "recent_user_intents": [
+        {
+            "intent_id": "...",
+            "kind": "db_rag_query",
+            "source_question": "...",
+            "goal_text": "...",
+            "status": "cancelled",
+            "created_at": "...",
+            "completed_task_id": None,
+        }
+    ],
+    "validated_reference": {
+        "target": "existing_user_intent",
+        "target_id": "intent_...",
+        "relationship": "continue",
+    } | None,
+}
+```
+
+The planner must not re-decide a validated reference from raw transcript. If a reference has been validated, routing should follow the validated target and relationship subject to action masks and workflow readiness.
 
 ## Future UI Fit
 
@@ -326,11 +401,14 @@ Add focused tests for:
 - DB-RAG column-review cancel marks the originating user intent `cancelled`
 - DB-RAG SQL-review cancel marks the originating user intent `cancelled`
 - cancel still does not create or mutate `memory.completed_tasks`
-- "continue previous query" resolves the latest user-originated DB-RAG intent
+- semantic classifier resolves "continue previous query" to the latest user-originated DB-RAG intent when valid
 - continuing a cancelled query starts a fresh DB-RAG workflow instead of reopening the cancelled review
 - status-only cancel updates do not reorder `intent_order`
 - a fresh DB-RAG question supersedes the previous live DB-RAG user intent
 - output/result references continue to use completed-task memory before user-intent memory
+- low-confidence, missing-target, or invalid classifier outputs route to clarification
+- classifier never creates or links a completed task
+- `db_rag_sql_extraction` links only after human-approved SQL execution succeeds and saves a dataset artifact
 - completed SQL extraction links completed task memory and originating user-intent memory
 
 Existing tests for approve, regenerate, cancel audit events, and completed-task memory should continue to pass.
@@ -351,4 +429,4 @@ The helper code should live under `graph/memory/`, next to task memory helpers, 
 
 DB-RAG should call the helper at its natural intent write points rather than duplicating memory mutation logic in review nodes. Review nodes may call a small status-update helper on cancel if they have the originating active intent ID.
 
-The only first-slice reference behavior should be exact deterministic phrase handling for "continue previous query" style requests. An LLM resolver can be added later only if deterministic intent-reference handling proves insufficient.
+The first-slice reference behavior should use the semantic classifier plus deterministic validation. It should not rely on exact phrase lists as the contract.
