@@ -62,3 +62,17 @@ def append_workflow_timings(
         **state,
         "meta": meta,
     }
+
+
+def combined_timing_stages(meta: dict[str, Any]) -> list[TimingRecord]:
+    combined: list[TimingRecord] = []
+    for source, key in (
+        ("workflow", WORKFLOW_TIMING_META_KEY),
+        ("db_rag", "db_rag_timing"),
+    ):
+        timing = dict(meta.get(key) or {})
+        for record in list(timing.get("stages") or []):
+            if not isinstance(record, dict):
+                continue
+            combined.append({"source": source, **dict(record)})
+    return combined

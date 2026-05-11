@@ -60,6 +60,7 @@ from utils.streamlit_config import (
 from utils.run_manager import GraphRunManager
 from utils.export_thread import build_thread_export
 from utils.display_history import build_display_history, serialize_display_history
+from utils.performance import combined_timing_stages
 from graph.conversation_events import ensure_conversation_state
 from graph.state_views import get_conversation_events
 from utils.streamlit_interrupts import (
@@ -594,16 +595,10 @@ def render_interactive_area() -> None:
                 st.write(serialize_display_history(build_display_history(state)))
             with st.expander("Semantic conversation events", expanded=False):
                 st.write(get_conversation_events(state))
-            db_rag_timing = dict((state.get("meta") or {}).get("db_rag_timing") or {})
-            timing_stages = list(db_rag_timing.get("stages") or [])
+            timing_stages = combined_timing_stages(dict((state.get("meta") or {})))
             if timing_stages:
-                with st.expander("DB-RAG timing", expanded=False):
+                with st.expander("Latency timing", expanded=False):
                     st.dataframe(timing_stages, use_container_width=True)
-            workflow_timing = dict((state.get("meta") or {}).get("workflow_timing") or {})
-            workflow_timing_stages = list(workflow_timing.get("stages") or [])
-            if workflow_timing_stages:
-                with st.expander("Workflow timing", expanded=False):
-                    st.dataframe(workflow_timing_stages, use_container_width=True)
         st.write("Next nodes:", snapshot.next)
         st.write("interrupts:", snapshot.interrupts)
         if interrupt_event:

@@ -5,7 +5,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from utils.performance import append_workflow_timings, collect_timings, timing_stage
+from utils.performance import (
+    append_workflow_timings,
+    collect_timings,
+    combined_timing_stages,
+    timing_stage,
+)
 
 
 def test_timing_stage_records_elapsed_time() -> None:
@@ -60,3 +65,38 @@ def test_append_workflow_timings_ignores_empty_records() -> None:
     updated = append_workflow_timings(state, [])
 
     assert updated is state
+
+
+def test_combined_timing_stages_merges_workflow_and_db_rag_sources() -> None:
+    meta = {
+        "workflow_timing": {
+            "stages": [
+                {"stage": "node.orchestrator", "elapsed_ms": 10.0},
+                {"stage": "planner.llm_invoke", "elapsed_ms": 20.0, "actions": 4},
+            ]
+        },
+        "db_rag_timing": {
+            "stages": [
+                {"stage": "rag_db_qa.total", "elapsed_ms": 30.0},
+                {"stage": "db_rag.retrieval.retrieve_context", "elapsed_ms": 40.0},
+            ]
+        },
+    }
+
+    stages = combined_timing_stages(meta)
+
+    assert stages == [
+        {"source": "workflow", "stage": "node.orchestrator", "elapsed_ms": 10.0},
+        {
+            "source": "workflow",
+            "stage": "planner.llm_invoke",
+            "elapsed_ms": 20.0,
+            "actions": 4,
+        },
+        {"source": "db_rag", "stage": "rag_db_qa.total", "elapsed_ms": 30.0},
+        {
+            "source": "db_rag",
+            "stage": "db_rag.retrieval.retrieve_context",
+            "elapsed_ms": 40.0,
+        },
+    ]
