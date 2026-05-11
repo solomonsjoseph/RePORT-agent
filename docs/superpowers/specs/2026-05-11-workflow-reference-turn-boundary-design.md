@@ -39,6 +39,25 @@ rag_db_qa fresh-question retrieval must never receive an unresolved workflow poi
 
 Examples of workflow pointers include "continue the previous query", "resume that extraction", "retry the database query", and "go back to the prior request". The implementation must not rely on hard-coded phrase lists for these examples. They illustrate the semantic class only.
 
+## Grill Review Decisions
+
+The following design questions were resolved during review:
+
+1. **Should this introduce a new independent classifier?**
+   - Recommended answer: no. Extend the existing current-thread user-intent reference classifier into a turn-boundary classifier. The current helper already builds compact `candidate_user_intents`, validates selected IDs, and returns advisory JSON. The improvement should add `turn_type` and clarification-reply awareness to that path instead of creating a parallel resolver.
+
+2. **Should the classifier run when there are no candidate user intents?**
+   - Recommended answer: yes for turn typing, no for target selection. The system still needs to know whether "resume the previous query" is a workflow reference. If no valid target exists, the result should be `workflow_reference` with `target="none"` and a terminal restatement prompt. It must not short-circuit to `new_request` before classifying the turn type.
+
+3. **Should pending clarification always consume the next user turn?**
+   - Recommended answer: no. Pending clarification is a priority only when the latest message satisfies that clarification kind's reply contract. Otherwise the clarification is abandoned for that turn and normal routing continues.
+
+4. **Should DB-RAG have a defensive fallback for unresolved workflow references?**
+   - Recommended answer: yes, but only as an assertion-style guard. The primary boundary belongs in the orchestrator. DB-RAG may reject a structured `turn_type="workflow_reference"` entry if one leaks through, but DB-RAG should not run semantic workflow-reference detection over fresh question text.
+
+5. **Should `retry` be a first-slice relationship?**
+   - Recommended answer: no. The existing validator supports `continue`, `refine`, `inspect_result`, and `new_request`. Treat user wording such as "retry the previous query" as relationship `continue` unless a later design adds true retry semantics. This avoids adding an unsupported relationship label without a distinct lifecycle behavior.
+
 ## Non-Goals
 
 - Do not add phrase heuristics for words like "resume", "previous", or "continue".
@@ -70,7 +89,12 @@ The design uses the existing state layers:
 
 ## Turn Boundary Classifier
 
-Add a semantic turn-boundary classifier that runs before fresh DB-RAG retrieval and planner fallback.
+Extend the existing user-intent reference classifier into a semantic turn-boundary classifier that runs before fresh DB-RAG retrieval and planner fallback.
+
+The current `classify_user_intent_reference(...)` path already owns compact intent payload construction and code-side validation. The new design should evolve that path rather than add a second classifier. The classifier should return both:
+
+- a **turn type**, which determines whether the latest message is a clarification reply, workflow reference, fresh database question, or non-database request;
+- an optional **validated target**, which identifies a specific user intent or completed task when the turn refers to prior work.
 
 The classifier receives compact routing context only:
 
@@ -143,17 +167,38 @@ Allowed `target` values:
 
 - `existing_user_intent`
 - `completed_task`
-- `new_request`
+- `new_user_intent`
 - `none`
 
 Allowed workflow-reference relationships:
 
 - `continue`
 - `refine`
-- `retry`
 - `inspect_result`
 
-Only `continue`, `refine`, and `retry` against `existing_user_intent` route to DB-RAG fresh-question continuation. `inspect_result` should prefer completed task memory.
+Only `continue` and `refine` against `existing_user_intent` route to DB-RAG fresh-question continuation. `inspect_result` should prefer completed task memory.
+
+User wording such as "retry the previous query" should map to `relationship="continue"` in the first slice. True retry can be added later only if it needs distinct behavior from continuing the stored source question.
+
+### No-Candidate Behavior
+
+The turn-boundary classifier must still run when `memory.user_intents` is empty.
+
+The previous user-intent resolver can short-circuit target resolution when no candidates exist, but this design needs turn typing even without candidates. For example, if the latest message is "resume the previous query" and there are no candidate intents, the correct result is:
+
+```json
+{
+  "turn_type": "workflow_reference",
+  "target": "none",
+  "target_id": null,
+  "relationship": "continue",
+  "confidence": "high",
+  "needs_clarification": false,
+  "reason": "The user asked to continue prior work, but no prior DB-RAG user intent is recorded."
+}
+```
+
+The orchestrator then returns the no-stored-prior-intent message. It does not route to fresh DB-RAG and does not call `answer_from_context(...)`.
 
 ## Validation Rules
 
@@ -164,7 +209,7 @@ For `workflow_reference` targeting `existing_user_intent`:
 - `target_id` must exist in `memory.user_intents`.
 - the card kind must be `db_rag_query`.
 - `source_question` must be non-empty.
-- `relationship` must be one of `continue`, `refine`, or `retry`.
+- `relationship` must be one of `continue` or `refine`.
 - the source question used for continuation must be copied from memory, not from classifier free text.
 - stale review pointers must not be reused.
 
@@ -184,21 +229,36 @@ For invalid output:
 - clear any partial resolved-reference metadata.
 - ask the user to restate the prior database query if no valid target can be determined.
 
+For `workflow_reference` with `target="none"`:
+
+- do not route to `rag_db_qa`;
+- do not ask the planner to reinterpret the message;
+- return the no-stored-prior-intent response and mark the user turn answered.
+
+For `fresh_database_question`:
+
+- do not require an existing user-intent target;
+- proceed through normal DB-RAG routing;
+- create or update `memory.user_intents` at the DB-RAG intent write point.
+
 ## Routing Order
 
 The orchestrator should apply this order for a fresh unanswered user turn:
 
 1. Consume hard human-review decisions.
 2. Consume deterministic review lifecycle transitions, such as approved SQL or cancelled review.
-3. If a pending clarification exists, decide whether the latest message is a valid reply for that clarification kind.
-4. Run completed-task reference resolution for result, SQL, dataset, artifact, or output references.
-5. Run the turn-boundary classifier for workflow references and fresh-question classification.
-6. If the turn is a validated workflow reference to a DB-RAG user intent, set `MetaKeys.RAG_DB_QUESTION_OVERRIDE` to the stored `source_question` and route to `rag_db_qa`.
-7. If the turn is an unresolved workflow reference, ask clarification or ask the user to restate the query.
-8. If the turn is a fresh database question, route normally to `rag_db_qa`.
-9. Otherwise use normal planner fallback.
+3. Build routing context, including pending clarification kind, active DB-RAG thread status, compact user intents, and compact completed tasks.
+4. Classify the latest turn boundary.
+5. If the turn is a valid reply for the active clarification kind, route to the clarification return node or pending DB-RAG workflow.
+6. If the turn is a workflow reference to a completed result or artifact, run completed-task reference resolution.
+7. If the turn is a validated workflow reference to a DB-RAG user intent, set `MetaKeys.RAG_DB_QUESTION_OVERRIDE` to the stored `source_question` and route to `rag_db_qa`.
+8. If the turn is an unresolved workflow reference, ask clarification or ask the user to restate the query.
+9. If the turn is a fresh database question, route normally to `rag_db_qa`.
+10. Otherwise use normal planner fallback.
 
 The important change is that a pending clarification should not automatically consume every subsequent user message. It should consume only messages that match its expected reply contract.
+
+This order intentionally moves semantic turn-boundary classification before the current eager clarification branch. In the current code, `was_awaiting_clarification` can set `next_action` before user-intent classification runs. That ordering is the core reason an unrelated or referential message can bypass intent resolution.
 
 ## Clarification Reply Contracts
 
@@ -222,6 +282,17 @@ Each clarification kind should define what counts as a valid reply:
 
 If a message is not a valid reply to the active clarification, the clarification is abandoned for that turn and normal routing continues. This is a lifecycle rule, not a phrase heuristic.
 
+### Clarification State Clearing
+
+When a pending clarification is abandoned for the current turn:
+
+- clear `AWAITING_USER_CLARIFICATION`, `CLARIFICATION_KIND`, `CLARIFICATION_RETURN_NODE`, and `PENDING_QUESTION` before routing the message as a new turn;
+- preserve durable memory such as `memory.user_intents` and `memory.completed_tasks`;
+- do not mutate DB-RAG review artifacts unless the abandoned clarification was itself the owner of those artifacts;
+- append an observation explaining that the clarification was superseded by the latest turn boundary.
+
+This prevents stale pending questions from being prepended later by `_question_from_stale_qa_followup(...)`.
+
 ## DB-RAG Entry Contract
 
 `rag_db_qa` should receive one of three DB-RAG entry classes:
@@ -240,6 +311,10 @@ If a message is not a valid reply to the active clarification, the clarification
    - DB-RAG may retrieve context and answer or start extraction.
 
 DB-RAG should not need to infer workflow-reference semantics in the fresh-question path. That boundary belongs to the orchestrator.
+
+### Defensive Guard
+
+DB-RAG may include a defensive guard that rejects an explicit structured workflow-reference turn if the orchestrator passes one through by mistake. The guard should be driven by structured metadata such as `meta["turn_type"] == "workflow_reference"`, not by scanning question text for words. The response should be terminal and should not call retrieval.
 
 ## Failure Handling
 
@@ -307,6 +382,8 @@ meta["pending_question"] = "Which previous database query did you want to contin
 
 If there are no candidates, the system may answer terminally and clear clarification state instead of asking the user to choose from an empty list.
 
+The recommended first-slice behavior for no candidates is terminal answer plus cleared clarification state. Asking "which one?" when the candidate list is empty creates another dead-end clarification.
+
 ## Planner Role
 
 The planner should not discover workflow references from raw transcript text.
@@ -326,12 +403,27 @@ The planner may receive compact context:
 
 If `validated_reference` exists, the planner treats it as a routing fact. It should not override or reinterpret the reference unless the target action is unavailable.
 
+The planner should receive `turn_type` as an input fact after validation. It should not be responsible for deciding that a raw message is a workflow reference, because planner fallback happens too late to protect DB-RAG retrieval from literal workflow-pointer text.
+
+## Implementation Boundaries
+
+Recommended first-slice implementation boundaries:
+
+- Extend `graph/memory/user_intent_store.py` classifier schema and validation to include `turn_type` and `target="none"`.
+- Remove the no-candidate `new_user_intent` short-circuit for turn-boundary classification. It may remain only inside a lower-level target resolver that runs after turn type is known.
+- Add an orchestrator helper that classifies the turn before eager clarification routing chooses `next_action`.
+- Add a helper that decides whether a `turn_type="clarification_reply"` result is valid for the active `CLARIFICATION_KIND`.
+- Keep `rag_db_qa` continuation entry through `MetaKeys.RAG_DB_QUESTION_OVERRIDE`.
+- Keep DB-RAG fresh-question retrieval unchanged except for optional structured defensive guard.
+
+Do not implement this by adding text checks inside `_handle_fresh_db_rag_question(...)`, `answer_from_context(...)`, or retrieval prompts.
+
 ## Testing
 
 Add focused tests for:
 
 - `continue previous query` with a valid cancelled DB-RAG user intent routes to `rag_db_qa` with `rag_db_question_override`.
-- the same message with no `memory.user_intents` does not route to fresh DB-RAG retrieval and asks the user to restate the query.
+- the same message with no `memory.user_intents` is classified as `workflow_reference`, does not route to fresh DB-RAG retrieval, and asks the user to restate the query.
 - pending `rag_db_extraction_opt_in` consumes `yes` and `no` replies normally.
 - pending `rag_db_extraction_opt_in` does not consume a workflow reference to a different prior intent.
 - soft `qa_followup` clarification can be superseded by a workflow reference.
@@ -340,13 +432,16 @@ Add focused tests for:
 - invalid classifier target IDs are rejected and do not set `rag_db_question_override`.
 - resolved continuation consumes `rag_db_question_override` exactly once.
 - DB-RAG fresh-question tests assert that unresolved workflow-reference text is not passed to `retrieve_context()` or `answer_from_context()`.
+- the classifier payload remains compact and does not include SQL text, schema context, dataframe contents, or artifact payloads.
+- abandoned clarification state is cleared so stale pending questions are not prepended into the next DB-RAG question.
+- wording like "retry the prior query" maps to `relationship="continue"` until true retry semantics are designed.
 
 ## Acceptance Criteria
 
 - A workflow-reference turn is resolved or clarified before DB-RAG retrieval.
 - The literal text "resume previous query" is never answered through `answer_from_context(...)`.
 - Valid continuations use the stored `memory.user_intents[*].source_question`.
+- Workflow-reference turns with no stored prior intent produce a terminal restatement prompt, not a new DB-RAG metadata answer.
 - Cancelled DB-RAG review state is not resumed directly.
 - Existing DB-RAG opt-in replies still work.
 - No phrase-list heuristic is added as the primary decision mechanism.
-
