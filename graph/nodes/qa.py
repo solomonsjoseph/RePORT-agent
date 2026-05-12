@@ -19,9 +19,14 @@ from utils.dataset_artifacts import build_dataset_context, get_active_dataset_ar
 from utils.llm_response import coerce_text_content
 from utils.message_window import window_messages
 from .code_guardrails import code_fingerprint, is_executable_python
+from .clarification_contracts import CLARIFICATION_KIND_QA_TOOL, build_expected
 from .state_helpers import clear_clarification_meta, set_clarification_meta, update_agent_state
 from .orchestrator.state_logic import _user_message_hash
-from .tool_routing import latest_user_message, should_route_tools
+from .tool_routing import (
+    infer_tool_missing_field_contract,
+    latest_user_message,
+    should_route_tools,
+)
 
 NODE_NAME = "qa"
 NODE_CAPABILITY = (
@@ -342,15 +347,26 @@ def qa_node(
     meta = dict(state.get("meta", {}))
 
     if explicit_clarification:
-        clarification_kind = "qa_tool" if should_attempt_tool_routing else "qa_followup"
-        meta = set_clarification_meta(
-            meta,
-            return_node="qa",
-            kind=clarification_kind,
-            pending_question=question,
+        tool_contract = (
+            infer_tool_missing_field_contract(question, clarification_question or "")
+            if should_attempt_tool_routing
+            else None
         )
-        awaiting_tool_clarification_for_agent = True
-        observations.append("qa: asked clarification (structured qa response)")
+        if tool_contract:
+            meta = set_clarification_meta(
+                meta,
+                return_node="qa",
+                kind=CLARIFICATION_KIND_QA_TOOL,
+                pending_question=question,
+                pending_question_user_message_hash=_current_user_turn_hash(state),
+                expected=build_expected(CLARIFICATION_KIND_QA_TOOL, **tool_contract),
+            )
+            awaiting_tool_clarification_for_agent = True
+            observations.append("qa: asked tool clarification")
+        else:
+            meta = clear_clarification_meta(meta)
+            awaiting_tool_clarification_for_agent = False
+            observations.append("qa: asked normal follow-up without hard clarification state")
     else:
         meta = clear_clarification_meta(meta)
         awaiting_tool_clarification_for_agent = False

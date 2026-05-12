@@ -128,6 +128,51 @@ def test_validate_existing_user_intent_reference() -> None:
     assert result["source_question"] == "Query my database for age"
 
 
+def test_validate_workflow_reference_without_target() -> None:
+    result = validate_user_intent_reference(
+        _empty_state(),
+        {
+            "turn_type": "workflow_reference",
+            "target": "none",
+            "target_id": None,
+            "relationship": "continue",
+            "confidence": "high",
+            "needs_clarification": False,
+            "reason": "No prior DB-RAG intent exists.",
+        },
+    )
+
+    assert result["turn_type"] == "workflow_reference"
+    assert result["target"] == "none"
+    assert result["relationship"] == "continue"
+    assert result["needs_clarification"] is False
+
+
+def test_classifier_runs_without_candidates_for_turn_typing() -> None:
+    classifier = StubClassifier(
+        {
+            "turn_type": "workflow_reference",
+            "target": "none",
+            "target_id": None,
+            "relationship": "continue",
+            "confidence": "high",
+            "needs_clarification": False,
+            "reason": "No prior DB-RAG intent exists.",
+        }
+    )
+
+    result = classify_user_intent_reference(
+        _empty_state(),
+        classifier,
+        user_message="continue previous query",
+        user_message_hash="hash-2",
+    )
+
+    assert result["turn_type"] == "workflow_reference"
+    assert result["target"] == "none"
+    assert classifier.prompt is not None
+
+
 def test_validate_rejects_invented_intent_id() -> None:
     state = _state_with_intent()
 

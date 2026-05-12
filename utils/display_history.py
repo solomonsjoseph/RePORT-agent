@@ -25,6 +25,12 @@ def _figure_paths_by_parent_event_id(state: dict) -> dict[str, str]:
     return figure_paths
 
 
+def _contains_normalized_text(haystack: str, needle: str) -> bool:
+    normalized_haystack = " ".join(str(haystack or "").split())
+    normalized_needle = " ".join(str(needle or "").split())
+    return bool(normalized_needle and normalized_needle in normalized_haystack)
+
+
 def build_display_history(state: dict) -> list:
     events = get_conversation_events(state)
     if not events:
@@ -32,6 +38,7 @@ def build_display_history(state: dict) -> list:
 
     figure_paths = _figure_paths_by_parent_event_id(state)
     display_messages: list = []
+    assistant_text_by_turn_hash: dict[str, str] = {}
     for event in events:
         event_type = event.get("type")
         text = str(event.get("text") or "").strip()
@@ -47,6 +54,16 @@ def build_display_history(state: dict) -> list:
             continue
         if event_type not in {"assistant", "clarification"}:
             continue
+        user_turn_hash = event.get("user_turn_hash")
+        if (
+            event_type == "clarification"
+            and isinstance(user_turn_hash, str)
+            and _contains_normalized_text(
+                assistant_text_by_turn_hash.get(user_turn_hash, ""),
+                text,
+            )
+        ):
+            continue
         additional_kwargs = {}
         event_id = event.get("event_id")
         if isinstance(event_id, str) and event_id in figure_paths:
@@ -57,6 +74,8 @@ def build_display_history(state: dict) -> list:
                 additional_kwargs=additional_kwargs,
             )
         )
+        if event_type == "assistant" and isinstance(user_turn_hash, str):
+            assistant_text_by_turn_hash[user_turn_hash] = text
     return display_messages
 
 

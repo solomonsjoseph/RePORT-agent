@@ -112,6 +112,7 @@ def human_review_rag_db_column_selection_node(state):
         {
             "type": "human_review_rag_db_column_selection",
             "artifact_id": selection_artifact_id,
+            "review_prompt": review.get("review_prompt", ""),
             "goal_text": review.get("goal_text", ""),
             "question": review.get("source_question", ""),
             "selection_id": review.get("selection_id", ""),

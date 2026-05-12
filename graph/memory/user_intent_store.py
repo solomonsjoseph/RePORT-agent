@@ -24,6 +24,7 @@ ALLOWED_USER_INTENT_REFERENCE_TARGETS = {
     "existing_user_intent",
     "completed_task",
     "ambiguous",
+    "none",
 }
 
 ALLOWED_USER_INTENT_RELATIONSHIPS = {
@@ -33,11 +34,19 @@ ALLOWED_USER_INTENT_RELATIONSHIPS = {
     "new_request",
 }
 
+ALLOWED_TURN_TYPES = {
+    "clarification_reply",
+    "workflow_reference",
+    "fresh_database_question",
+    "fresh_non_database_question",
+    "ambiguous",
+}
+
 CLASSIFIER_INSTRUCTIONS = (
-    "Classify whether the latest user message refers to a prior DB-RAG user intent, "
-    "a completed task/result, a fresh request, or an ambiguous reference. "
+    "Classify the latest user message turn_type and whether it refers to a prior "
+    "DB-RAG user intent, a completed task/result, a fresh request, or an ambiguous reference. "
     "Choose only IDs present in candidate_user_intents or candidate_completed_tasks. "
-    "Return JSON with target, target_id, relationship, confidence, reason."
+    "Return JSON with turn_type, target, target_id, relationship, confidence, reason."
 )
 
 COMPACT_COMPLETED_TASK_CLASSIFIER_FIELDS = (
@@ -269,6 +278,7 @@ def _confidence_is_low(value: Any) -> bool:
 
 def _ambiguous_result(reason: str) -> dict[str, Any]:
     return {
+        "turn_type": "ambiguous",
         "target": "ambiguous",
         "target_id": None,
         "relationship": None,
@@ -276,6 +286,17 @@ def _ambiguous_result(reason: str) -> dict[str, Any]:
         "needs_clarification": True,
         "reason": reason,
     }
+
+
+def _turn_type_for_result(raw_result: dict[str, Any], target: Any) -> str:
+    raw_turn_type = raw_result.get("turn_type")
+    if isinstance(raw_turn_type, str) and raw_turn_type in ALLOWED_TURN_TYPES:
+        return raw_turn_type
+    if target == "new_user_intent":
+        return "fresh_database_question"
+    if target == "ambiguous":
+        return "ambiguous"
+    return "workflow_reference"
 
 
 def validate_user_intent_reference(
@@ -295,15 +316,33 @@ def validate_user_intent_reference(
         raise ValueError(f"Unknown user-intent reference target: {target}")
     if relationship is not None and relationship not in ALLOWED_USER_INTENT_RELATIONSHIPS:
         raise ValueError(f"Unknown user-intent relationship: {relationship}")
+    turn_type = _turn_type_for_result(raw_result, target)
     if target == "ambiguous" or _confidence_is_low(raw_result.get("confidence")):
         return _ambiguous_result(str(raw_result.get("reason") or "The reference is ambiguous."))
     if target == "new_user_intent":
         return {
+            "turn_type": turn_type,
             "target": "new_user_intent",
             "target_id": None,
             "relationship": "new_request",
             "confidence": raw_result.get("confidence"),
             "needs_clarification": False,
+            "reason": str(raw_result.get("reason") or ""),
+        }
+    if target == "none":
+        if turn_type != "workflow_reference":
+            return _ambiguous_result("A no-target result is only valid for workflow references.")
+        if relationship not in {"continue", "refine"}:
+            return _ambiguous_result(
+                "The requested relationship is not supported for no-target workflow references."
+            )
+        return {
+            "turn_type": "workflow_reference",
+            "target": "none",
+            "target_id": None,
+            "relationship": relationship,
+            "confidence": raw_result.get("confidence"),
+            "needs_clarification": bool(raw_result.get("needs_clarification", False)),
             "reason": str(raw_result.get("reason") or ""),
         }
 
@@ -328,6 +367,7 @@ def validate_user_intent_reference(
                 "The requested relationship is not supported for user intents."
             )
         return {
+            "turn_type": turn_type,
             "target": "existing_user_intent",
             "target_id": target_id,
             "kind": "db_rag_query",
@@ -357,6 +397,7 @@ def validate_user_intent_reference(
         ):
             raise ValueError("Resolved completed task has no inspectable artifact ref")
         return {
+            "turn_type": turn_type,
             "target": "completed_task",
             "target_id": target_id,
             "relationship": relationship,
@@ -384,8 +425,13 @@ def classify_user_intent_reference(
         recent_turns=recent_turns,
         completed_task_cards=completed_task_cards,
     )
-    if not payload["candidate_user_intents"] and not payload["candidate_completed_tasks"]:
+    if (
+        not payload["candidate_user_intents"]
+        and not payload["candidate_completed_tasks"]
+        and not hasattr(classifier, "invoke")
+    ):
         return {
+            "turn_type": "fresh_database_question",
             "target": "new_user_intent",
             "target_id": None,
             "relationship": "new_request",

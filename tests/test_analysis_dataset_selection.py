@@ -98,6 +98,7 @@ _STUBBED_GENERATE_CODE_MODULES = (
     "langchain_core",
     "langchain_core.messages",
     "langchain_core.prompts",
+    "langgraph.graph.message",
     "prompts.generate_prompt",
     "utils.llm_response",
     "utils.message_window",
@@ -147,6 +148,9 @@ def generate_code_module():
         sys.modules["langchain_core"] = langchain_core
         sys.modules["langchain_core.messages"] = messages
         sys.modules["langchain_core.prompts"] = prompts
+        graph_message_mod = ModuleType("langgraph.graph.message")
+        graph_message_mod.add_messages = lambda current, new: (current or []) + (new or [])
+        sys.modules["langgraph.graph.message"] = graph_message_mod
 
         prompt_module = ModuleType("prompts.generate_prompt")
         prompt_module.make_generate_code_prompt = lambda: SimpleNamespace(invoke=lambda payload: payload)
@@ -329,58 +333,137 @@ def test_generate_code_reprompts_when_dataset_reply_is_not_exact_id(generate_cod
     assert "Reply with exactly one dataset ID" in updated["output"]["qa_response"]
 
 
-def test_clarification_node_passes_raw_dataset_selection_reply_back_to_generate_code() -> None:
-    original = {
-        name: sys.modules.get(name)
-        for name in (
-            "graph.nodes.generate_code",
-            "graph.nodes.qa",
-            "graph.nodes.rag_db_qa",
-            "graph.nodes.tool_routing",
-            "graph.nodes.clarification",
-        )
+def test_clarification_node_routes_dataset_id_contract_to_generate_code(monkeypatch) -> None:
+    from langchain_core.messages import HumanMessage
+    from graph.nodes import clarification as module
+    from graph.nodes.clarification_contracts import (
+        CLARIFICATION_KIND_DATASET_SELECTION,
+        build_expected,
+    )
+    from graph.state import MetaKeys
+
+    called = {}
+
+    def _generate_code_node(state, llm, context, question_override=None):
+        called["question_override"] = question_override
+        called["analysis_dataset_id"] = state["meta"].get(MetaKeys.ANALYSIS_DATASET_ID)
+        return state
+
+    monkeypatch.setattr(module, "generate_code_node", _generate_code_node)
+    state = {
+        "messages": [HumanMessage(content="uploaded-1")],
+        "meta": {
+            MetaKeys.CLARIFICATION_KIND: CLARIFICATION_KIND_DATASET_SELECTION,
+            MetaKeys.CLARIFICATION_RETURN_NODE: "generate_code",
+            MetaKeys.PENDING_QUESTION: "plot age by sex",
+            MetaKeys.CLARIFICATION_EXPECTED: build_expected(
+                CLARIFICATION_KIND_DATASET_SELECTION,
+                allowed_values=["uploaded-1"],
+            ),
+            MetaKeys.CLARIFICATION_ATTEMPT_COUNT: 0,
+        },
     }
-    try:
-        called = {}
 
-        generate_code_mod = ModuleType("graph.nodes.generate_code")
+    module.clarification_node(state, SimpleNamespace(), context={"runtime_datasets": True})
 
-        def _generate_code_node(state, llm, context, question_override=None):
-            called["question_override"] = question_override
-            return state
+    assert called["question_override"] == "plot age by sex"
+    assert called["analysis_dataset_id"] == "uploaded-1"
 
-        generate_code_mod.generate_code_node = _generate_code_node
-        qa_mod = ModuleType("graph.nodes.qa")
-        qa_mod.qa_node = lambda state, llm, context="", question_override=None: state
-        rag_mod = ModuleType("graph.nodes.rag_db_qa")
-        rag_mod.rag_db_qa_node = lambda state, llm, provider="", service=None, reranker_model=None, question_override=None: state
-        tool_routing_mod = ModuleType("graph.nodes.tool_routing")
-        tool_routing_mod.latest_user_message = lambda state: "subset-1"
 
-        sys.modules["graph.nodes.generate_code"] = generate_code_mod
-        sys.modules["graph.nodes.qa"] = qa_mod
-        sys.modules["graph.nodes.rag_db_qa"] = rag_mod
-        sys.modules["graph.nodes.tool_routing"] = tool_routing_mod
-        sys.modules.pop("graph.nodes.clarification", None)
-        module = importlib.import_module("graph.nodes.clarification")
+def test_clarification_node_reroutes_dataset_contract_database_reply_to_db_rag(monkeypatch) -> None:
+    from langchain_core.messages import HumanMessage
+    from graph.nodes import clarification as module
+    from graph.nodes.clarification_contracts import (
+        CLARIFICATION_KIND_DATASET_SELECTION,
+        build_expected,
+    )
+    from graph.state import MetaKeys
 
-        state = {
-            "messages": [],
-            "meta": {
-                "clarification_kind": "generate_code_dataset_selection",
-                "clarification_return_node": "generate_code",
-                "pending_question": "plot age by sex",
-            },
-        }
-        module.clarification_node(state, SimpleNamespace(), context={"runtime_datasets": True})
+    monkeypatch.setattr(
+        "graph.nodes.clarification_contracts.classify_clarification_reply",
+        lambda **_kwargs: {
+            "decision": "reroute",
+            "intent": "database_source",
+            "target_node": "rag_db_qa",
+            "normalized_value": None,
+            "confidence": 0.9,
+            "reason": "database source",
+        },
+    )
+    called = {}
 
-        assert called["question_override"] == "subset-1"
-    finally:
-        for name, module in original.items():
-            if module is None:
-                sys.modules.pop(name, None)
-            else:
-                sys.modules[name] = module
+    def _rag_db_qa_node(state, llm, provider="", service=None, reranker_model=None, question_override=None):
+        called["question_override"] = question_override
+        called["source_hash"] = state["meta"].get(MetaKeys.RAG_DB_SOURCE_MESSAGE_HASH)
+        return state
+
+    monkeypatch.setattr(module, "rag_db_qa_node", _rag_db_qa_node)
+    state = {
+        "messages": [HumanMessage(content="use the study DB")],
+        "meta": {
+            MetaKeys.CLARIFICATION_KIND: CLARIFICATION_KIND_DATASET_SELECTION,
+            MetaKeys.CLARIFICATION_RETURN_NODE: "generate_code",
+            MetaKeys.PENDING_QUESTION: "study loss to follow-up among index cases",
+            MetaKeys.PENDING_QUESTION_USER_MESSAGE_HASH: "original-hash",
+            MetaKeys.CLARIFICATION_EXPECTED: build_expected(
+                CLARIFICATION_KIND_DATASET_SELECTION,
+                allowed_values=["uploaded-1"],
+            ),
+            MetaKeys.CLARIFICATION_ATTEMPT_COUNT: 0,
+        },
+    }
+
+    module.clarification_node(
+        state,
+        SimpleNamespace(),
+        context={"provider": "openai", "db_rag_service": object()},
+    )
+
+    assert called["question_override"] == "study loss to follow-up among index cases"
+    assert called["source_hash"] == "original-hash"
+
+
+def test_clarification_node_reasks_unclear_dataset_contract_reply(monkeypatch) -> None:
+    from langchain_core.messages import HumanMessage
+    from graph.nodes import clarification as module
+    from graph.nodes.clarification_contracts import (
+        CLARIFICATION_KIND_DATASET_SELECTION,
+        build_expected,
+    )
+    from graph.state import MetaKeys
+
+    monkeypatch.setattr(
+        "graph.nodes.clarification_contracts.classify_clarification_reply",
+        lambda **_kwargs: {
+            "decision": "unclear",
+            "intent": "unknown",
+            "target_node": None,
+            "normalized_value": None,
+            "confidence": 0.0,
+            "reason": "ambiguous",
+        },
+    )
+    state = {
+        "messages": [HumanMessage(content="that one")],
+        "output": {},
+        "artifacts": {"conversation_events": []},
+        "meta": {
+            MetaKeys.CLARIFICATION_KIND: CLARIFICATION_KIND_DATASET_SELECTION,
+            MetaKeys.CLARIFICATION_RETURN_NODE: "generate_code",
+            MetaKeys.PENDING_QUESTION: "plot age by sex",
+            MetaKeys.CLARIFICATION_EXPECTED: build_expected(
+                CLARIFICATION_KIND_DATASET_SELECTION,
+                allowed_values=["uploaded-1", "uploaded-2"],
+            ),
+            MetaKeys.CLARIFICATION_ATTEMPT_COUNT: 0,
+        },
+    }
+
+    updated = module.clarification_node(state, SimpleNamespace(), context={"runtime_datasets": True})
+
+    assert "one listed dataset ID" in updated["output"]["qa_response"]
+    assert updated["meta"][MetaKeys.CLARIFICATION_KIND] == CLARIFICATION_KIND_DATASET_SELECTION
+    assert updated["meta"][MetaKeys.CLARIFICATION_ATTEMPT_COUNT] == 1
 
 
 def test_clarification_node_passes_raw_db_rag_recoverable_error_reply() -> None:
@@ -429,6 +512,60 @@ def test_clarification_node_passes_raw_db_rag_recoverable_error_reply() -> None:
         module.clarification_node(state, SimpleNamespace(), context={"provider": "openai", "db_rag_service": object()})
 
         assert called["question_override"] == "Use SUBJID_PSEUDO as the join key."
+    finally:
+        for name, module in original.items():
+            if module is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = module
+
+
+def test_clarification_node_does_not_override_db_rag_extraction_opt_in_reply() -> None:
+    original = {
+        name: sys.modules.get(name)
+        for name in (
+            "graph.nodes.generate_code",
+            "graph.nodes.qa",
+            "graph.nodes.rag_db_qa",
+            "graph.nodes.tool_routing",
+            "graph.nodes.clarification",
+        )
+    }
+    try:
+        called = {}
+
+        generate_code_mod = ModuleType("graph.nodes.generate_code")
+        generate_code_mod.generate_code_node = lambda state, llm, context, question_override=None: state
+        qa_mod = ModuleType("graph.nodes.qa")
+        qa_mod.qa_node = lambda state, llm, context="", question_override=None: state
+        rag_mod = ModuleType("graph.nodes.rag_db_qa")
+
+        def _rag_db_qa_node(state, llm, provider="", service=None, reranker_model=None, question_override=None):
+            called["question_override"] = question_override
+            return state
+
+        rag_mod.rag_db_qa_node = _rag_db_qa_node
+        tool_routing_mod = ModuleType("graph.nodes.tool_routing")
+        tool_routing_mod.latest_user_message = lambda state: "yes"
+
+        sys.modules["graph.nodes.generate_code"] = generate_code_mod
+        sys.modules["graph.nodes.qa"] = qa_mod
+        sys.modules["graph.nodes.rag_db_qa"] = rag_mod
+        sys.modules["graph.nodes.tool_routing"] = tool_routing_mod
+        sys.modules.pop("graph.nodes.clarification", None)
+        module = importlib.import_module("graph.nodes.clarification")
+
+        state = {
+            "messages": [],
+            "meta": {
+                "clarification_kind": "rag_db_extraction_opt_in",
+                "clarification_return_node": "rag_db_qa",
+                "pending_question": "Would you like me to identify the tables and columns?",
+            },
+        }
+        module.clarification_node(state, SimpleNamespace(), context={"provider": "openai", "db_rag_service": object()})
+
+        assert called["question_override"] is None
     finally:
         for name, module in original.items():
             if module is None:

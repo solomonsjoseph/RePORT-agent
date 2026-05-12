@@ -348,8 +348,8 @@ def test_pending_clarification_skips_memory_resolver(monkeypatch) -> None:
     node = _fresh_node_module()
     state = _state_with_sql_task("I mean the diabetes one")
     state["meta"][MetaKeys.AWAITING_USER_CLARIFICATION] = True
-    state["meta"][MetaKeys.CLARIFICATION_KIND] = "qa_followup"
-    state["meta"][MetaKeys.CLARIFICATION_RETURN_NODE] = "qa"
+    state["meta"][MetaKeys.CLARIFICATION_KIND] = "generate_code"
+    state["meta"][MetaKeys.CLARIFICATION_RETURN_NODE] = "generate_code"
     resolver = _resolver("resolved", task_id=_task_id(state), relationship="revision")
     monkeypatch.setattr(node, "resolve_reference_for_turn", resolver)
 

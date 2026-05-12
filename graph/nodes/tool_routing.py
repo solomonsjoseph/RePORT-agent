@@ -131,6 +131,30 @@ def should_route_tools(question: str) -> bool:
     return False
 
 
+def infer_tool_missing_field_contract(
+    question: str,
+    clarification_question: str,
+) -> dict[str, object] | None:
+    normalized_question = (question or "").casefold()
+    normalized_clarification = (clarification_question or "").casefold()
+    for tool in TOOLS_CATALOG:
+        tool_name = str(tool.get("tool_name") or "")
+        keywords = _TOOL_KEYWORDS.get(tool_name, ())
+        if not any(keyword in normalized_question for keyword in keywords):
+            continue
+        required_fields = list(dict(tool.get("required_fields") or {}).keys())
+        if len(required_fields) != 1:
+            continue
+        field = required_fields[0]
+        if field.casefold() not in normalized_clarification and "which" not in normalized_clarification:
+            continue
+        return {
+            "tool_name": tool_name,
+            "required_fields": required_fields,
+        }
+    return None
+
+
 def parse_tool_requests(
     text: str,
     tools_catalog: list[dict[str, object]] | None = None,

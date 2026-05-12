@@ -7,8 +7,8 @@ The `prefer_rag_db_qa` predicate routes database-grounded user turns to DB-RAG b
 It covers quantitative database questions, explicit DB-RAG requests, database overview/schema/variable
 questions, and active DB-RAG follow-ups. When there is no uploaded dataset/schema artifact, direct
 references to "the database" are treated as local DB-RAG questions instead of generic QA questions.
-If a user corrects a stale generic QA clarification by explicitly asking to query the RAG database, the
-orchestrator exits the old QA clarification path and routes to `rag_db_qa`.
+Active hard clarifications are routed to the clarification node; any validated reroute is handled by
+the active clarification contract rather than by a separate stale-clarification exception.
 
 ```yaml
 deterministic_control_actions:

@@ -181,7 +181,10 @@ os.environ["ALLOW_TRUSTED_LOCAL_POLICY_BLOCKED"] = (
 if docker_available():
     st.sidebar.caption("Docker detected on PATH.")
 else:
-    st.sidebar.warning("Docker is not available on PATH. Stick to `trsusted_local`.")
+    st.sidebar.warning(
+        "Docker isn't available on PATH. Use `trusted_local` execution mode "
+        "to run code locally without Docker."
+    )
     if execution_mode == "docker":
         st.sidebar.info("Switch to `trusted_local` to run code without Docker.")
 

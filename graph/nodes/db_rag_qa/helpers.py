@@ -31,34 +31,6 @@ from ...memory import complete_task, latest_user_intent, link_user_intent_comple
 from ..state_helpers import clear_clarification_meta
 
 _SUPPORTED_PROVIDERS = {"openai", "anthropic"}
-_AFFIRMATIVE_REPLIES = {
-    "y",
-    "yes",
-    "yeah",
-    "yep",
-    "sure",
-    "ok",
-    "okay",
-    "sounds good",
-    "that works",
-    "works for me",
-    "please do",
-    "do it",
-    "go ahead",
-    "let's do it",
-}
-_NEGATIVE_REPLIES = {
-    "n",
-    "no",
-    "nope",
-    "nah",
-    "not now",
-    "not yet",
-    "don't",
-    "do not",
-    "skip it",
-    "no thanks",
-}
 _NON_INFORMATIVE_FOLLOWUPS = {
     "k",
     "kk",
@@ -786,6 +758,7 @@ def _store_column_selection_artifact(
                 "fallback_reason": selection.get("fallback_reason", ""),
                 "raw_model_output": selection.get("raw_model_output", ""),
                 "population_scope": _normalize_population_scope(selection.get("population_scope") or {}),
+                "review_prompt": str(selection.get("review_prompt") or ""),
             },
         },
     )
@@ -1055,19 +1028,6 @@ def _execute_prepared_sql_candidate(
     return _finalize_rag_state(updated, rag_state, status="done", active_thread=False)
 
 
-def _question_from_stale_qa_followup(state: AgentState, latest_question: str) -> str | None:
-    meta = dict(state.get("meta") or {})
-    if (
-        meta.get(MetaKeys.CLARIFICATION_KIND) != "qa_followup"
-        or meta.get(MetaKeys.CLARIFICATION_RETURN_NODE) != "qa"
-    ):
-        return None
-    pending_question = str(meta.get(MetaKeys.PENDING_QUESTION) or "").strip()
-    if not pending_question or not latest_question:
-        return None
-    return f"{pending_question}\n\nUser clarification: {latest_question}"
-
-
 def _format_tables(tables: list[str]) -> str:
     if not tables:
         return "none"
@@ -1115,17 +1075,6 @@ def _format_sql_candidate_response(candidate: dict[str, Any]) -> str:
         candidate.get("population_scope") or {},
         target="columns",
     )
-
-
-def _classify_opt_in_reply(text: str) -> str:
-    normalized = " ".join(str(text or "").strip().lower().split())
-    if not normalized:
-        return "unknown"
-    if normalized in _AFFIRMATIVE_REPLIES:
-        return "yes"
-    if normalized in _NEGATIVE_REPLIES:
-        return "no"
-    return "unknown"
 
 
 def _render_db_rag_recent_turns(state: AgentState, question: str) -> str:

@@ -116,7 +116,6 @@ def test_first_submit_does_not_duplicate_conversation_blocks(monkeypatch) -> Non
     assert [item.value for item in app.subheader] == ["💬 Conversation"]
     assert [button.label for button in app.button].count("🔄 Reset Conversation") == 1
 
-
     app.text_input(key="question_input").set_value("Query my database, help me subset age")
     for button in app.button:
         if button.label == "Send":
@@ -126,3 +125,22 @@ def test_first_submit_does_not_duplicate_conversation_blocks(monkeypatch) -> Non
 
     assert [item.value for item in app.subheader] == ["💬 Conversation"]
     assert [button.label for button in app.button].count("🔄 Reset Conversation") == 1
+
+
+def test_missing_docker_warning_points_to_trusted_local(monkeypatch) -> None:
+    _install_streamlit_app_stubs(monkeypatch)
+
+    import utils.execution_mode
+
+    monkeypatch.setattr(utils.execution_mode.shutil, "which", lambda _cmd: None)
+
+    app = AppTest.from_file(str(REPO_ROOT / "streamlit_app.py"), default_timeout=10)
+    app.run()
+
+    assert [
+        warning.value
+        for warning in app.warning
+        if "Docker" in warning.value
+    ] == [
+        "Docker isn't available on PATH. Use `trusted_local` execution mode to run code locally without Docker."
+    ]

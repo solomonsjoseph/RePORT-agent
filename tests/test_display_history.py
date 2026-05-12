@@ -147,6 +147,54 @@ def test_build_display_history_includes_review_decisions_as_user_actions() -> No
     assert history[1].content == "Approved DB-RAG column selection."
 
 
+def test_build_display_history_skips_clarification_already_in_assistant_event() -> None:
+    prompt = (
+        'For your request: "Continue the prior task focusing only on male tuberculosis index case '
+        'participants and loss to follow up."\n\n'
+        "Would you like me to identify the tables and columns needed for a data extraction from this database question?"
+    )
+    assistant_text = (
+        "I don’t have the prior task details in this chat, so I can’t continue it directly.\n\n"
+        f"{prompt}"
+    )
+    state = {
+        "messages": [],
+        "artifacts": {
+            "conversation_events": [
+                {
+                    "event_id": "e1",
+                    "seq": 1,
+                    "created_at": "2026-05-11T00:00:00Z",
+                    "type": "assistant",
+                    "actor": "rag_db_qa",
+                    "actor_role": "assistant",
+                    "user_turn_hash": "u1",
+                    "text": assistant_text,
+                },
+                {
+                    "event_id": "e2",
+                    "seq": 2,
+                    "created_at": "2026-05-11T00:00:01Z",
+                    "type": "clarification",
+                    "actor": "rag_db_qa",
+                    "actor_role": "assistant",
+                    "user_turn_hash": "u1",
+                    "text": prompt,
+                    "status": "active",
+                },
+            ],
+            "conversation_events_version": 1,
+            "artifact_manifest_version": 1,
+            "files": {},
+        },
+        "meta": {"next_event_seq": 3},
+    }
+
+    history = build_display_history(state)
+
+    assert [message.content for message in history] == [assistant_text]
+
+
 def test_build_display_history_skips_cancel_review_decision_when_assistant_event_exists() -> None:
     cancel_text = "Cancelled the pending review. You can start a new request when ready."
     state = {

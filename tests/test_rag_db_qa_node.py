@@ -72,6 +72,12 @@ def _ensure_langchain_core_stubs() -> None:
     sys.modules["langchain_core.messages"] = messages
     sys.modules["langchain_core.prompts"] = prompts
 
+    graph_message = sys.modules.get("langgraph.graph.message")
+    if graph_message is None:
+        graph_message = ModuleType("langgraph.graph.message")
+    graph_message.add_messages = lambda current, new: (current or []) + (new or [])
+    sys.modules["langgraph.graph.message"] = graph_message
+
 
 _ensure_langchain_core_stubs()
 
@@ -249,6 +255,25 @@ def _expected_extraction_opt_in(*, intent_id: str, goal_text: str) -> dict[str, 
         "intent_id": intent_id,
         "goal_text": goal_text,
     }
+
+
+def test_structured_workflow_reference_guard_skips_retrieval() -> None:
+    from graph.state import MetaKeys
+
+    service = _Service()
+    state = _state("continue previous query")
+    state["meta"][MetaKeys.TURN_TYPE] = "workflow_reference"
+
+    updated = rag_db_qa_node(
+        state,
+        llm=None,
+        provider="openai",
+        service=service,
+    )
+
+    assert service.calls == []
+    assert "previous DB-RAG query" in updated["output"]["qa_response"]
+    assert updated["agents"]["rag_db_qa"]["active_thread"] is False
 
 
 def _memory_with_db_rag_user_intent(
@@ -977,6 +1002,35 @@ def test_db_rag_recent_turns_prefers_semantic_events_over_raw_messages() -> None
     assert "stale raw message should not drive routing" not in transcript
 
 
+def test_stale_dataset_selection_database_correction_preserves_original_goal() -> None:
+    state = _state("query for my database")
+    state["meta"].update(
+        {
+            "awaiting_user_clarification": True,
+            "clarification_kind": "generate_code_dataset_selection",
+            "clarification_return_node": "generate_code",
+            "pending_question": (
+                "I am trying to study factors associated with loss to follow up among index case, "
+                "help me subset factors related to marriage status, alcohol usage, and diabetes"
+            ),
+        }
+    )
+    service = _Service()
+
+    updated = rag_db_qa_node(
+        state,
+        llm=None,
+        provider="openai",
+        service=service,
+    )
+
+    effective_question = service.calls[0][1]
+    assert "loss to follow up among index case" in effective_question
+    assert "marriage status" in effective_question
+    assert "query for my database" in effective_question
+    assert updated["agents"]["rag_db_qa"]["last_database_question"] == effective_question
+
+
 def test_query_word_only_does_not_force_extraction_flow() -> None:
     service = _Service()
 
@@ -1049,6 +1103,7 @@ def test_ambiguous_population_column_review_warns_and_stores_scope() -> None:
     assert "Please review the proposed DB-RAG column selection in the panel below." in response
     rag_state = updated["agents"]["rag_db_qa"]
     artifact = updated["artifacts"]["files"][rag_state["pending_column_review_artifact_id"]]
+    assert artifact["content"]["review_prompt"] == response
     assert artifact["content"]["population_scope"]["label"] == "ambiguous"
     assert artifact["content"]["population_scope"]["confidence"] == 0.89
     assert rag_state["pending_column_review"]["population_scope"]["label"] == "ambiguous"
@@ -1170,6 +1225,7 @@ def test_question_override_records_user_intent_source_question_and_is_consumed()
     service = _Service()
     state = _state("continue the previous query")
     state["meta"][MetaKeys.RAG_DB_QUESTION_OVERRIDE] = "Query my database for age"
+    state["meta"][MetaKeys.RAG_DB_SOURCE_MESSAGE_HASH] = "original-user-turn"
 
     updated = rag_db_qa_node(
         state,
@@ -1185,10 +1241,12 @@ def test_question_override_records_user_intent_source_question_and_is_consumed()
     card = memory["user_intents"][intent_id]
     assert card["source_question"] == "Query my database for age"
     assert card["source_question"] != "continue the previous query"
+    assert card["source_message_hash"] == "original-user-turn"
     assert card["kind"] == "db_rag_query"
     assert card["status"] in {"awaiting_extraction_opt_in", "awaiting_column_review"}
     assert card["active_intent_id"] == active_intent["intent_id"]
     assert MetaKeys.RAG_DB_QUESTION_OVERRIDE not in updated["meta"]
+    assert MetaKeys.RAG_DB_SOURCE_MESSAGE_HASH not in updated["meta"]
 
 
 def test_question_override_bypasses_pending_extraction_opt_in_and_creates_new_intent() -> None:

@@ -43,7 +43,7 @@ def mask_actions(state: dict, available_actions: list[str]) -> tuple[list[str], 
     meta = dict(state.get("meta") or {})
     blocked: dict[str, str] = {}
 
-    if meta.get(MetaKeys.AWAITING_USER_CLARIFICATION) and meta.get(MetaKeys.CLARIFICATION_KIND) == "qa_tool":
+    if meta.get(MetaKeys.AWAITING_USER_CLARIFICATION):
         allowed = ["clarification"] if "clarification" in available_actions else []
         for action in available_actions:
             if action != "clarification":

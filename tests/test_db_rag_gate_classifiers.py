@@ -72,6 +72,96 @@ def test_classify_extraction_gate_message_returns_new_question(monkeypatch) -> N
     assert '"goal_text": "age columns"' in messages[1]["content"]
 
 
+def test_classify_database_source_intent_uses_openai_client(monkeypatch) -> None:
+    monkeypatch.setenv("DB_RAG_REPLY_CLASSIFIER_API_KEY", "test-key")
+    fake_openai = _install_fake_openai(
+        monkeypatch,
+        content='{"label":"database","confidence":0.91}',
+    )
+
+    result = classifier.classify_database_source_intent(
+        pending_question="study loss to follow-up among index cases",
+        user_reply="use the study DB",
+        resolve_model=lambda: "gpt-4o-mini",
+    )
+
+    assert result == {"label": "database", "confidence": 0.91}
+    assert fake_openai.last_init_kwargs == {"api_key": "test-key"}
+    assert fake_openai.last_create_kwargs["model"] == "gpt-4o-mini"
+    messages = fake_openai.last_create_kwargs["messages"]
+    assert "Allowed labels: database, unknown." in messages[0]["content"]
+    assert "use the study DB" in messages[1]["content"]
+
+
+def test_classify_database_source_intent_rejects_uploaded_dataset_label(monkeypatch) -> None:
+    monkeypatch.setenv("DB_RAG_REPLY_CLASSIFIER_API_KEY", "test-key")
+    _install_fake_openai(
+        monkeypatch,
+        content='{"label":"uploaded_dataset","confidence":0.87,"dataset_id":"uploaded-1"}',
+    )
+
+    result = classifier.classify_database_source_intent(
+        pending_question="plot age by sex",
+        user_reply="use uploaded-1",
+        resolve_model=lambda: "gpt-4o-mini",
+    )
+
+    assert result == {"label": "unknown", "confidence": 0.0}
+
+
+def test_classify_clarification_reply_uses_allowed_schema(monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    fake_openai = _install_fake_openai(
+        monkeypatch,
+        content=(
+            '{"decision":"reroute","intent":"database_source","normalized_value":null,'
+            '"target_node":"rag_db_qa","confidence":0.92,"reason":"database request"}'
+        ),
+    )
+
+    result = classifier.classify_clarification_reply(
+        clarification_kind="generate_code_dataset_selection",
+        clarification_return_node="generate_code",
+        pending_question="study index cases",
+        reply="look at my database",
+        expected={"type": "dataset_id", "allowed_values": ["uploaded-1"]},
+        allowed_reroute_intents=["database_source"],
+        allowed_target_nodes=["generate_code", "rag_db_qa"],
+        resolve_model=lambda: "gpt-test",
+    )
+
+    assert result["decision"] == "reroute"
+    assert result["intent"] == "database_source"
+    assert result["target_node"] == "rag_db_qa"
+    assert fake_openai.last_create_kwargs["model"] == "gpt-test"
+    assert "Allowed decisions" in fake_openai.last_create_kwargs["messages"][0]["content"]
+
+
+def test_classify_clarification_reply_rejects_disallowed_target(monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    _install_fake_openai(
+        monkeypatch,
+        content=(
+            '{"decision":"reroute","intent":"database_source","normalized_value":null,'
+            '"target_node":"evil_node","confidence":0.99,"reason":"bad target"}'
+        ),
+    )
+
+    result = classifier.classify_clarification_reply(
+        clarification_kind="generate_code_dataset_selection",
+        clarification_return_node="generate_code",
+        pending_question="study index cases",
+        reply="database",
+        expected={"type": "dataset_id", "allowed_values": ["uploaded-1"]},
+        allowed_reroute_intents=["database_source"],
+        allowed_target_nodes=["generate_code", "rag_db_qa"],
+        resolve_model=lambda: "gpt-test",
+    )
+
+    assert result["decision"] == "unclear"
+    assert result["target_node"] is None
+
+
 def test_classify_extraction_gate_message_invalid_label_falls_back_to_unknown(monkeypatch) -> None:
     monkeypatch.setenv("DB_RAG_REPLY_CLASSIFIER_API_KEY", "test-key")
     _install_fake_openai(monkeypatch, content='{"label":"sideways","confidence":0.99}')

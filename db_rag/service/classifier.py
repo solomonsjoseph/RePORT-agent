@@ -161,6 +161,215 @@ def classify_pending_reply(
     return {"label": label, "confidence": confidence}
 
 
+def classify_database_source_intent(
+    *,
+    pending_question: str,
+    user_reply: str,
+    resolve_model=resolve_db_rag_reply_classifier_model,
+) -> dict[str, Any]:
+    model = resolve_model()
+    if not model:
+        return {"label": "unknown", "confidence": 0.0}
+
+    api_key = str(os.getenv("DB_RAG_REPLY_CLASSIFIER_API_KEY", "") or "").strip()
+    if not api_key:
+        api_key = str(os.getenv("OPENAI_API_KEY", "") or "").strip()
+    if not api_key:
+        return {"label": "unknown", "confidence": 0.0}
+
+    openai_client = _resolve_openai_client()
+    if openai_client is None:
+        return {"label": "unknown", "confidence": 0.0}
+
+    client_kwargs: dict[str, Any] = {"api_key": api_key}
+    base_url = str(os.getenv("DB_RAG_REPLY_CLASSIFIER_BASE_URL", "") or "").strip()
+    if base_url:
+        client_kwargs["base_url"] = base_url
+
+    try:
+        client = openai_client(**client_kwargs)
+        response = client.chat.completions.create(
+            model=model,
+            response_format={"type": "json_object"},
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You classify whether a RePORT user request should use the DB-RAG database. "
+                        "Return JSON only with keys label and confidence. "
+                        "Allowed labels: database, unknown. "
+                        "Use database when the user means the RePORT, study, database, or DB source. "
+                        "Use unknown when ambiguous."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"Original task:\n{pending_question}\n\n"
+                        f"Latest user reply:\n{user_reply}"
+                    ),
+                },
+            ],
+        )
+        content = coerce_text_content(getattr(response.choices[0].message, "content", ""))
+        parsed = parse_json_object(content) or {}
+    except Exception:
+        return {"label": "unknown", "confidence": 0.0}
+
+    result = _normalize_classifier_result(
+        parsed,
+        allowed_labels={"database", "unknown"},
+    )
+    if result["confidence"] < _NEW_HELPER_CONFIDENCE_THRESHOLD:
+        return {"label": "unknown", "confidence": 0.0}
+    return result
+
+
+def _unknown_clarification_result() -> dict[str, Any]:
+    return {
+        "decision": "unclear",
+        "intent": "unknown",
+        "normalized_value": None,
+        "target_node": None,
+        "confidence": 0.0,
+        "reason": "",
+    }
+
+
+def classify_clarification_reply(
+    *,
+    clarification_kind: str,
+    clarification_return_node: str,
+    pending_question: str,
+    reply: str,
+    expected: dict[str, Any],
+    allowed_reroute_intents: list[str],
+    allowed_target_nodes: list[str],
+    resolve_model=resolve_db_rag_reply_classifier_model,
+) -> dict[str, Any]:
+    model = resolve_model()
+    if not model:
+        return _unknown_clarification_result()
+
+    api_key = str(os.getenv("DB_RAG_REPLY_CLASSIFIER_API_KEY", "") or "").strip()
+    if not api_key:
+        api_key = str(os.getenv("OPENAI_API_KEY", "") or "").strip()
+    if not api_key:
+        return _unknown_clarification_result()
+
+    openai_client = _resolve_openai_client()
+    if openai_client is None:
+        return _unknown_clarification_result()
+
+    allowed_intents = [
+        str(item).strip()
+        for item in allowed_reroute_intents
+        if str(item).strip()
+    ]
+    allowed_targets = [
+        str(item).strip()
+        for item in allowed_target_nodes
+        if str(item).strip()
+    ]
+    try:
+        expected_text = json.dumps(expected or {}, sort_keys=True)
+    except TypeError:
+        return _unknown_clarification_result()
+    intent_descriptions = {
+        "database_source": (
+            "The user wants to use the RePORT/study database or DB-RAG source "
+            "instead of answering the current uploaded-dataset or code-generation clarification."
+        ),
+        "uploaded_dataset_analysis": (
+            "The user wants to analyze an uploaded/local dataset instead of the "
+            "current database or QA workflow."
+        ),
+        "general_question": (
+            "The user is asking a general explanatory question rather than continuing "
+            "the current database or code workflow."
+        ),
+    }
+    active_intent_descriptions = {
+        intent: intent_descriptions[intent]
+        for intent in allowed_intents
+        if intent in intent_descriptions
+    }
+
+    client_kwargs: dict[str, Any] = {"api_key": api_key}
+    base_url = str(os.getenv("DB_RAG_REPLY_CLASSIFIER_BASE_URL", "") or "").strip()
+    if base_url:
+        client_kwargs["base_url"] = base_url
+
+    try:
+        client = openai_client(**client_kwargs)
+        response = client.chat.completions.create(
+            model=model,
+            response_format={"type": "json_object"},
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Classify a user's reply to an active RePORT clarification. "
+                        "Return JSON only with keys decision, intent, normalized_value, "
+                        "target_node, confidence, reason. "
+                        "Allowed decisions: valid, reroute, unclear. "
+                        f"Allowed reroute intents: {json.dumps(allowed_intents)}. "
+                        f"Reroute intent meanings: {json.dumps(active_intent_descriptions)}. "
+                        f"Allowed target nodes: {json.dumps(allowed_targets)}. "
+                        "Do not invent dataset IDs, node names, or workflow options. "
+                        "Use unclear when the reply does not satisfy the expected format "
+                        "or an allowed reroute."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"Clarification kind: {clarification_kind}\n"
+                        f"Return node: {clarification_return_node}\n"
+                        f"Expected answer contract: {expected_text}\n"
+                        f"Original pending question: {pending_question}\n"
+                        f"Latest user reply: {reply}"
+                    ),
+                },
+            ],
+        )
+        content = coerce_text_content(getattr(response.choices[0].message, "content", ""))
+        parsed = parse_json_object(content) or {}
+    except Exception:
+        return _unknown_clarification_result()
+
+    decision = str(parsed.get("decision") or "").strip().lower()
+    if decision not in {"valid", "reroute", "unclear"}:
+        return _unknown_clarification_result()
+
+    target_node = str(parsed.get("target_node") or "").strip()
+    if target_node and target_node not in allowed_targets:
+        return _unknown_clarification_result()
+
+    intent = str(parsed.get("intent") or "unknown").strip() or "unknown"
+    if decision == "reroute" and intent not in allowed_intents:
+        return _unknown_clarification_result()
+
+    try:
+        confidence = float(parsed.get("confidence", 0.0))
+    except (TypeError, ValueError):
+        confidence = 0.0
+    if not math.isfinite(confidence):
+        return _unknown_clarification_result()
+    confidence = max(0.0, min(1.0, confidence))
+    if confidence < _NEW_HELPER_CONFIDENCE_THRESHOLD:
+        return _unknown_clarification_result()
+
+    return {
+        "decision": decision,
+        "intent": intent,
+        "normalized_value": parsed.get("normalized_value"),
+        "target_node": target_node or None,
+        "confidence": confidence,
+        "reason": str(parsed.get("reason") or ""),
+    }
+
+
 def classify_extraction_gate_message(
     *,
     pending_prompt: str,

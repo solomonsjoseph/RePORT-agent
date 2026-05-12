@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+from db_rag.service.classifier import classify_database_source_intent
+
 from ...state import AgentState, MetaKeys
 from ..state_helpers import get_agent_state
 from .policy_contract import DEFAULT_POLICY_PATH, OrchestratorPolicyContract, load_policy_contract
@@ -149,6 +151,46 @@ def _mentions_database_reference(text: str) -> bool:
     return any(cue in text for cue in database_reference_cues)
 
 
+def is_database_source_reply(text: str, *, allow_short: bool = False) -> bool:
+    normalized = " ".join(str(text or "").strip().lower().split())
+    if not normalized:
+        return False
+    explicit_cues = (
+        "query my database",
+        "query the database",
+        "query for my database",
+        "query report database",
+        "query the report database",
+        "query database",
+        "look at my database",
+        "look at the database",
+        "look into my database",
+        "look into the database",
+        "use my database",
+        "use the database",
+        "check my database",
+        "check the database",
+        "inspect my database",
+        "inspect the database",
+        "use report database",
+        "use the report database",
+        "search my database",
+        "search the database",
+        "search report database",
+        "search the report database",
+        "ask the database",
+        "ask report database",
+        "ask the report database",
+        "use db-rag",
+        "use db rag",
+        "search db-rag",
+        "search db rag",
+    )
+    if any(cue in normalized for cue in explicit_cues):
+        return True
+    return allow_short and normalized in {"database", "db", "db-rag", "db rag"}
+
+
 def _pending_clarification_has_database_context(state: AgentState) -> bool:
     meta = dict(state.get("meta") or {})
     if not meta.get(MetaKeys.AWAITING_USER_CLARIFICATION):
@@ -159,6 +201,16 @@ def _pending_clarification_has_database_context(state: AgentState) -> bool:
     return _mentions_explicit_rag_database(pending_question) or _mentions_database_reference(pending_question)
 
 
+def _semantically_prefers_database_source(state: AgentState, latest: str) -> bool:
+    if not latest or _has_local_dataframe_artifact(state):
+        return False
+    result = classify_database_source_intent(
+        pending_question=latest,
+        user_reply=latest,
+    )
+    return str(result.get("label") or "").strip().lower() == "database"
+
+
 def _prefer_rag_db_qa(state: AgentState) -> bool:
     rag_state = get_agent_state(state, "rag_db_qa")
     if rag_state.get("active_thread"):
@@ -167,11 +219,14 @@ def _prefer_rag_db_qa(state: AgentState) -> bool:
     latest = _latest_human_message(state)
     if not latest or _is_explicit_code_request(state):
         return False
+    if is_database_source_reply(latest):
+        return True
 
     return (
         _mentions_explicit_rag_database(latest)
         or _pending_clarification_has_database_context(state)
         or (not _has_uploaded_dataset(state) and _mentions_database_reference(latest))
+        or _semantically_prefers_database_source(state, latest)
     )
 
 

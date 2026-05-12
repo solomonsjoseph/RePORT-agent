@@ -1381,3 +1381,63 @@ def test_orchestrator_rag_sql_cancel_does_not_swallow_next_user_turn() -> None:
     assert first["next_action"] == "end"
     assert second["next_action"] == "rag_db_qa"
     assert second["observations"].count("orchestrator: consumed DB-RAG SQL-review cancel; ending workflow") == 1
+
+
+def test_orchestrator_routes_semantic_database_analysis_without_source_clarification() -> None:
+    with _isolated_orchestrator_stubs():
+        module = _fresh_orchestrator_module()
+        policy_module = sys.modules["graph.nodes.orchestrator.policy"]
+        policy_module.classify_database_source_intent = lambda **_kwargs: {
+            "label": "database",
+            "confidence": 0.9,
+        }
+        state = {
+            "messages": [
+                _OrchestratorHumanMessage(
+                    "I am trying to study factors associated with loss to follow up among index case, "
+                    "help me subset factors related to marriage status, alcohol usage, and diabetes",
+                    id="turn-1",
+                ),
+            ],
+            "output": {},
+            "artifacts": {
+                "files": {},
+                "datasets": {
+                    "uploaded-1": {
+                        "id": "uploaded-1",
+                        "kind": "uploaded",
+                        "row_count": 10,
+                    }
+                },
+                "conversation_events": [],
+                "conversation_events_version": 1,
+                "artifact_manifest_version": 1,
+            },
+            "next_action": None,
+            "last_action": None,
+            "observations": [],
+            "orchestrator": {},
+            "planner": {},
+            "agents": {
+                "executor": {"run_status": "idle"},
+                "human_review": {},
+                "qa": {},
+                "generate_code": {},
+                "rag_db_qa": {},
+            },
+            "node_data": {},
+            "meta": {
+                "error_iterations": 0,
+                "workflow_trace": [],
+            },
+        }
+
+        result = module.orchestrator_node(
+            state,
+            _StaticLLM("generate_code"),
+            ["clarification", "generate_code", "rag_db_qa", "qa", "end"],
+        )
+
+    assert result["next_action"] == "rag_db_qa"
+    assert "clarification_kind" not in result["meta"]
+    assert "analysis_dataset_pending_request" not in result["meta"]

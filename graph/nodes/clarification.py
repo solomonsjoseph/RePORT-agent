@@ -11,11 +11,18 @@ from ..memory import (
     validate_reference_resolution,
 )
 from ..state import AgentState, MetaKeys
+from .clarification_contracts import (
+    CLARIFICATION_KIND_DATASET_SELECTION,
+    CLARIFICATION_KIND_QA_TOOL,
+    CLARIFICATION_KIND_RAG_DB_EXTRACTION_OPT_IN,
+    contract_for_kind,
+    resolve_clarification_reply,
+)
 from .generate_code import generate_code_node
 from .qa import qa_node
 from .rag_db_qa import rag_db_qa_node
 from .orchestrator.state_logic import _user_message_hash
-from .state_helpers import clear_clarification_meta
+from .state_helpers import clear_analysis_dataset_meta, clear_clarification_meta
 from .tool_routing import latest_user_message
 
 NODE_NAME = "clarification"
@@ -34,21 +41,99 @@ def _with_semantic_last_action(state: AgentState, action: str) -> AgentState:
     }
 
 
-def _resume_qa_tool_clarification(state: AgentState, llm) -> AgentState:
-    question = latest_user_message(state)
-    pending_question = (state.get("meta") or {}).get(MetaKeys.PENDING_QUESTION)
-    if pending_question:
-        effective_question = f"{pending_question}\n\nUser clarification: {question}"
-    else:
-        effective_question = question
-
-    resumed_state = {
-        **state,
-        "meta": clear_clarification_meta(state.get("meta") or {}),
-    }
+def _route_to_rag_db_qa(
+    state: AgentState,
+    llm,
+    context: dict[str, Any],
+    *,
+    meta: dict[str, Any],
+    question_override: str,
+) -> AgentState:
+    resumed_meta = clear_analysis_dataset_meta(clear_clarification_meta(meta))
+    pending_hash = str(meta.get(MetaKeys.PENDING_QUESTION_USER_MESSAGE_HASH) or "").strip()
+    if pending_hash:
+        resumed_meta[MetaKeys.RAG_DB_SOURCE_MESSAGE_HASH] = pending_hash
+    resumed_state = {**state, "meta": resumed_meta}
     return _with_semantic_last_action(
-        qa_node(resumed_state, llm, question_override=effective_question),
-        "qa",
+        rag_db_qa_node(
+            resumed_state,
+            llm,
+            provider=str(context.get("provider") or ""),
+            service=context.get("db_rag_service"),
+            reranker_model=context.get("db_rag_reranker_model"),
+            question_override=question_override,
+        ),
+        "rag_db_qa",
+    )
+
+
+def _reask_contract_clarification(state: AgentState, meta: dict[str, Any]) -> AgentState:
+    contract = contract_for_kind(str(meta.get(MetaKeys.CLARIFICATION_KIND) or ""))
+    question = (
+        contract.reask_prompt
+        if contract is not None
+        else "Please answer the clarification question directly."
+    )
+    attempts = int(meta.get(MetaKeys.CLARIFICATION_ATTEMPT_COUNT) or 0) + 1
+    updated_meta = dict(meta)
+    updated_meta[MetaKeys.CLARIFICATION_ATTEMPT_COUNT] = attempts
+    output = dict(state.get("output") or {})
+    output["qa_response"] = question
+    if contract is not None and attempts > contract.max_attempts:
+        return {
+            **state,
+            "output": output,
+            "meta": clear_clarification_meta(updated_meta),
+            "next_action": "end",
+        }
+    updated = {
+        **state,
+        "output": output,
+        "meta": updated_meta,
+    }
+    return append_conversation_event(
+        updated,
+        build_clarification_event(
+            actor="orchestrator",
+            user_turn_hash=_user_message_hash(state),
+            text=question,
+            status="active",
+        ),
+    )
+
+
+def _resume_generate_code_contract(
+    state: AgentState,
+    llm,
+    context: dict[str, Any],
+    *,
+    meta: dict[str, Any],
+    normalized_value: Any,
+) -> AgentState:
+    pending_question = str(meta.get(MetaKeys.PENDING_QUESTION) or "").strip()
+    kind = str(meta.get(MetaKeys.CLARIFICATION_KIND) or "")
+    resumed_meta = clear_analysis_dataset_meta(clear_clarification_meta(meta))
+    if kind == CLARIFICATION_KIND_DATASET_SELECTION:
+        selected_dataset_id = str(normalized_value or "").strip()
+        if selected_dataset_id:
+            resumed_meta[MetaKeys.ANALYSIS_DATASET_ID] = selected_dataset_id
+        effective_question = pending_question or latest_user_message(state)
+    else:
+        latest = str(normalized_value or latest_user_message(state)).strip()
+        effective_question = (
+            f"{pending_question}\n\nUser clarification: {latest}"
+            if pending_question and latest
+            else latest or pending_question
+        )
+    resumed_state = {**state, "meta": resumed_meta}
+    return _with_semantic_last_action(
+        generate_code_node(
+            resumed_state,
+            llm,
+            context,
+            question_override=effective_question,
+        ),
+        "generate_code",
     )
 
 
@@ -286,62 +371,71 @@ def clarification_node(state: AgentState, llm, context: str = "") -> AgentState:
     meta = dict(state.get("meta") or {})
     kind = str(meta.get(MetaKeys.CLARIFICATION_KIND) or "")
 
-    if kind == "qa_tool":
-        return _resume_qa_tool_clarification(state, llm)
     if kind == "memory_reference_resolution":
         return _resume_memory_reference_clarification(state, llm)
 
-    question = latest_user_message(state)
-    pending_question = meta.get(MetaKeys.PENDING_QUESTION)
-    if kind in {"rag_db_extraction_opt_in", "db_rag_recoverable_error", "generate_code_dataset_selection"}:
-        effective_question = question
-    else:
-        effective_question = (
-            f"{pending_question}\n\nUser clarification: {question}"
-            if pending_question and question
-            else question
-        )
-    resumed_state = {
-        **state,
-        "meta": clear_clarification_meta(meta),
-    }
+    context_mapping = context if isinstance(context, dict) else {}
+    reply = latest_user_message(state)
+    pending_question = str(meta.get(MetaKeys.PENDING_QUESTION) or "").strip()
+    decision = resolve_clarification_reply(meta=meta, reply=reply)
 
-    if meta.get(MetaKeys.CLARIFICATION_RETURN_NODE) == "generate_code":
-        if isinstance(context, dict):
-            return _with_semantic_last_action(
-                generate_code_node(
-                    resumed_state,
-                    llm,
-                    context,
-                    question_override=effective_question,
-                ),
-                "generate_code",
-            )
+    if decision.decision == "unclear":
+        return _reask_contract_clarification(state, meta)
+
+    if decision.decision == "reroute" and decision.target_node == "rag_db_qa":
+        return _route_to_rag_db_qa(
+            state,
+            llm,
+            context_mapping,
+            meta=meta,
+            question_override=pending_question or reply,
+        )
+
+    if decision.target_node == "generate_code":
+        return _resume_generate_code_contract(
+            state,
+            llm,
+            context_mapping,
+            meta=meta,
+            normalized_value=decision.normalized_value,
+        )
+
+    if decision.target_node == "rag_db_qa":
+        resumed_state = {
+            **state,
+            "meta": clear_clarification_meta(meta),
+        }
+        question_override = None
+        if kind != CLARIFICATION_KIND_RAG_DB_EXTRACTION_OPT_IN:
+            question_override = str(decision.normalized_value or reply or pending_question)
         return _with_semantic_last_action(
-            generate_code_node(
+            rag_db_qa_node(
                 resumed_state,
                 llm,
-                context,
-                question_override=effective_question,
+                provider=str(context_mapping.get("provider") or ""),
+                service=context_mapping.get("db_rag_service"),
+                reranker_model=context_mapping.get("db_rag_reranker_model"),
+                question_override=question_override,
             ),
-            "generate_code",
+            "rag_db_qa",
         )
-    if meta.get(MetaKeys.CLARIFICATION_RETURN_NODE) == "rag_db_qa":
-        if isinstance(context, dict):
-            return _with_semantic_last_action(
-                rag_db_qa_node(
-                    resumed_state,
-                    llm,
-                    provider=str(context.get("provider") or ""),
-                    service=context.get("db_rag_service"),
-                    reranker_model=context.get("db_rag_reranker_model"),
-                    question_override=effective_question,
-                ),
-                "rag_db_qa",
-            )
-        raise ValueError("rag_db_qa clarification resume requires a context mapping with provider and db_rag_service")
 
-    return _with_semantic_last_action(
-        qa_node(resumed_state, llm, context, question_override=effective_question),
-        "qa",
-    )
+    if decision.target_node == "qa":
+        if kind == CLARIFICATION_KIND_QA_TOOL:
+            effective_question = (
+                f"{pending_question}\n\nUser clarification: {reply}"
+                if pending_question and reply
+                else reply or pending_question
+            )
+        else:
+            effective_question = pending_question or reply
+        resumed_state = {
+            **state,
+            "meta": clear_clarification_meta(meta),
+        }
+        return _with_semantic_last_action(
+            qa_node(resumed_state, llm, context, question_override=effective_question),
+            "qa",
+        )
+
+    return _reask_contract_clarification(state, meta)

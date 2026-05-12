@@ -18,7 +18,13 @@ from utils.llm_response import coerce_text_content
 from utils.message_window import window_messages
 
 from .code_guardrails import code_fingerprint, is_executable_python
+from .clarification_contracts import (
+    CLARIFICATION_KIND_DATASET_SELECTION,
+    CLARIFICATION_KIND_GENERATE_CODE,
+    build_expected,
+)
 from .state_helpers import (
+    clear_analysis_dataset_meta,
     clear_clarification_meta,
     get_agent_state,
     set_clarification_meta,
@@ -121,9 +127,10 @@ def _clarification_state(
     messages,
     *,
     pending_question: str | None,
-    kind: str = "generate_code",
+    kind: str = CLARIFICATION_KIND_GENERATE_CODE,
     meta_updates: dict | None = None,
     base_meta: dict | None = None,
+    expected: dict | None = None,
 ) -> dict:
     msgs = list(state.get("messages", []))
     msgs.append(AIMessage(content=question))
@@ -137,6 +144,8 @@ def _clarification_state(
         return_node="generate_code",
         kind=kind,
         pending_question=pending_question,
+        pending_question_user_message_hash=_current_user_turn_hash(state),
+        expected=expected or build_expected(kind),
     )
     if meta_updates:
         meta.update(meta_updates)
@@ -206,20 +215,18 @@ def _dataset_selection_clarification_state(
         question,
         messages,
         pending_question=pending_question,
-        kind="generate_code_dataset_selection",
+        kind=CLARIFICATION_KIND_DATASET_SELECTION,
         meta_updates={
             MetaKeys.ANALYSIS_DATASET_CANDIDATE_IDS: candidate_ids,
             MetaKeys.ANALYSIS_DATASET_PENDING_REQUEST: pending_question,
         },
+        expected=build_expected(
+            CLARIFICATION_KIND_DATASET_SELECTION,
+            allowed_values=candidate_ids,
+            allow_free_text_mapping=True,
+        ),
         base_meta=state.get("meta", {}),
     )
-
-
-def _clear_analysis_dataset_meta(meta: dict) -> dict:
-    updated = dict(meta or {})
-    updated.pop(MetaKeys.ANALYSIS_DATASET_CANDIDATE_IDS, None)
-    updated.pop(MetaKeys.ANALYSIS_DATASET_PENDING_REQUEST, None)
-    return updated
 
 
 def _resolve_dataset_selection_reply(
@@ -304,7 +311,7 @@ def generate_code_node(state, llm, context, question_override=None):
             resolved_context = _dataset_reference_context(selected_artifact, resolved_context)
             selected_dataset_id = str(selected_artifact.get("id") or "").strip()
             meta[MetaKeys.ANALYSIS_DATASET_ID] = selected_artifact["id"]
-            meta = _clear_analysis_dataset_meta(meta)
+            meta = clear_analysis_dataset_meta(meta)
         else:
             selected_artifact, selection_reason = choose_analysis_dataset(
                 state,
@@ -322,9 +329,9 @@ def generate_code_node(state, llm, context, question_override=None):
                 resolved_context = _dataset_reference_context(selected_artifact, resolved_context)
                 selected_dataset_id = str(selected_artifact.get("id") or "").strip()
                 meta[MetaKeys.ANALYSIS_DATASET_ID] = selected_artifact["id"]
-                meta = _clear_analysis_dataset_meta(meta)
+                meta = clear_analysis_dataset_meta(meta)
             else:
-                meta = _clear_analysis_dataset_meta(meta)
+                meta = clear_analysis_dataset_meta(meta)
                 resolved_context = "No dataset or schema provided."
     windowed = window_messages(messages, max_turns=CODEGEN_RECENT_TURNS)
     prompt = make_generate_code_prompt().invoke(
@@ -389,7 +396,7 @@ def generate_code_node(state, llm, context, question_override=None):
         executor_state.pop("error", None)
         agents["executor"] = executor_state
 
-    meta = _clear_analysis_dataset_meta(clear_clarification_meta(meta))
+    meta = clear_analysis_dataset_meta(clear_clarification_meta(meta))
     meta[MetaKeys.ERROR_ITERATIONS] = 0
     meta[MetaKeys.CURRENT_CODE_HASH] = code_fingerprint(code)
     meta.pop(MetaKeys.FINAL_APPROVED_CODE_HASH, None)

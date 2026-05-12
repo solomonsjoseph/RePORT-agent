@@ -84,3 +84,28 @@ def test_column_selection_review_omits_selected_tables_section(monkeypatch) -> N
     assert "**Selected tables**" not in fake_st.rendered
     assert "- Form 2A" not in fake_st.rendered
     assert "- `Form 2A.IC_AGE`" in fake_st.rendered
+
+
+def test_column_selection_review_renders_review_prompt_at_top(monkeypatch) -> None:
+    fake_st = _FakeStreamlit()
+    monkeypatch.setattr(review_ui, "st", fake_st)
+    review_prompt = (
+        "Warning: This database contains both index cases and household contacts.\n\n"
+        "I refreshed the DB-RAG column selection based on your feedback.\n\n"
+        "Please review the updated selection in the panel below."
+    )
+
+    review_ui.ui_human_review_rag_db_column_selection(
+        app=None,
+        config={},
+        payload={
+            "review_prompt": review_prompt,
+            "goal_text": "Subset participants with diabetes",
+            "columns": [{"table": "Form 2A", "column": "IC_AGE"}],
+        },
+        interrupt_id="interrupt-1",
+        queue_resume=lambda *_args, **_kwargs: None,
+    )
+
+    assert review_prompt in fake_st.rendered
+    assert fake_st.rendered.index(review_prompt) < fake_st.rendered.index("**Interpreted extraction goal**")

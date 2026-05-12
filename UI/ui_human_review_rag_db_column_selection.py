@@ -48,6 +48,7 @@ def ui_human_review_rag_db_column_selection(app, config, payload, interrupt_id, 
     st.subheader("🔍 Review DB-RAG Column Selection")
     st.caption("Approve the selected tables and columns before SQL generation.")
 
+    review_prompt = str(payload.get("review_prompt") or "").strip()
     goal_text = str(payload.get("goal_text") or "").strip()
     question = str(payload.get("question") or "").strip()
     rationale = str(payload.get("rationale") or "").strip()
@@ -58,6 +59,8 @@ def ui_human_review_rag_db_column_selection(app, config, payload, interrupt_id, 
     columns = list(payload.get("columns") or [])
     feedback_history = list(payload.get("feedback_history") or [])
 
+    if review_prompt:
+        st.info(review_prompt)
     if goal_text:
         st.markdown("**Interpreted extraction goal**")
         st.write(goal_text)

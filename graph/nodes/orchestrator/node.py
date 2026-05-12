@@ -19,6 +19,7 @@ from ...memory.validation import ALLOWED_RELATIONSHIPS_BY_TASK_KIND
 from ...state import AgentState, MetaKeys
 from ...state_views import get_planner_state, merge_state_patch
 from ..node_registry import NODE_REGISTRY_MAP
+from ..state_helpers import clear_clarification_meta
 from ..tool_routing import is_tool_requested, latest_user_message
 from .action_mask import mask_actions
 from .planner import llm_plan_next_action
@@ -63,6 +64,7 @@ _RESOLVED_USER_INTENT_META_KEYS = (
     MetaKeys.RESOLVED_USER_INTENT_SOURCE_QUESTION,
     MetaKeys.RESOLVED_USER_INTENT_USER_MESSAGE_HASH,
     MetaKeys.RAG_DB_QUESTION_OVERRIDE,
+    MetaKeys.RAG_DB_SOURCE_MESSAGE_HASH,
 )
 _RESOLVED_USER_INTENT_META_CONSUMED_KEY = "resolved_user_intent_meta_consumed"
 
@@ -267,6 +269,30 @@ def _route_from_resolved_user_intent_meta(
     )
 
 
+def _workflow_reference_without_prior_intent_response(
+    state: AgentState,
+    meta: dict,
+    current_hash: str | None,
+) -> tuple[AgentState, dict, dict, list[str]]:
+    text = (
+        "I do not have a previous DB-RAG query recorded in this thread. "
+        "Please restate the database query you want to continue."
+    )
+    updated_meta = clear_clarification_meta(meta)
+    if current_hash:
+        updated_meta[MetaKeys.LAST_USER_MESSAGE_HASH] = current_hash
+    output = dict(state.get("output") or {})
+    output["qa_response"] = text
+    observations = list(state.get("observations", []))
+    observations.append("user_intent_reference_no_prior_intent")
+    return (
+        {**state, "output": output, "meta": updated_meta, "observations": observations},
+        updated_meta,
+        output,
+        observations,
+    )
+
+
 def _dataset_exists(state: AgentState, dataset_id: object) -> bool:
     if not isinstance(dataset_id, str) or not dataset_id:
         return False
@@ -283,10 +309,11 @@ def _planner_binding_clarification(
     relationship: object = None,
 ) -> tuple[str, dict, dict, list[str]]:
     updated_meta = dict(meta)
-    updated_meta[MetaKeys.AWAITING_USER_CLARIFICATION] = True
+    current_hash = _user_message_hash(state)
     _state, memory = ensure_memory_state(state)
     completed_tasks = dict(memory.get("completed_tasks") or {})
     if completed_tasks:
+        updated_meta[MetaKeys.AWAITING_USER_CLARIFICATION] = True
         candidates = _task_candidates_for_clarification(
             memory,
             {"candidate_cards": list(completed_tasks.values())},
@@ -294,6 +321,8 @@ def _planner_binding_clarification(
         question = _memory_reference_clarification_question(candidates)
         updated_meta[MetaKeys.CLARIFICATION_KIND] = "memory_reference_resolution"
         updated_meta[MetaKeys.CLARIFICATION_RETURN_NODE] = "orchestrator"
+        if current_hash:
+            updated_meta[MetaKeys.PENDING_QUESTION_USER_MESSAGE_HASH] = current_hash
         memory["pending_reference_clarification"] = {
             "status": "awaiting_reply",
             "user_message_hash": _user_message_hash(state) or "",
@@ -310,16 +339,15 @@ def _planner_binding_clarification(
             "candidates": candidates,
         }
     else:
-        updated_meta[MetaKeys.CLARIFICATION_KIND] = "planner_route_clarification"
-        updated_meta[MetaKeys.CLARIFICATION_RETURN_NODE] = "qa"
-    updated_meta[MetaKeys.PENDING_QUESTION] = question
+        question = str(question or "").strip()
+        updated_meta = clear_clarification_meta(updated_meta)
+        if current_hash:
+            updated_meta[MetaKeys.LAST_USER_MESSAGE_HASH] = current_hash
+    if completed_tasks:
+        updated_meta[MetaKeys.PENDING_QUESTION] = question
     updated_output = dict(output)
     updated_output["qa_response"] = question
-    routed_node = (
-        "clarification"
-        if "clarification" in available_action_set
-        else ("qa" if "qa" in available_action_set else "end")
-    )
+    routed_node = "end"
     return routed_node, updated_meta, updated_output, [
         f"task_id=None relationship=None routed_node={routed_node}",
         f"planner_clarification={question}",
@@ -523,13 +551,6 @@ def _resumed_from(state: AgentState, node_name: str) -> bool:
     return bool(workflow_trace and workflow_trace[-1] == node_name)
 
 
-def _is_soft_qa_followup(meta: dict) -> bool:
-    return (
-        meta.get(MetaKeys.CLARIFICATION_KIND) == "qa_followup"
-        and meta.get(MetaKeys.CLARIFICATION_RETURN_NODE) == "qa"
-    )
-
-
 def _store_workflow_status(state: AgentState) -> AgentState:
     meta = dict(state.get("meta") or {})
     status = derive_workflow_status(state)
@@ -572,7 +593,6 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
     thought = orchestrator_state.get("thought", "")
     meta = dict(state.get("meta") or {})
     transition_selected_from_resume = False
-    defer_qa_followup_clarification_to_planner = False
     memory_clarification_selected = False
     memory_clarification_question: str | None = None
 
@@ -706,18 +726,7 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
     if fresh_unanswered_user_turn:
         if was_awaiting_clarification:
             clarification_return_node = meta.get(MetaKeys.CLARIFICATION_RETURN_NODE)
-            if _is_soft_qa_followup(meta):
-                next_action = None
-                defer_qa_followup_clarification_to_planner = True
-                orchestrator_state.pop("next_action", None)
-            elif (
-                clarification_return_node != "rag_db_qa"
-                and "rag_db_qa" in available_action_set
-                and should_prefer_rag_db_qa({**state, "output": output, "agents": agents, "meta": meta})
-            ):
-                meta[MetaKeys.LAST_USER_MESSAGE_HASH] = current_hash
-                next_action = "rag_db_qa"
-            elif "clarification" in available_action_set:
+            if "clarification" in available_action_set:
                 meta[MetaKeys.LAST_USER_MESSAGE_HASH] = current_hash
                 next_action = "clarification"
             else:
@@ -792,7 +801,6 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
         not next_action
         and fresh_unanswered_user_turn
         and current_hash
-        and dict((routing_state.get("memory") or {}).get("user_intents") or {})
     ):
         try:
             classification = classify_user_intent_reference(
@@ -816,6 +824,7 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
             intent_id = classification.get("target_id")
             intent = dict(memory.get("user_intents") or {}).get(intent_id)
             if isinstance(intent, dict):
+                meta = clear_clarification_meta(meta)
                 meta = _apply_resolved_user_intent_meta(
                     meta,
                     classification,
@@ -823,16 +832,29 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
                     current_hash,
                 )
                 routing_state = {**routing_state, "meta": meta}
+        elif (
+            isinstance(classification, dict)
+            and classification.get("turn_type") == "workflow_reference"
+            and classification.get("target") == "none"
+            and classification.get("needs_clarification") is not True
+        ):
+            routing_state, meta, output, observations = (
+                _workflow_reference_without_prior_intent_response(
+                    routing_state,
+                    meta,
+                    current_hash,
+                )
+            )
+            next_action = "end"
         elif isinstance(classification, dict) and (
             classification.get("target") == "ambiguous"
             or classification.get("needs_clarification") is True
         ):
             question = "Which previous database query did you want to continue?"
             meta = dict(meta)
-            meta[MetaKeys.AWAITING_USER_CLARIFICATION] = True
-            meta[MetaKeys.CLARIFICATION_KIND] = "qa_followup"
-            meta[MetaKeys.CLARIFICATION_RETURN_NODE] = "qa"
-            meta[MetaKeys.PENDING_QUESTION] = question
+            meta = clear_clarification_meta(meta)
+            if current_hash:
+                meta[MetaKeys.LAST_USER_MESSAGE_HASH] = current_hash
             output = dict(output)
             output["qa_response"] = question
             next_action = "end"
@@ -866,7 +888,7 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
         else:
             routing_state = {**routing_state, "meta": meta}
 
-    if not next_action and not defer_qa_followup_clarification_to_planner:
+    if not next_action:
         next_action = _ready_deterministic_action(
             routing_state,
             available_action_list,
@@ -878,6 +900,13 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
             routing_state,
             available_action_set,
         )
+
+    if (
+        not next_action
+        and "rag_db_qa" in available_action_set
+        and should_prefer_rag_db_qa(routing_state)
+    ):
+        next_action = "rag_db_qa"
 
     if not next_action:
         llm_choice, thought, planner_action, diagnostics, bindings = llm_plan_next_action(
@@ -915,8 +944,6 @@ def orchestrator_node(state: AgentState, llm, available_actions: Iterable[str]) 
                 next_action = "generate_code"
             else:
                 next_action = select_planner_fallback_action(routing_state, set(masked_actions))
-        if _is_soft_qa_followup(dict(routing_state.get("meta") or {})) and next_action == "qa":
-            next_action = "clarification" if "clarification" in masked_actions else "qa"
         routing_state = _record_planner_decision(
             routing_state,
             planner_action,

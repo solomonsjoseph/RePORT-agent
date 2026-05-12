@@ -7,6 +7,11 @@ from db_rag.service.errors import DbRagUnanswerableError
 
 from ...memory import complete_task, upsert_user_intent_from_db_rag_intent
 from ...state import AgentState, MetaKeys
+from ..clarification_contracts import (
+    CLARIFICATION_KIND_DB_RAG_RECOVERABLE_ERROR,
+    CLARIFICATION_KIND_RAG_DB_EXTRACTION_OPT_IN,
+    build_expected,
+)
 from ..state_helpers import clear_clarification_meta, get_agent_state, set_clarification_meta
 from ..tool_routing import latest_user_message
 from utils.performance import collect_timings, timing_stage
@@ -26,7 +31,6 @@ from .helpers import (
     _format_sql_candidate_response,
     _intent_snapshot,
     _normalize_population_scope,
-    _question_from_stale_qa_followup,
     _read_value,
     _render_db_rag_recent_turns,
     _reset_active_workflow_for_new_question,
@@ -192,7 +196,8 @@ def _fallback_extraction_intent(*, intent_id: str, goal_text: str) -> dict[str, 
 
 
 def _source_message_hash(state: AgentState) -> str | None:
-    value = (state.get("meta") or {}).get(MetaKeys.LAST_USER_MESSAGE_HASH)
+    meta = state.get("meta") or {}
+    value = meta.get(MetaKeys.RAG_DB_SOURCE_MESSAGE_HASH) or meta.get(MetaKeys.LAST_USER_MESSAGE_HASH)
     if value is None:
         return None
     return str(value).strip() or None
@@ -333,8 +338,9 @@ def _ask_sql_preparation_recovery_clarification(
     updated["meta"] = set_clarification_meta(
         updated.get("meta", {}),
         return_node="rag_db_qa",
-        kind="db_rag_recoverable_error",
+        kind=CLARIFICATION_KIND_DB_RAG_RECOVERABLE_ERROR,
         pending_question=prompt,
+        expected=build_expected(CLARIFICATION_KIND_DB_RAG_RECOVERABLE_ERROR),
     )
 
     rag_state["pending_recoverable_error"] = {
@@ -468,6 +474,9 @@ def _start_column_review(
         population_scope or rag_state.get("population_scope") or {}
     )
 
+    review_prompt = _format_column_review_response("", selection_payload, revised=revised)
+    selection_payload["review_prompt"] = review_prompt
+
     updated, artifact_id = _store_column_selection_artifact(
         state,
         selection=selection_payload,
@@ -478,12 +487,12 @@ def _start_column_review(
         retrieval_pool=_serialize_context_pool(context),
         summary="Proposed DB-RAG column selection awaiting human review.",
     )
-    updated = _append_ai_response(updated, _format_column_review_response("", selection_payload, revised=revised))
+    updated = _append_ai_response(updated, review_prompt)
     updated = _append_assistant_event(updated, updated["output"]["qa_response"])
     updated = _append_column_review_request_event(
         updated,
         artifact_id=artifact_id,
-        text="DB-RAG column selection is awaiting human review.",
+        text=review_prompt,
     )
     updated = _clear_output_error(updated)
     updated["meta"] = clear_clarification_meta(updated.get("meta") or {})
@@ -607,8 +616,9 @@ def _reprompt_pending_extraction(
     updated["meta"] = set_clarification_meta(
         updated.get("meta", {}),
         return_node="rag_db_qa",
-        kind="rag_db_extraction_opt_in",
+        kind=CLARIFICATION_KIND_RAG_DB_EXTRACTION_OPT_IN,
         pending_question=prompt or None,
+        expected=build_expected(CLARIFICATION_KIND_RAG_DB_EXTRACTION_OPT_IN),
     )
     rag_state["thread_status"] = "awaiting_extraction_opt_in"
     rag_state["error"] = None
@@ -1219,8 +1229,9 @@ def _handle_fresh_db_rag_question(
     updated["meta"] = set_clarification_meta(
         updated.get("meta", {}),
         return_node="rag_db_qa",
-        kind="rag_db_extraction_opt_in",
+        kind=CLARIFICATION_KIND_RAG_DB_EXTRACTION_OPT_IN,
         pending_question=prompt or None,
+        expected=build_expected(CLARIFICATION_KIND_RAG_DB_EXTRACTION_OPT_IN),
     )
 
     rag_state["pending_extraction_opt_in"] = pending_extraction_opt_in
@@ -1256,7 +1267,7 @@ def _rag_db_qa_node_impl(
 
     rag_state = dict(get_agent_state(state, "rag_db_qa"))
     latest_question = latest_user_message(state)
-    question = str(question_override or _question_from_stale_qa_followup(state, latest_question) or latest_question)
+    question = str(question_override or latest_question)
     if question_override is not None:
         meta = dict(state.get("meta") or {})
         meta.pop(MetaKeys.RAG_DB_QUESTION_OVERRIDE, None)
@@ -1284,8 +1295,20 @@ def _rag_db_qa_node_impl(
             active_thread=False,
         )
 
+    if question_override is None and (state.get("meta") or {}).get(MetaKeys.TURN_TYPE) == "workflow_reference":
+        return _finish_terminal_response(
+            state,
+            rag_state,
+            text=(
+                "I do not have a resolved previous DB-RAG query for this turn. "
+                "Please restate the database query you want to continue."
+            ),
+            thread_status="done",
+            active_thread=False,
+        )
+
     if question_override is not None:
-        return _handle_fresh_db_rag_question(
+        updated = _handle_fresh_db_rag_question(
             state,
             rag_state,
             service=service,
@@ -1293,6 +1316,9 @@ def _rag_db_qa_node_impl(
             question=question,
             force_new_intent=True,
         )
+        updated_meta = dict(updated.get("meta") or {})
+        updated_meta.pop(MetaKeys.RAG_DB_SOURCE_MESSAGE_HASH, None)
+        return {**updated, "meta": updated_meta}
 
     if dict(rag_state.get("pending_recoverable_error") or {}).get("status") == "awaiting_reply":
         return _handle_pending_recoverable_error_reply(

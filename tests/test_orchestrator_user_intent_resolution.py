@@ -73,6 +73,21 @@ class _LLM:
         )
 
 
+class _ClarifyingPlannerLLM:
+    def invoke(self, _messages):
+        return SimpleNamespace(
+            content=json.dumps(
+                {
+                    "action": "generate_code",
+                    "thought": "Need dataset binding before code generation.",
+                    "ranked_actions": ["generate_code", "rag_db_qa", "qa"],
+                    "needs_clarification": True,
+                    "clarification_question": "Which dataset or file should I use?",
+                }
+            )
+        )
+
+
 def _install_langchain_stubs() -> None:
     messages_mod = ModuleType("langchain_core.messages")
     messages_mod.BaseMessage = object
@@ -376,6 +391,103 @@ def test_orchestrator_new_user_intent_classification_does_not_set_db_rag_overrid
     )
 
 
+def test_orchestrator_no_prior_intent_workflow_reference_does_not_route_to_db_rag(
+    monkeypatch,
+) -> None:
+    node = _fresh_node_module()
+    state = _base_state("continue previous query")
+
+    def classify(_state, _classifier, *, user_message, user_message_hash, **_kwargs):
+        return {
+            "turn_type": "workflow_reference",
+            "target": "none",
+            "target_id": None,
+            "relationship": "continue",
+            "needs_clarification": False,
+            "reason": "No prior intent.",
+        }
+
+    monkeypatch.setattr(node, "classify_user_intent_reference", classify)
+
+    result = node.orchestrator_node(state, _LLM(), ["rag_db_qa", "qa", "end"])
+
+    assert result["next_action"] == "end"
+    assert "previous DB-RAG query" in result["output"]["qa_response"]
+    assert MetaKeys.LAST_USER_MESSAGE_HASH in result["meta"]
+    assert MetaKeys.RAG_DB_QUESTION_OVERRIDE not in result["meta"]
+
+
+def test_orchestrator_routes_active_clarification_reply_to_clarification_node() -> None:
+    node = _fresh_node_module()
+    state = _base_state("help me to subset from my database")
+    state["meta"][MetaKeys.AWAITING_USER_CLARIFICATION] = True
+    state["meta"][MetaKeys.CLARIFICATION_KIND] = "generate_code"
+    state["meta"][MetaKeys.CLARIFICATION_RETURN_NODE] = "generate_code"
+    state["meta"][MetaKeys.PENDING_QUESTION] = (
+        "I am trying to study factors associated with loss to follow up among index case, "
+        "help me to subset factors related to marriage status, alcohol usage, and diabetes"
+    )
+
+    result = node.orchestrator_node(
+        state,
+        _LLM(),
+        ["clarification", "generate_code", "rag_db_qa", "qa", "end"],
+    )
+
+    assert result["next_action"] == "clarification"
+    assert result["meta"][MetaKeys.PENDING_QUESTION] == (
+        "I am trying to study factors associated with loss to follow up among index case, "
+        "help me to subset factors related to marriage status, alcohol usage, and diabetes"
+    )
+    assert result["meta"][MetaKeys.AWAITING_USER_CLARIFICATION] is True
+
+
+def test_planner_clarification_does_not_create_hard_clarification_state() -> None:
+    node = _fresh_node_module()
+    state = _base_state(
+        "I am trying to study factors associated with loss to follow up among index case"
+    )
+
+    result = node.orchestrator_node(
+        state,
+        _ClarifyingPlannerLLM(),
+        ["clarification", "generate_code", "rag_db_qa", "qa", "end"],
+    )
+
+    assert result["next_action"] == "end"
+    assert MetaKeys.AWAITING_USER_CLARIFICATION not in result["meta"]
+    assert MetaKeys.CLARIFICATION_KIND not in result["meta"]
+    assert MetaKeys.PENDING_QUESTION not in result["meta"]
+    assert result["output"]["qa_response"] == "Which dataset or file should I use?"
+    assert "task_id=None relationship=None routed_node=end" in result["observations"]
+
+
+def test_orchestrator_uses_source_classifier_for_no_dataset_database_request(monkeypatch) -> None:
+    node = _fresh_node_module()
+    policy_module = sys.modules["graph.nodes.orchestrator.policy"]
+    state = _base_state(
+        "I am trying to study factors associated with loss to follow up among index case, "
+        "help me to subset factors related to marriage status, alcohol usage, and diabetes"
+    )
+    calls = {}
+
+    def classify(**kwargs):
+        calls["kwargs"] = kwargs
+        return {"label": "database", "confidence": 0.9}
+
+    monkeypatch.setattr(policy_module, "classify_database_source_intent", classify)
+
+    result = node.orchestrator_node(
+        state,
+        _LLM(),
+        ["clarification", "generate_code", "rag_db_qa", "qa", "end"],
+    )
+
+    assert calls["kwargs"]["user_reply"].startswith("i am trying to study factors")
+    assert result["next_action"] == "rag_db_qa"
+    assert MetaKeys.AWAITING_USER_CLARIFICATION not in result["meta"]
+
+
 def test_orchestrator_completed_task_classification_does_not_hijack_user_intent(
     monkeypatch,
 ) -> None:
@@ -403,7 +515,7 @@ def test_orchestrator_completed_task_classification_does_not_hijack_user_intent(
     )
 
 
-def test_orchestrator_classifier_error_falls_through_to_normal_routing(
+def test_orchestrator_classifier_error_falls_through_to_deterministic_db_rag_routing(
     monkeypatch,
 ) -> None:
     node = _fresh_node_module()
@@ -418,11 +530,11 @@ def test_orchestrator_classifier_error_falls_through_to_normal_routing(
 
     assert MetaKeys.RAG_DB_QUESTION_OVERRIDE not in result["meta"]
     assert MetaKeys.RESOLVED_USER_INTENT_ID not in result["meta"]
-    assert result["next_action"] == "qa"
+    assert result["next_action"] == "rag_db_qa"
     assert "user_intent_classifier_error=bad classifier json" in result["observations"]
 
 
-def test_orchestrator_asks_short_question_for_ambiguous_user_intent(monkeypatch) -> None:
+def test_orchestrator_asks_normal_followup_for_ambiguous_user_intent(monkeypatch) -> None:
     node = _fresh_node_module()
     state = _state_with_cancelled_db_rag_intent("do that previous thing")
 
@@ -444,9 +556,8 @@ def test_orchestrator_asks_short_question_for_ambiguous_user_intent(monkeypatch)
     )
 
     assert result["next_action"] == "end"
-    assert result["meta"][MetaKeys.AWAITING_USER_CLARIFICATION] is True
-    assert result["meta"][MetaKeys.CLARIFICATION_KIND] == "qa_followup"
-    assert result["meta"][MetaKeys.CLARIFICATION_RETURN_NODE] == "qa"
+    assert MetaKeys.AWAITING_USER_CLARIFICATION not in result["meta"]
+    assert MetaKeys.CLARIFICATION_KIND not in result["meta"]
     assert result["output"]["qa_response"] == (
         "Which previous database query did you want to continue?"
     )

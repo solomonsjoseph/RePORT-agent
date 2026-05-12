@@ -49,6 +49,11 @@ def _ensure_langchain_core_stubs() -> None:
                 self.additional_kwargs = {}
 
         messages.BaseMessage = BaseMessage
+    if not hasattr(messages, "AIMessage"):
+        class AIMessage(messages.BaseMessage):
+            type = "ai"
+
+        messages.AIMessage = AIMessage
 
     langchain_core.messages = messages
     sys.modules["langchain_core"] = langchain_core
@@ -170,6 +175,32 @@ def test_column_review_approval_promotes_artifact_pointer() -> None:
     assert rag_state["pending_column_review_artifact_id"] is None
     assert rag_state["pending_sql_candidate_artifact_id"] is None
     assert rag_state["thread_status"] == "awaiting_sql_generation"
+
+
+def test_column_review_interrupt_payload_includes_review_prompt() -> None:
+    _ensure_langchain_core_stubs()
+    captured_payloads = []
+    langgraph_types = ModuleType("langgraph.types")
+    langgraph_types.interrupt = lambda payload: captured_payloads.append(dict(payload)) or {"action": "approve"}
+    graph_message_mod = ModuleType("langgraph.graph.message")
+    graph_message_mod.add_messages = lambda current, new: (current or []) + (new or [])
+    sys.modules["langgraph.types"] = langgraph_types
+    sys.modules["langgraph.graph.message"] = graph_message_mod
+    for mod in ("graph.nodes.human_review_rag_db_column_selection", "graph.state", "graph.nodes.state_helpers"):
+        sys.modules.pop(mod, None)
+    module = importlib.import_module("graph.nodes.human_review_rag_db_column_selection")
+
+    state = _state()
+    review_prompt = (
+        "Warning: This database contains both index cases and household contacts.\n\n"
+        "I refreshed the DB-RAG column selection based on your feedback.\n\n"
+        "Please review the updated selection in the panel below."
+    )
+    state["artifacts"]["files"]["sel-art-1"]["content"]["review_prompt"] = review_prompt
+
+    module.human_review_rag_db_column_selection_node(state)
+
+    assert captured_payloads[0]["review_prompt"] == review_prompt
 
 
 def test_column_review_missing_artifact_errors_instead_of_approving_empty_state() -> None:

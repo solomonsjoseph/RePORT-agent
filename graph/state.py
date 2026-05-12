@@ -48,11 +48,17 @@ class MetaKeys:
     # Set by any node that asks a clarification question.
     # Stores the original user request so it can be reconstructed on re-entry.
     PENDING_QUESTION = "pending_question"
+    # Hash for the user turn stored in PENDING_QUESTION.
+    PENDING_QUESTION_USER_MESSAGE_HASH = "pending_question_user_message_hash"
     # Which node should receive control when the user answers the clarification.
     CLARIFICATION_RETURN_NODE = "clarification_return_node"
     # The clarification workflow kind, used by the clarification node to resume
     # the correct subworkflow.
     CLARIFICATION_KIND = "clarification_kind"
+    # JSON-serializable expected-answer contract for the active clarification.
+    CLARIFICATION_EXPECTED = "clarification_expected"
+    # Number of invalid answers received for the active clarification.
+    CLARIFICATION_ATTEMPT_COUNT = "clarification_attempt_count"
     # One-shot list of actions allowed to bypass loop guards after explicit
     # human instruction (e.g., regenerate code in review).
     LOOP_GUARD_BYPASS_ACTIONS = "loop_guard_bypass_actions"
@@ -85,3 +91,5 @@ class MetaKeys:
     RESOLVED_USER_INTENT_SOURCE_QUESTION = "resolved_user_intent_source_question"
     RESOLVED_USER_INTENT_USER_MESSAGE_HASH = "resolved_user_intent_user_message_hash"
     RAG_DB_QUESTION_OVERRIDE = "rag_db_question_override"
+    RAG_DB_SOURCE_MESSAGE_HASH = "rag_db_source_message_hash"
+    TURN_TYPE = "turn_type"
