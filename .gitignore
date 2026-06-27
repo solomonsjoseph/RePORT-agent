@@ -25,3 +25,5 @@ db_rag/benchmark/
 db_rag/__pycache__/
 runtime/datasets/
 todo.md
+reportal-phi-plugin.zip
+tmp/
